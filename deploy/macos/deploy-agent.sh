@@ -100,14 +100,19 @@ _ssh "launchctl bootout system/${PLIST_NAME%.plist} 2>/dev/null || true"
 
 # --- Step 5: Copy files to remote host ---
 log "Copying agent binary and config to ${HOST}:${INSTALL_DIR}..."
-_scp "${PUBLISH_DIR}/"* "${INSTALL_DIR}/"
+_scp "${PUBLISH_DIR}" "${INSTALL_DIR}"
 
 log "Copying launchd plist..."
 _scp "${SCRIPT_DIR}/${PLIST_NAME}" "${PLIST_DEST}"
 
 # --- Step 6: Set permissions ---
-_ssh bash <<'REMOTE_EOF'
-chmod +x /opt/runnerrunner/RunnerRunner.Agent
+_ssh bash <<REMOTE_EOF
+# Move files from nested directory to install dir if needed
+if [[ -d "${INSTALL_DIR}/macos-agent" ]]; then
+    mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/
+    rmdir ${INSTALL_DIR}/macos-agent
+fi
+chmod +x ${INSTALL_DIR}/RunnerRunner.Agent
 chown root:wheel /Library/LaunchDaemons/com.runnerrunner.agent.plist
 chmod 644 /Library/LaunchDaemons/com.runnerrunner.agent.plist
 REMOTE_EOF
