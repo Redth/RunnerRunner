@@ -1,7 +1,6 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-var server = builder.AddProject<Projects.RunnerRunner_Server>("server")
-    .WithHttpEndpoint(port: 5080, name: "http");
+var server = builder.AddProject<Projects.RunnerRunner_Server>("server");
 
 builder.AddProject<Projects.RunnerRunner_Agent>("agent-local")
     .WithReference(server)
