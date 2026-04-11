@@ -198,6 +198,12 @@ public class SignalRConnection : IAsyncDisposable
             await _connection.InvokeAsync("HostEnvironmentResponse", evt);
     }
 
+    public async Task SendRunnerDiscovery(RunnerDiscoveryEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("RunnerDiscovery", evt);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_connection is not null)

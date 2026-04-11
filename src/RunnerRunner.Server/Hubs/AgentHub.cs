@@ -242,6 +242,82 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
         }
     }
 
+    public async Task RunnerDiscovery(RunnerDiscoveryEvent evt)
+    {
+        _logger.LogInformation("Agent {HostId} discovered {Count} managed runners",
+            evt.HostId, evt.Runners.Count);
+
+        var agent = ConnectedAgents.Values.FirstOrDefault(a => a.AgentInfo.AgentId == evt.HostId);
+        var hostName = agent?.AgentInfo.Name;
+        var host = hostName != null
+            ? (await _store.Query<Host>().ToList()).FirstOrDefault(h => h.Name == hostName)
+            : null;
+
+        if (host == null) return;
+
+        var dbInstances = (await _store.Query<RunnerInstance>().ToList())
+            .Where(i => i.HostId == host.Id).ToList();
+
+        foreach (var discovered in evt.Runners)
+        {
+            // Match by instance ID or runner name
+            var existing = dbInstances.FirstOrDefault(i =>
+                i.Id == discovered.InstanceId ||
+                i.RunnerName == discovered.RunnerName);
+
+            if (existing != null)
+            {
+                // Update status from actual container state
+                existing.ContainerId = discovered.ContainerId;
+                existing.Status = discovered.IsRunning
+                    ? RunnerInstanceStatus.Running
+                    : RunnerInstanceStatus.Stopped;
+                existing.LastHealthCheck = DateTime.UtcNow;
+                if (!discovered.IsRunning)
+                    existing.StoppedAt ??= DateTime.UtcNow;
+                await _store.Update(existing);
+                _logger.LogInformation("Reconciled instance {RunnerName}: {Status}",
+                    discovered.RunnerName, existing.Status);
+            }
+            else if (discovered.IsRunning)
+            {
+                // Running container with no DB record — create one
+                var instance = new RunnerInstance
+                {
+                    HostId = host.Id,
+                    ProfileId = "",
+                    RunnerName = discovered.RunnerName,
+                    ContainerId = discovered.ContainerId,
+                    Status = RunnerInstanceStatus.Running,
+                    StartedAt = DateTime.UtcNow,
+                    LastHealthCheck = DateTime.UtcNow
+                };
+                if (!string.IsNullOrEmpty(discovered.InstanceId))
+                    instance.Id = discovered.InstanceId;
+                await _store.Insert(instance);
+                _logger.LogInformation("Created record for discovered runner {RunnerName}", discovered.RunnerName);
+            }
+        }
+
+        // Mark DB instances as stopped if not found in discovered containers
+        foreach (var dbInst in dbInstances.Where(i =>
+            i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting))
+        {
+            var stillExists = evt.Runners.Any(d =>
+                d.InstanceId == dbInst.Id ||
+                d.RunnerName == dbInst.RunnerName);
+
+            if (!stillExists)
+            {
+                dbInst.Status = RunnerInstanceStatus.Stopped;
+                dbInst.StoppedAt = DateTime.UtcNow;
+                await _store.Update(dbInst);
+                _logger.LogInformation("Marked {RunnerName} as stopped (container not found on host)",
+                    dbInst.RunnerName);
+            }
+        }
+    }
+
     // Static events for UI components to subscribe to
     public static event Action<ImagePullProgressEvent>? OnImagePullProgressReceived;
     public static event Action<ImagePullCompleteEvent>? OnImagePullCompleteReceived;

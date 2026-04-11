@@ -57,12 +57,23 @@ public class DockerBackend : IRunnerBackend
             .Select(kvp => $"{kvp.Key}={kvp.Value}")
             .ToList();
 
-        // Create and start container
+        // Add RunnerRunner identity env vars
+        envVars.Add($"RR_INSTANCE_ID={request.InstanceId}");
+        envVars.Add($"RR_RUNNER_NAME={request.RunnerName}");
+
+        // Create and start container with RunnerRunner labels for tracking
         var createResponse = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Image = imageName,
             Name = $"rr-{request.RunnerName}",
             Env = envVars,
+            Labels = new Dictionary<string, string>
+            {
+                ["runnerrunner.managed"] = "true",
+                ["runnerrunner.instance-id"] = request.InstanceId,
+                ["runnerrunner.runner-name"] = request.RunnerName,
+                ["runnerrunner.profile-id"] = request.InstanceId.Split('-').FirstOrDefault() ?? ""
+            },
             HostConfig = new HostConfig
             {
                 AutoRemove = request.Ephemeral,
@@ -119,6 +130,47 @@ public class DockerBackend : IRunnerBackend
         {
             return new RunnerHealthStatus { IsRunning = false, Status = "not_found" };
         }
+    }
+
+    /// <summary>
+    /// Discovers all RunnerRunner-managed containers currently on this host.
+    /// Used on agent startup to reconcile state with the server.
+    /// </summary>
+    public async Task<List<DiscoveredRunner>> DiscoverManagedContainersAsync(CancellationToken ct = default)
+    {
+        var result = new List<DiscoveredRunner>();
+        try
+        {
+            var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
+            {
+                All = true,
+                Filters = new Dictionary<string, IDictionary<string, bool>>
+                {
+                    ["label"] = new Dictionary<string, bool> { ["runnerrunner.managed=true"] = true }
+                }
+            }, ct);
+
+            foreach (var container in containers)
+            {
+                container.Labels.TryGetValue("runnerrunner.instance-id", out var instanceId);
+                container.Labels.TryGetValue("runnerrunner.runner-name", out var runnerName);
+
+                result.Add(new DiscoveredRunner
+                {
+                    InstanceId = instanceId ?? "",
+                    RunnerName = runnerName ?? container.Names.FirstOrDefault()?.TrimStart('/') ?? "",
+                    ContainerId = container.ID,
+                    IsRunning = container.State == "running",
+                    Status = container.State
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to discover managed containers");
+        }
+
+        return result;
     }
 
     private async Task<bool> ImageExistsAsync(string imageName, CancellationToken ct)

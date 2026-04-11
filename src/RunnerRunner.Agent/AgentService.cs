@@ -332,6 +332,40 @@ public class AgentService : BackgroundService
             Capabilities = DetectCapabilities()
         });
         _logger.LogInformation("Agent registered with server");
+
+        // Discover and report any RunnerRunner-managed containers already running
+        await DiscoverAndReportRunners();
+    }
+
+    private async Task DiscoverAndReportRunners()
+    {
+        try
+        {
+            if (_dockerBackend is Backends.DockerBackend docker)
+            {
+                var discovered = await docker.DiscoverManagedContainersAsync();
+                if (discovered.Count > 0)
+                {
+                    _logger.LogInformation("Discovered {Count} managed containers on this host", discovered.Count);
+                    await _signalR.SendRunnerDiscovery(new RunnerDiscoveryEvent
+                    {
+                        HostId = _agentId,
+                        Runners = discovered.Select(d => new DiscoveredRunnerInfo
+                        {
+                            InstanceId = d.InstanceId,
+                            RunnerName = d.RunnerName,
+                            ContainerId = d.ContainerId,
+                            IsRunning = d.IsRunning,
+                            Status = d.Status
+                        }).ToList()
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to discover managed containers");
+        }
     }
 
     private static HostPlatform GetCurrentPlatform()

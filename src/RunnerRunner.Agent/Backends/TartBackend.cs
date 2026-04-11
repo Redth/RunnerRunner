@@ -59,7 +59,9 @@ public class TartBackend : IRunnerBackend
         var configDir = Path.Combine(Path.GetTempPath(), "runnerrunner", vmName);
         Directory.CreateDirectory(configDir);
 
-        // Write environment variables as .env file
+        // Write environment variables as .env file (including RR_ identity vars)
+        request.EnvironmentVariables["RR_INSTANCE_ID"] = request.InstanceId;
+        request.EnvironmentVariables["RR_RUNNER_NAME"] = request.RunnerName;
         var envFileContent = string.Join("\n",
             request.EnvironmentVariables.Select(kvp => $"{kvp.Key}={kvp.Value}"));
         await File.WriteAllTextAsync(Path.Combine(configDir, ".env"), envFileContent, ct);

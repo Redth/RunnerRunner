@@ -33,6 +33,7 @@ public interface IAgentHubServer
     Task ImagePullComplete(ImagePullCompleteEvent evt);
     Task ImageDeleted(ImageDeletedEvent evt);
     Task HostEnvironmentResponse(HostEnvironmentEvent evt);
+    Task RunnerDiscovery(RunnerDiscoveryEvent evt);
 }
 
 // --- Commands (Server → Agent) ---
@@ -210,4 +211,19 @@ public class HostEnvironmentEvent
 {
     public required string HostId { get; set; }
     public Dictionary<string, string> EnvironmentVariables { get; set; } = new();
+}
+
+public class RunnerDiscoveryEvent
+{
+    public required string HostId { get; set; }
+    public List<DiscoveredRunnerInfo> Runners { get; set; } = [];
+}
+
+public class DiscoveredRunnerInfo
+{
+    public string InstanceId { get; set; } = "";
+    public required string RunnerName { get; set; }
+    public string ContainerId { get; set; } = "";
+    public bool IsRunning { get; set; }
+    public string Status { get; set; } = "";
 }

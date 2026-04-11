@@ -55,6 +55,10 @@ public class NativeBackend : IRunnerBackend
         var workDir = Path.Combine(workBase, request.RunnerName);
         Directory.CreateDirectory(workDir);
 
+        // Inject RunnerRunner identity env vars
+        request.EnvironmentVariables["RR_INSTANCE_ID"] = request.InstanceId;
+        request.EnvironmentVariables["RR_RUNNER_NAME"] = request.RunnerName;
+
         // Step 4: Configure and start based on provider
         Process runProcess;
 
