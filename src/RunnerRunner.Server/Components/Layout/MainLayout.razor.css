@@ -13,7 +13,7 @@ main {
 .sidebar {
     width: 260px;
     background: var(--bg-sidebar);
-    border-right: 1px solid rgba(255,255,255,0.06);
+    border-right: 1px solid var(--bg-sidebar-border);
     flex-shrink: 0;
     height: 100vh;
     position: sticky;
@@ -55,9 +55,10 @@ main {
     justify-content: center;
     cursor: pointer;
     font-size: 0.9rem;
-    transition: background 0.15s, transform 0.15s;
+    color: var(--text-tertiary);
+    transition: background 0.15s, transform 0.15s, color 0.15s;
 }
-.theme-toggle:hover { background: var(--bg-hover); transform: scale(1.05); }
+.theme-toggle:hover { background: var(--bg-hover); transform: scale(1.05); color: var(--text-primary); }
 
 /* Show/hide theme icons based on current theme */
 [data-theme="dark"] .theme-icon-dark { display: none; }

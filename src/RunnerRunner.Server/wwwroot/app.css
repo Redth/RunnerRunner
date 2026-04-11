@@ -9,9 +9,10 @@
     --bg-primary: #ffffff;
     --bg-secondary: #f8f9fc;
     --bg-tertiary: #f0f2f5;
-    --bg-sidebar: #1a1d23;
-    --bg-sidebar-hover: rgba(255,255,255,0.08);
-    --bg-sidebar-active: rgba(99,102,241,0.2);
+    --bg-sidebar: #f0f1f5;
+    --bg-sidebar-hover: rgba(0,0,0,0.05);
+    --bg-sidebar-active: rgba(99,102,241,0.12);
+    --bg-sidebar-border: #e2e4e9;
     --bg-card: #ffffff;
     --bg-input: #ffffff;
     --bg-hover: #f3f4f6;
@@ -20,8 +21,10 @@
     --text-primary: #111827;
     --text-secondary: #6b7280;
     --text-tertiary: #9ca3af;
-    --text-sidebar: #94a3b8;
-    --text-sidebar-active: #ffffff;
+    --text-sidebar: #64748b;
+    --text-sidebar-active: #312e81;
+    --text-sidebar-heading: #94a3b8;
+    --text-sidebar-brand: #1e1b4b;
     --text-on-accent: #ffffff;
 
     --border-color: #e5e7eb;
@@ -57,6 +60,7 @@
     --bg-sidebar: #0c0d12;
     --bg-sidebar-hover: rgba(255,255,255,0.06);
     --bg-sidebar-active: rgba(99,102,241,0.2);
+    --bg-sidebar-border: rgba(255,255,255,0.06);
     --bg-card: #1a1c25;
     --bg-input: #1e2028;
     --bg-hover: #252830;
@@ -67,6 +71,8 @@
     --text-tertiary: #64748b;
     --text-sidebar: #64748b;
     --text-sidebar-active: #ffffff;
+    --text-sidebar-heading: rgba(255,255,255,0.3);
+    --text-sidebar-brand: #ffffff;
     --text-on-accent: #ffffff;
 
     --border-color: #2d3039;

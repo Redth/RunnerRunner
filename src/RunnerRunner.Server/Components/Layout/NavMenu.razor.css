@@ -3,17 +3,18 @@
     align-items: center;
     gap: 0.65rem;
     padding: 1.25rem 1.25rem 1.5rem;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid var(--bg-sidebar-border);
 }
 
 .brand-icon {
     font-size: 1.5rem;
+    color: var(--accent);
 }
 
 .brand-text {
     font-size: 1.15rem;
     font-weight: 700;
-    color: #fff;
+    color: var(--text-sidebar-brand);
     letter-spacing: -0.02em;
 }
 
@@ -33,7 +34,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(255,255,255,0.3);
+    color: var(--text-sidebar-heading);
     padding: 0.5rem 1.25rem 0.35rem;
 }
 
@@ -46,21 +47,21 @@
     border-radius: 8px;
     font-size: 0.875rem;
     font-weight: 450;
-    color: rgba(255,255,255,0.55);
+    color: var(--text-sidebar);
     text-decoration: none;
     transition: all 0.15s ease;
     cursor: pointer;
 }
 
 ::deep a.nav-item:hover {
-    color: rgba(255,255,255,0.9);
-    background: rgba(255,255,255,0.06);
+    color: var(--text-sidebar-active);
+    background: var(--bg-sidebar-hover);
     text-decoration: none;
 }
 
 ::deep a.nav-item.active {
-    color: #fff;
-    background: rgba(99,102,241,0.2);
+    color: var(--text-sidebar-active);
+    background: var(--bg-sidebar-active);
     font-weight: 500;
 }
 
