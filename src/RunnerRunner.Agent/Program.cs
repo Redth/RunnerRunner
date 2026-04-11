@@ -3,8 +3,13 @@ using RunnerRunner.Agent.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// Aspire service defaults (OpenTelemetry, health checks, service discovery)
-builder.AddServiceDefaults();
+// Only enable Aspire service defaults when running under Aspire orchestration.
+// Service discovery and resilience handlers interfere with SignalR connections
+// when running standalone (deployed via launchd or Docker).
+if (!string.IsNullOrEmpty(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+{
+    builder.AddServiceDefaults();
+}
 
 builder.Services.AddSingleton<SignalRConnection>();
 builder.Services.AddSingleton<RunnerLifecycleManager>();
