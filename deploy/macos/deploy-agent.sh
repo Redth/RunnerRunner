@@ -112,6 +112,10 @@ _ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/*
 log "Installing launchd plist (may prompt for sudo password)..."
 _ssh "sudo mv /tmp/${PLIST_NAME} ${PLIST_DEST} && sudo chown root:wheel ${PLIST_DEST} && sudo chmod 644 ${PLIST_DEST}"
 
+# Ensure log files are writable by the agent user
+log "Setting up log files..."
+_ssh "sudo touch /var/log/runnerrunner-agent.log /var/log/runnerrunner-agent.error.log && sudo chown ${SSH_USER}:staff /var/log/runnerrunner-agent.log /var/log/runnerrunner-agent.error.log"
+
 # --- Step 7: Load and start the service ---
 log "Loading launchd service..."
 _ssh "sudo launchctl bootstrap system ${PLIST_DEST} 2>/dev/null || sudo launchctl kickstart -k system/${PLIST_NAME%.plist} 2>/dev/null || true"
