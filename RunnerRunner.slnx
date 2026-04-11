@@ -4,4 +4,9 @@
     <Project Path="src/RunnerRunner.Core/RunnerRunner.Core.csproj" />
     <Project Path="src/RunnerRunner.Server/RunnerRunner.Server.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RunnerRunner.Agent.Tests/RunnerRunner.Agent.Tests.csproj" />
+    <Project Path="tests/RunnerRunner.Core.Tests/RunnerRunner.Core.Tests.csproj" />
+    <Project Path="tests/RunnerRunner.Server.Tests/RunnerRunner.Server.Tests.csproj" />
+  </Folder>
 </Solution>
