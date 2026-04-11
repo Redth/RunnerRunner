@@ -7,6 +7,9 @@ using RunnerRunner.Core.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Aspire service defaults (OpenTelemetry, health checks, service discovery)
+builder.AddServiceDefaults();
+
 // Document store (Shiny DocumentDB with SQLite)
 var dbPath = builder.Configuration.GetValue<string>("Database:Path") ?? "runnerrunner.db";
 builder.Services.AddRunnerRunnerDocumentStore($"Data Source={dbPath}");
@@ -51,5 +54,8 @@ app.MapRazorComponents<App>()
 
 // SignalR hub for agent connections
 app.MapHub<AgentHub>("/hubs/agent");
+
+// Aspire health check endpoints
+app.MapDefaultEndpoints();
 
 app.Run();

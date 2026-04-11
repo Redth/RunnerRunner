@@ -3,6 +3,9 @@ using RunnerRunner.Agent.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// Aspire service defaults (OpenTelemetry, health checks, service discovery)
+builder.AddServiceDefaults();
+
 builder.Services.AddSingleton<SignalRConnection>();
 builder.Services.AddSingleton<RunnerLifecycleManager>();
 builder.Services.AddSingleton<HealthReporter>();

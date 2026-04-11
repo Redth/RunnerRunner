@@ -1,0 +1,16 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.1.0">
+
+  <ItemGroup>
+    <ProjectReference Include="..\RunnerRunner.Server\RunnerRunner.Server.csproj" />
+    <ProjectReference Include="..\RunnerRunner.Agent\RunnerRunner.Agent.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>1ba947b7-2125-4fd9-ae5a-14fed985547a</UserSecretsId>
+  </PropertyGroup>
+
+</Project>
