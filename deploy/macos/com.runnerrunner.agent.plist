@@ -13,11 +13,7 @@
     <key>WorkingDirectory</key>
     <string>/opt/runnerrunner</string>
 
-    <!-- Run as the deploy user so tart/docker see the user's images -->
-    <key>UserName</key>
-    <string>redth</string>
-
-    <!-- Start on boot -->
+    <!-- Start on login -->
     <key>RunAtLoad</key>
     <true/>
 
@@ -29,21 +25,18 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
 
-    <!-- Environment variables from file -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>DOTNET_ENVIRONMENT</key>
         <string>Production</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-        <key>HOME</key>
-        <string>/Users/redth</string>
     </dict>
 
     <!-- Logging -->
     <key>StandardOutPath</key>
-    <string>/var/log/runnerrunner-agent.log</string>
+    <string>/tmp/runnerrunner-agent.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/runnerrunner-agent.error.log</string>
+    <string>/tmp/runnerrunner-agent.error.log</string>
 </dict>
 </plist>
