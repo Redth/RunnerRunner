@@ -115,14 +115,24 @@
                     </div>
                     <div class="col-md-4 mb-3">
                         <label class="form-label">Runner Base Path</label>
-                        <input class="form-control" @bind="nativeBasePath" placeholder="~/.runnerrunner/" />
+                        <input class="form-control" @bind="nativeBasePath" placeholder="${HOME}/.runnerrunner" />
                         <small class="text-muted">Where agent binaries and instances are stored</small>
                     </div>
                     <div class="col-md-4 mb-3">
                         <label class="form-label">Work Directory</label>
-                        <input class="form-control" @bind="nativeWorkDir" placeholder="(base path)/work/" />
-                        <small class="text-muted">Where runner jobs execute</small>
+                        <input class="form-control" @bind="nativeWorkDir" placeholder="${BASE_PATH}/work" />
+                        <small class="text-muted">Each runner gets a subdirectory: <code>work/{runner-name}/</code></small>
                     </div>
+                </div>
+                <div class="alert alert-secondary py-2" style="font-size: 0.8rem;">
+                    <i class="bi bi-info-circle me-1"></i> <strong>Path tokens:</strong>
+                    Paths support <code>${"{"}</code> token expansion. Available tokens:
+                    <code>${"{"}BASE_PATH{"}"}</code>,
+                    <code>${"{"}RUNNER_NAME{"}"}</code>,
+                    <code>${"{"}INSTANCE_ID{"}"}</code>,
+                    <code>${"{"}PROVIDER{"}"}</code>,
+                    <code>${"{"}VERSION{"}"}</code>,
+                    <code>${"{"}HOME{"}"}</code>
                 </div>
             }
 

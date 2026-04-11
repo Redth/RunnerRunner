@@ -29,11 +29,26 @@ public class NativeBackend : IRunnerBackend
     {
         var basePath = request.RunnerBasePath
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
-        var workBase = request.WorkDirectory
-            ?? Path.Combine(basePath, "work");
-
         var provider = request.Provider;
         var agentVersion = request.RunnerAgentVersion ?? "latest";
+
+        // Path token context for ${TOKEN} expansion
+        var tokens = new Dictionary<string, string>
+        {
+            ["BASE_PATH"] = basePath,
+            ["RUNNER_NAME"] = request.RunnerName,
+            ["INSTANCE_ID"] = request.InstanceId,
+            ["PROVIDER"] = provider.ToString().ToLower(),
+            ["VERSION"] = agentVersion,
+            ["HOME"] = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        };
+
+        var workBase = ExpandTokens(request.WorkDirectory ?? "${BASE_PATH}/work", tokens);
+        var workDir = Path.Combine(workBase, request.RunnerName);
+
+        // Inject path tokens as env vars too
+        request.EnvironmentVariables["RR_BASE_PATH"] = basePath;
+        request.EnvironmentVariables["RR_WORK_DIR"] = workDir;
 
         // Step 1: Ensure the runner agent binary is downloaded
         var agentDir = Path.Combine(basePath, "agents", provider.ToString().ToLower(), agentVersion);
@@ -63,8 +78,7 @@ public class NativeBackend : IRunnerBackend
         _logger.LogInformation("Creating isolated instance at {Dir}", instanceDir);
         CopyDirectory(agentDir, instanceDir);
 
-        // Step 3: Set up work directory
-        var workDir = Path.Combine(workBase, request.RunnerName);
+        // Step 3: Set up work directory (already expanded with tokens above)
         Directory.CreateDirectory(workDir);
 
         // Inject RunnerRunner identity env vars
@@ -459,6 +473,20 @@ public class NativeBackend : IRunnerBackend
         {
             CopyDirectory(subDir, Path.Combine(destDir, Path.GetFileName(subDir)));
         }
+    }
+
+    /// <summary>
+    /// Expands ${TOKEN} references in a path string.
+    /// Available tokens: BASE_PATH, RUNNER_NAME, INSTANCE_ID, PROVIDER, VERSION, HOME
+    /// </summary>
+    private static string ExpandTokens(string input, Dictionary<string, string> tokens)
+    {
+        var result = input;
+        foreach (var kv in tokens)
+        {
+            result = result.Replace($"${{{kv.Key}}}", kv.Value);
+        }
+        return result;
     }
 
     private class ManagedNativeRunner
