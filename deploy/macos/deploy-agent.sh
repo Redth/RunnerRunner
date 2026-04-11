@@ -78,7 +78,7 @@ if [[ -f "${ENV_FILE}" ]]; then
     }
   },
   "RunnerRunner": {
-    "ServerUrl": "${RUNNERRUNNER_SERVER_URL:-http://192.168.2.2:8080}",
+    "ServerUrl": "${RUNNERRUNNER_SERVER_URL:-http://192.168.2.4:8080}",
     "AgentName": "${RUNNERRUNNER_AGENT_NAME:-mac-agent}",
     "AgentToken": "${RUNNERRUNNER_AGENT_TOKEN:-}",
     "AgentId": "${RUNNERRUNNER_AGENT_ID:-}"

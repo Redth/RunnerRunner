@@ -27,7 +27,7 @@ if [[ -f "${SCRIPT_DIR}/.env" ]]; then
 fi
 
 # --- Configuration (override with env vars) ---
-LINUX_HOST="${LINUX_HOST:-192.168.2.2}"
+LINUX_HOST="${LINUX_HOST:-192.168.2.4}"
 LINUX_USER="${LINUX_USER:-root}"
 LINUX_PASSWORD="${LINUX_PASSWORD:-}"
 LINUX_DEPLOY_DIR="${LINUX_DEPLOY_DIR:-/opt/runnerrunner}"
