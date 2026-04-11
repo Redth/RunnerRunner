@@ -124,7 +124,12 @@ _ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/*
 # Note: launchd has macOS socket restrictions that prevent .NET from connecting.
 # Starting via nohup from an SSH session inherits the interactive network stack.
 log "Starting agent..."
-_ssh_notty "cd ${INSTALL_DIR} && truncate -s 0 /tmp/runnerrunner-agent.log 2>/dev/null; nohup ${INSTALL_DIR}/start-agent.sh > /dev/null 2>&1 & echo \"PID: \$!\""
+# Must use -tt (force TTY) — macOS restricts .NET sockets in non-TTY SSH sessions
+if [[ -n "${SSHPASS}" ]]; then
+    sshpass -p "${SSHPASS}" ssh -tt -o StrictHostKeyChecking=no "${SSH_USER}@${HOST}" "cd ${INSTALL_DIR} && truncate -s 0 /tmp/runnerrunner-agent.log 2>/dev/null; nohup ${INSTALL_DIR}/start-agent.sh </dev/null >/dev/null 2>&1 & sleep 1 && exit"
+else
+    ssh -tt "${SSH_USER}@${HOST}" "cd ${INSTALL_DIR} && truncate -s 0 /tmp/runnerrunner-agent.log 2>/dev/null; nohup ${INSTALL_DIR}/start-agent.sh </dev/null >/dev/null 2>&1 & sleep 1 && exit"
+fi
 
 sleep 8
 
