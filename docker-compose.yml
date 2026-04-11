@@ -3,13 +3,18 @@ services:
     build:
       context: .
       dockerfile: src/RunnerRunner.Server/Dockerfile
+    container_name: runnerrunner-server
     ports:
-      - "8080:8080"
+      - "4779:4779"
     volumes:
       - server-data:/app/data
     environment:
       - Database__Path=/app/data/runnerrunner.db
-      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_URLS=http://+:4779
+    labels:
+      - "npm.proxy.domain=runnerrunner.jjagd.net"
+      - "npm.proxy.port=4779"
+      - "npm.proxy.ssl.force=true"
     restart: unless-stopped
 
   # Example: local agent running on the same Docker host
@@ -17,8 +22,9 @@ services:
     build:
       context: .
       dockerfile: src/RunnerRunner.Agent/Dockerfile
+    container_name: runnerrunner-agent
     environment:
-      - RunnerRunner__ServerUrl=http://server:8080
+      - RunnerRunner__ServerUrl=http://server:4779
       - RunnerRunner__AgentName=local-docker-host
       - RunnerRunner__AgentToken=changeme
     volumes:

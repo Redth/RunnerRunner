@@ -30,7 +30,8 @@ fi
 LINUX_HOST="${LINUX_HOST:-192.168.2.4}"
 LINUX_USER="${LINUX_USER:-root}"
 LINUX_PASSWORD="${LINUX_PASSWORD:-}"
-LINUX_DEPLOY_DIR="${LINUX_DEPLOY_DIR:-/opt/runnerrunner}"
+LINUX_DEPLOY_DIR="${LINUX_DEPLOY_DIR:-/opt/stacks/runnerrunner}"
+SERVER_PORT="${SERVER_PORT:-4779}"
 
 MACOS_HOST="${MACOS_HOST:-192.168.2.134}"
 MACOS_USER="${MACOS_USER:-root}"
@@ -122,19 +123,25 @@ cat > "${COMPOSE_FILE}" <<COMPOSE_EOF
 services:
   server:
     image: ${SERVER_IMAGE}
+    container_name: runnerrunner-server
     ports:
-      - "8080:8080"
+      - "${SERVER_PORT}:${SERVER_PORT}"
     volumes:
       - server-data:/app/data
     environment:
       - Database__Path=/app/data/runnerrunner.db
-      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_URLS=http://+:${SERVER_PORT}
+    labels:
+      - "npm.proxy.domain=runnerrunner.jjagd.net"
+      - "npm.proxy.port=${SERVER_PORT}"
+      - "npm.proxy.ssl.force=true"
     restart: unless-stopped
 
   agent:
     image: ${AGENT_IMAGE}
+    container_name: runnerrunner-agent
     environment:
-      - RunnerRunner__ServerUrl=http://server:8080
+      - RunnerRunner__ServerUrl=http://server:${SERVER_PORT}
       - RunnerRunner__AgentName=linux-agent-${LINUX_HOST}
       - RunnerRunner__AgentToken=
     volumes:
@@ -160,7 +167,7 @@ step "Starting services..."
 remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
     "cd ${LINUX_DEPLOY_DIR} && docker compose up -d --remove-orphans"
 
-success "Linux stack deployed: http://${LINUX_HOST}:8080"
+success "Linux stack deployed: http://${LINUX_HOST}:${SERVER_PORT}"
 
 # ============================================================
 # PHASE 4: Deploy native agent to macOS host
@@ -177,7 +184,7 @@ else
     if [[ ! -f "${MACOS_ENV}" ]]; then
         step "Creating agent.env with Linux host server URL..."
         cat > "${MACOS_ENV}" <<ENV_EOF
-RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:8080
+RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:4779
 RUNNERRUNNER_AGENT_NAME=mac-agent-${MACOS_HOST}
 RUNNERRUNNER_AGENT_TOKEN=
 RUNNERRUNNER_AGENT_ID=
@@ -196,7 +203,8 @@ fi
 # ============================================================
 log "Deploy complete!"
 echo ""
-echo "  Server:       http://${LINUX_HOST}:8080"
+echo "  Server:       http://${LINUX_HOST}:${SERVER_PORT}"
+echo "  Server:       https://runnerrunner.jjagd.net (via NPM)"
 echo "  Linux Agent:  Docker container on ${LINUX_HOST}"
 echo "  macOS Agent:  launchd service on ${MACOS_HOST}"
 echo ""
