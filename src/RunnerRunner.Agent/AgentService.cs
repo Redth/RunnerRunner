@@ -346,7 +346,19 @@ public class AgentService : BackgroundService
                 catch { /* Not a Docker container */ }
             }
 
-            // If no Docker logs, try reading from process output
+            // If no Docker logs, try native backend log file
+            if (string.IsNullOrEmpty(logs) && _nativeBackend is Backends.NativeBackend native)
+            {
+                var logFile = native.GetLogFilePath(command.InstanceHandle);
+                if (logFile != null && File.Exists(logFile))
+                {
+                    var allLines = await File.ReadAllLinesAsync(logFile);
+                    var tailCount = command.TailLines > 0 ? command.TailLines : 100;
+                    var tail = allLines.Skip(Math.Max(0, allLines.Length - tailCount));
+                    logs = string.Join("\n", tail);
+                }
+            }
+
             if (string.IsNullOrEmpty(logs))
                 logs = "(No logs available for this runner instance)";
 

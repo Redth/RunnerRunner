@@ -110,15 +110,20 @@ public class NativeBackend : IRunnerBackend
         }
 
         var instanceHandle = runProcess.Id.ToString();
+        var logFile = Path.Combine(instanceDir, "runner.log");
         _runners[instanceHandle] = new ManagedNativeRunner
         {
             Process = runProcess,
             InstanceDir = instanceDir,
             WorkDir = workDir,
-            RunnerName = request.RunnerName
+            RunnerName = request.RunnerName,
+            LogFile = logFile
         };
 
-        _logger.LogInformation("Native runner {RunnerName} started (PID: {PID})", request.RunnerName, runProcess.Id);
+        // Pipe stdout/stderr to log file
+        _ = Task.Run(() => PipeOutputToLogFile(runProcess, logFile), ct);
+
+        _logger.LogInformation("Native runner {RunnerName} started (PID: {PID}, log: {LogFile})", request.RunnerName, runProcess.Id, logFile);
 
         return new RunnerInstanceInfo
         {
@@ -495,5 +500,34 @@ public class NativeBackend : IRunnerBackend
         public required string InstanceDir { get; set; }
         public required string WorkDir { get; set; }
         public required string RunnerName { get; set; }
+        public string? LogFile { get; set; }
+    }
+
+    /// <summary>
+    /// Get the log file path for a running native instance by its handle (PID).
+    /// </summary>
+    public string? GetLogFilePath(string instanceHandle)
+    {
+        return _runners.TryGetValue(instanceHandle, out var runner) ? runner.LogFile : null;
+    }
+
+    private static async Task PipeOutputToLogFile(Process process, string logFile)
+    {
+        try
+        {
+            using var writer = new StreamWriter(logFile, append: true) { AutoFlush = true };
+            var stdoutTask = Task.Run(async () =>
+            {
+                while (await process.StandardOutput.ReadLineAsync() is { } line)
+                    await writer.WriteLineAsync(line);
+            });
+            var stderrTask = Task.Run(async () =>
+            {
+                while (await process.StandardError.ReadLineAsync() is { } line)
+                    await writer.WriteLineAsync($"[stderr] {line}");
+            });
+            await Task.WhenAll(stdoutTask, stderrTask);
+        }
+        catch { /* Process exited */ }
     }
 }
