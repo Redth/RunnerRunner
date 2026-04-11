@@ -5,6 +5,10 @@
     <ProjectReference Include="..\RunnerRunner.Agent\RunnerRunner.Agent.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker.SshDeploy" Version="0.1.0-ci.139" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

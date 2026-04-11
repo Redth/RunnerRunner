@@ -8,4 +8,8 @@ builder.AddProject<Projects.RunnerRunner_Agent>("agent-local")
     .WithEnvironment("RunnerRunner__AgentName", "aspire-local-agent")
     .WithEnvironment("RunnerRunner__AgentId", "aspire-local");
 
+// Docker Compose deployment with SSH to remote Linux host
+builder.AddDockerComposeEnvironment("env")
+    .WithSshDeploySupport();
+
 builder.Build().Run();

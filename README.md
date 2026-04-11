@@ -61,7 +61,52 @@ This starts:
 - **Agent** auto-connected to the server
 - **Aspire Dashboard** with real-time logs, traces, and metrics for all services
 
-### Option 2: Docker Compose (Production / Standalone)
+### Option 2: Deploy to Remote Linux Host (via SSH)
+
+Deploy the full stack to a remote Docker host with a single command:
+
+```bash
+# Deploy (will prompt for SSH password)
+aspire deploy
+```
+
+This builds container images, pushes them to your registry, and runs `docker compose up` on the remote host via SSH.
+
+**Configuration** is in `src/RunnerRunner.AppHost/appsettings.json`:
+
+```json
+{
+  "DockerSSH": {
+    "TargetHost": "192.168.2.2",
+    "SshUsername": "root"
+  },
+  "DockerRegistry": {
+    "RegistryUrl": "ghcr.io",
+    "RepositoryPrefix": "your-org/runnerrunner"
+  }
+}
+```
+
+Or override with environment variables:
+
+```bash
+DockerSSH__TargetHost=192.168.2.2 \
+DockerSSH__SshUsername=root \
+DockerSSH__SshPassword=your-password \
+aspire deploy
+```
+
+**First time setup:**
+1. Ensure Docker is installed on the remote host
+2. Log in to your container registry locally: `docker login ghcr.io`
+3. Run `aspire deploy` — it handles everything else
+
+**Teardown remote deployment:**
+```bash
+aspire do teardown-env
+```
+
+### Option 3: Docker Compose (Production / Standalone)
 
 ```bash
 docker compose up -d
