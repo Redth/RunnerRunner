@@ -7,9 +7,7 @@
 
     <main>
         <header class="top-bar">
-            <div class="top-bar-left">
-                <h1 class="page-context">@(pageTitle ?? "")</h1>
-            </div>
+            <div class="top-bar-left"></div>
             <div class="top-bar-right">
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
                     <span class="theme-icon-light"><Icon Name="sun" Size="16" /></span>
@@ -30,6 +28,3 @@
     <span class="dismiss">🗙</span>
 </div>
 
-@code {
-    private string? pageTitle;
-}
