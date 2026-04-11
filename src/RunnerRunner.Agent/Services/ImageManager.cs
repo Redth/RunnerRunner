@@ -149,7 +149,11 @@ public partial class ImageManager
     public async Task<List<AgentImageInfo>> ListTartImagesAsync(CancellationToken ct = default)
     {
         var result = await RunCommandAsync("tart", "list --format json", ct);
-        if (result.ExitCode != 0) return [];
+        if (result.ExitCode != 0)
+        {
+            _logger.LogWarning("tart list failed (exit {Code}): {Output}", result.ExitCode, result.Output);
+            return [];
+        }
 
         var images = new List<AgentImageInfo>();
         try
@@ -157,23 +161,27 @@ public partial class ImageManager
             var jsonArray = JsonDocument.Parse(result.Output).RootElement;
             foreach (var item in jsonArray.EnumerateArray())
             {
-                var name = item.GetProperty("Name").GetString() ?? "";
-                var diskSize = item.TryGetProperty("DiskSize", out var ds) ? ds.GetInt64() : 0;
+                var name = item.TryGetProperty("Name", out var np) ? np.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(name)) continue;
+
+                // "Size" is the actual disk usage in GB, "Disk" is the virtual disk size
+                var sizeGb = item.TryGetProperty("Size", out var sp) ? sp.GetInt64() : 0;
+                var state = item.TryGetProperty("State", out var stp) ? stp.GetString() : "unknown";
 
                 images.Add(new AgentImageInfo
                 {
                     ImageType = ImageType.Tart,
                     Repository = name,
-                    Tag = "local",
+                    Tag = state ?? "local",
                     ImageId = name,
-                    SizeBytes = diskSize * 1024 * 1024 * 1024, // GB to bytes
+                    SizeBytes = sizeGb * 1024 * 1024 * 1024, // GB to bytes
                     CreatedAt = null
                 });
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to parse tart list output");
+            _logger.LogWarning(ex, "Failed to parse tart list output: {Output}", result.Output);
         }
 
         _logger.LogInformation("Listed {Count} Tart images", images.Count);

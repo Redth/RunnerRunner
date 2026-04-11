@@ -30,6 +30,10 @@
     <dict>
         <key>DOTNET_ENVIRONMENT</key>
         <string>Production</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/redth</string>
     </dict>
 
     <!-- Logging -->
