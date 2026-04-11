@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
+using RunnerRunner.Agent.Backends;
 using RunnerRunner.Agent.Services;
 using RunnerRunner.Core.Hub;
+using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 
 namespace RunnerRunner.Agent;
@@ -17,6 +19,10 @@ public class AgentService : BackgroundService
     private readonly RunnerLifecycleManager _lifecycleManager;
     private readonly HealthReporter _healthReporter;
 
+    private readonly IRunnerBackend _dockerBackend;
+    private readonly IRunnerBackend _tartBackend;
+    private readonly IRunnerBackend _nativeBackend;
+
     private string _agentId = "";
     private string _agentName = "";
 
@@ -25,13 +31,18 @@ public class AgentService : BackgroundService
         IConfiguration configuration,
         SignalRConnection signalR,
         RunnerLifecycleManager lifecycleManager,
-        HealthReporter healthReporter)
+        HealthReporter healthReporter,
+        ILoggerFactory loggerFactory)
     {
         _logger = logger;
         _configuration = configuration;
         _signalR = signalR;
         _lifecycleManager = lifecycleManager;
         _healthReporter = healthReporter;
+
+        _dockerBackend = new DockerBackend(loggerFactory.CreateLogger<DockerBackend>());
+        _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>());
+        _nativeBackend = new NativeBackend(loggerFactory.CreateLogger<NativeBackend>());
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -83,16 +94,57 @@ public class AgentService : BackgroundService
     {
         try
         {
-            // TODO: Select the appropriate backend based on command.Backend
-            _logger.LogInformation("Received deploy command for {RunnerName}", command.RunnerName);
+            _logger.LogInformation("Received deploy command for {RunnerName} (backend: {Backend})",
+                command.RunnerName, command.Backend);
 
-            // For now just acknowledge
-            await _signalR.SendRunnerStarted(new RunnerStartedEvent
+            // Select the appropriate backend
+            IRunnerBackend? backend = command.Backend switch
             {
-                InstanceId = command.InstanceId,
-                RunnerName = command.RunnerName,
-                InstanceHandle = "pending"
-            });
+                ExecutionBackend.Docker => _dockerBackend,
+                ExecutionBackend.Tart => _tartBackend,
+                ExecutionBackend.Native => _nativeBackend,
+                _ => null
+            };
+
+            if (backend == null)
+            {
+                _logger.LogError("No backend available for {Backend}", command.Backend);
+                await _signalR.SendRunnerStopped(new RunnerStoppedEvent
+                {
+                    InstanceId = command.InstanceId,
+                    Reason = "DeployFailed",
+                    ErrorMessage = $"Backend {command.Backend} not available on this agent"
+                });
+                return;
+            }
+
+            // Check if backend is available on this host
+            if (!await backend.IsAvailableAsync())
+            {
+                _logger.LogError("Backend {Backend} is not available on this host", command.Backend);
+                await _signalR.SendRunnerStopped(new RunnerStoppedEvent
+                {
+                    InstanceId = command.InstanceId,
+                    Reason = "DeployFailed",
+                    ErrorMessage = $"Backend {command.Backend} not available on this host"
+                });
+                return;
+            }
+
+            var result = await _lifecycleManager.StartRunnerAsync(command, backend);
+
+            if (result != null)
+            {
+                _logger.LogInformation("Runner {RunnerName} started with handle {Handle}",
+                    result.RunnerName, result.InstanceHandle);
+
+                await _signalR.SendRunnerStarted(new RunnerStartedEvent
+                {
+                    InstanceId = command.InstanceId,
+                    RunnerName = result.RunnerName,
+                    InstanceHandle = result.InstanceHandle
+                });
+            }
         }
         catch (Exception ex)
         {

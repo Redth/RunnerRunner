@@ -59,7 +59,14 @@ public class OrchestrationEngine : BackgroundService
         var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
         var profiles = (await store.Query<RunnerProfile>().ToList()).ToList();
         var credentials = (await store.Query<ProviderCredential>().ToList()).ToList();
+        var hosts = (await store.Query<Host>().ToList()).ToList();
         var connectedAgents = AgentHub.GetConnectedAgents();
+
+        if (assignments.Count == 0)
+            return;
+
+        _logger.LogDebug("Reconciling: {Assignments} assignments, {Agents} connected agents",
+            assignments.Count, connectedAgents.Count);
 
         foreach (var assignment in assignments)
         {
@@ -70,17 +77,18 @@ public class OrchestrationEngine : BackgroundService
                 continue;
             }
 
-            // Find the connected agent for this host
-            var agent = connectedAgents.Values.FirstOrDefault(a =>
+            // Find the host record and its connected agent
+            var host = hosts.FirstOrDefault(h => h.Id == assignment.HostId);
+            if (host == null)
             {
-                // Match agent by looking up host record
-                var host = store.Get<Host>(assignment.HostId).GetAwaiter().GetResult();
-                return host != null && a.AgentInfo.Name == host.Name;
-            });
+                _logger.LogWarning("Assignment {Id} references missing host {HostId}", assignment.Id, assignment.HostId);
+                continue;
+            }
 
+            var agent = connectedAgents.Values.FirstOrDefault(a => a.AgentInfo.Name == host.Name);
             if (agent == null)
             {
-                // Host's agent not connected, skip
+                _logger.LogDebug("Host {HostName} agent not connected, skipping assignment", host.Name);
                 continue;
             }
 
