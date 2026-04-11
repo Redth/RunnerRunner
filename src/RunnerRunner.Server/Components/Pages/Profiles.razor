@@ -6,10 +6,10 @@
 
 <PageTitle>Runner Profiles - RunnerRunner</PageTitle>
 
-<h1>Runner Profiles</h1>
+<h1><i class="bi bi-clipboard2-check-fill me-2"></i>Runner Profiles</h1>
 <p>Define runner configurations that can be deployed across hosts.</p>
 
-<button class="btn btn-primary mb-3" @onclick="ShowCreateForm">+ New Profile</button>
+<button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Profile</button>
 
 @if (showForm)
 {
@@ -228,8 +228,8 @@
                 <td>@profile.EnvironmentVariableSetIds.Count set(s)</td>
                 <td>@profile.MaxParallelPerHost</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)">Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteProfile(profile.Id)">Delete</button>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)">  <i class="bi bi-pencil-square"></i> Edit</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteProfile(profile.Id)">  <i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }

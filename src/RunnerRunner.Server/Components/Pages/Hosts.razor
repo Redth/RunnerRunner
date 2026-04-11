@@ -6,12 +6,12 @@
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 
-<h1>Hosts</h1>
+<h1><i class="bi bi-hdd-rack-fill me-2"></i>Hosts</h1>
 <p>Manage host machines and assign runner profiles to them.</p>
 
 <div class="mb-3">
     <button class="btn btn-primary" @onclick="GenerateEnrollmentToken">
-        Generate Enrollment Token
+        <i class="bi bi-key-fill me-1"></i> Generate Enrollment Token
     </button>
     @if (!string.IsNullOrEmpty(newToken))
     {
@@ -63,8 +63,8 @@
                 </td>
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">Assign</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => RemoveHost(host.Id)">Remove</button>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">  <i class="bi bi-link-45deg"></i> Assign</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => RemoveHost(host.Id)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
             </tr>
         }
@@ -93,7 +93,7 @@
                     <input type="number" class="form-control" @bind="assignCount" min="1" />
                 </div>
                 <div class="col-md-3 mb-3 d-flex align-items-end">
-                    <button class="btn btn-success me-2" @onclick="SaveAssignment">Add Assignment</button>
+                    <button class="btn btn-success me-2" @onclick="SaveAssignment">  <i class="bi bi-plus-lg"></i> Add Assignment</button>
                     <button class="btn btn-secondary" @onclick="() => showAssign = false">Cancel</button>
                 </div>
             </div>

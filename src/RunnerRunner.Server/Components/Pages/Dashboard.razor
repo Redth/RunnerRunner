@@ -5,13 +5,13 @@
 
 <PageTitle>Dashboard - RunnerRunner</PageTitle>
 
-<h1>RunnerRunner Dashboard</h1>
+<h1><i class="bi bi-grid-1x2-fill me-2"></i>Dashboard</h1>
 
 <div class="row mt-4">
     <div class="col-md-3">
         <div class="card text-bg-primary mb-3">
             <div class="card-body">
-                <h5 class="card-title">Connected Hosts</h5>
+                <h5 class="card-title"><i class="bi bi-hdd-rack me-1"></i> Connected Hosts</h5>
                 <p class="card-text display-4">@connectedHostCount</p>
             </div>
         </div>
@@ -19,7 +19,7 @@
     <div class="col-md-3">
         <div class="card text-bg-success mb-3">
             <div class="card-body">
-                <h5 class="card-title">Running Instances</h5>
+                <h5 class="card-title"><i class="bi bi-lightning-charge me-1"></i> Running Instances</h5>
                 <p class="card-text display-4">@runningInstanceCount</p>
             </div>
         </div>
@@ -27,7 +27,7 @@
     <div class="col-md-3">
         <div class="card text-bg-info mb-3">
             <div class="card-body">
-                <h5 class="card-title">Profiles</h5>
+                <h5 class="card-title"><i class="bi bi-clipboard2-check me-1"></i> Profiles</h5>
                 <p class="card-text display-4">@profileCount</p>
             </div>
         </div>
@@ -35,14 +35,14 @@
     <div class="col-md-3">
         <div class="card text-bg-warning mb-3">
             <div class="card-body">
-                <h5 class="card-title">Env Var Sets</h5>
+                <h5 class="card-title"><i class="bi bi-braces me-1"></i> Env Var Sets</h5>
                 <p class="card-text display-4">@envVarSetCount</p>
             </div>
         </div>
     </div>
 </div>
 
-<h3 class="mt-4">Connected Agents</h3>
+<h3 class="mt-4"><i class="bi bi-people-fill me-2"></i>Connected Agents</h3>
 @if (!connectedAgents.Any())
 {
     <div class="alert alert-secondary">No agents connected. Deploy an agent on your host machines to get started.</div>

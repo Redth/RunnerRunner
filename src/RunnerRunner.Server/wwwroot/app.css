@@ -320,10 +320,7 @@ small, .small { color: var(--text-tertiary); }
 ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 /* --- Icons --- */
-.icon {
-    display: inline-block;
-    vertical-align: middle;
-    flex-shrink: 0;
-}
-.btn .icon { margin-right: 0.35rem; margin-top: -1px; }
-.btn-sm .icon { width: 14px; height: 14px; }
+h1 .bi, h3 .bi { opacity: 0.7; }
+.card-title .bi { opacity: 0.8; }
+.btn .bi { margin-right: 0.25rem; }
+.alert .bi { margin-right: 0.35rem; }
