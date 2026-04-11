@@ -71,7 +71,6 @@ public class SignalRConnection : IAsyncDisposable
                 }
 
                 // Use ServerSentEvents transport — WebSockets fail under macOS launchd
-                options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.ServerSentEvents;
             })
             .WithAutomaticReconnect(new RetryPolicy())
             .Build();

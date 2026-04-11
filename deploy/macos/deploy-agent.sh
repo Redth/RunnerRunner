@@ -94,40 +94,42 @@ fi
 log "Connecting to ${SSH_USER}@${HOST}..."
 _ssh "mkdir -p ${INSTALL_DIR}"
 
-# --- Step 4: Stop existing service if running ---
-log "Stopping existing agent service (if any)..."
-_ssh "launchctl bootout gui/\$(id -u)/${PLIST_NAME%.plist} 2>/dev/null; true"
+# --- Step 4: Stop existing agent ---
+log "Stopping existing agent..."
+_ssh "pkill -f 'RunnerRunner.Agent' 2>/dev/null; launchctl remove com.runnerrunner.agent 2>/dev/null; launchctl bootout gui/\$(id -u)/com.runnerrunner.agent 2>/dev/null; true"
 
 # Clean up old plists from previous install locations
-_ssh "sudo rm -f ${OLD_PLIST_DEST} ${OLD_AGENT_PLIST} 2>/dev/null; true"
+_ssh "sudo rm -f ${OLD_PLIST_DEST} ${OLD_AGENT_PLIST} ~/Library/LaunchAgents/${PLIST_NAME} 2>/dev/null; true"
 
 # --- Step 5: Copy files to remote host ---
 log "Copying agent binary and config to ${HOST}:${INSTALL_DIR}..."
 _scp "${PUBLISH_DIR}" "${INSTALL_DIR}"
 
-log "Copying launchd plist..."
-_scp "${SCRIPT_DIR}/${PLIST_NAME}" "/tmp/${PLIST_NAME}"
+log "Copying start script..."
+_scp "${SCRIPT_DIR}/start-agent.sh" "${INSTALL_DIR}/start-agent.sh"
 
-# --- Step 6: Set permissions and install plist ---
+# --- Step 6: Set permissions and sign binary ---
 log "Setting up agent binary..."
-_ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent && codesign --force -s - ${INSTALL_DIR}/RunnerRunner.Agent"
+_ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent ${INSTALL_DIR}/start-agent.sh && codesign --force -s - ${INSTALL_DIR}/RunnerRunner.Agent"
 
-log "Installing LaunchAgent plist..."
-_ssh "mkdir -p ~/Library/LaunchAgents && cp /tmp/${PLIST_NAME} ~/Library/LaunchAgents/${PLIST_NAME}"
+# --- Step 7: Start the agent via nohup (survives SSH disconnect) ---
+# Note: launchd has macOS socket restrictions that prevent .NET from connecting.
+# Starting via nohup from an SSH session inherits the interactive network stack.
+log "Starting agent..."
+_ssh "cd ${INSTALL_DIR} && truncate -s 0 /tmp/runnerrunner-agent.log 2>/dev/null; nohup ${INSTALL_DIR}/start-agent.sh > /dev/null 2>&1 & echo \"PID: \$!\""
 
-# --- Step 7: Load and start the service in user domain ---
-log "Loading LaunchAgent service..."
-_ssh "launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/${PLIST_NAME} 2>/dev/null || launchctl kickstart -k gui/\$(id -u)/${PLIST_NAME%.plist} 2>/dev/null || true"
+sleep 5
+
+# Verify it connected
+_ssh "grep -c 'Connected to' /tmp/runnerrunner-agent.log 2>/dev/null | xargs -I{} echo 'Connected: {} time(s)'"
 
 log ""
 log "✅ RunnerRunner Agent deployed to ${HOST}"
 log ""
 log "Service management:"
-log "  Status:   ssh ${SSH_USER}@${HOST} 'launchctl print gui/\$(id -u)/com.runnerrunner.agent'"
 log "  Logs:     ssh ${SSH_USER}@${HOST} 'tail -f /tmp/runnerrunner-agent.log'"
-log "  Stop:     ssh ${SSH_USER}@${HOST} 'launchctl bootout gui/\$(id -u)/com.runnerrunner.agent'"
-log "  Start:    ssh ${SSH_USER}@${HOST} 'launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/${PLIST_NAME}'"
-log "  Restart:  ssh ${SSH_USER}@${HOST} 'launchctl kickstart -k gui/\$(id -u)/com.runnerrunner.agent'"
+log "  Stop:     ssh ${SSH_USER}@${HOST} 'pkill -f RunnerRunner.Agent'"
+log "  Restart:  ssh ${SSH_USER}@${HOST} 'pkill -f RunnerRunner.Agent; nohup /opt/runnerrunner/start-agent.sh > /dev/null 2>&1 &'"
 log ""
 log "Re-deploy after code changes:"
 log "  ./deploy/macos/deploy-agent.sh ${HOST}"
