@@ -70,3 +70,15 @@
     text-align: center;
     flex-shrink: 0;
 }
+
+/* SVG icons in nav inherit color from parent */
+::deep .icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+::deep a.nav-item.active .icon {
+    opacity: 1;
+}
+::deep a.nav-item:hover .icon {
+    opacity: 0.9;
+}
