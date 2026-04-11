@@ -16,6 +16,8 @@
     <div class="card mb-4">
         <div class="card-body">
             <h5 class="card-title">@(isEditing ? "Edit" : "Create") Profile</h5>
+
+            @* Basic info *@
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <label class="form-label">Name</label>
@@ -47,7 +49,7 @@
                 </div>
                 <div class="col-md-3 mb-3">
                     <label class="form-label">Execution Backend</label>
-                    <select class="form-select" @bind="editProfile.ExecutionBackend">
+                    <select class="form-select" @bind="editProfile.ExecutionBackend" @bind:after="OnBackendChanged">
                         @foreach (var b in Enum.GetValues<ExecutionBackend>())
                         {
                             <option value="@b">@b</option>
@@ -59,8 +61,20 @@
                     <input type="number" class="form-control" @bind="editProfile.MaxParallelPerHost" min="1" />
                 </div>
             </div>
+
+            @* Provider credential *@
             <div class="row">
                 <div class="col-md-6 mb-3">
+                    <label class="form-label">Provider Credential</label>
+                    <select class="form-select" @bind="editProfile.ProviderCredentialId">
+                        <option value="">— Select credential —</option>
+                        @foreach (var cred in credentials.Where(c => c.Provider == editProfile.Provider))
+                        {
+                            <option value="@cred.Id">@cred.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
                     <label class="form-label">Labels (comma-separated)</label>
                     <input class="form-control" @bind="labelsInput" />
                 </div>
@@ -68,13 +82,121 @@
                     <label class="form-label">Runner Group</label>
                     <input class="form-control" @bind="editProfile.RunnerGroup" />
                 </div>
-                <div class="col-md-3 mb-3 d-flex align-items-end">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" @bind="editProfile.Ephemeral" id="ephemeralCheck" />
-                        <label class="form-check-label" for="ephemeralCheck">Ephemeral (single-use)</label>
+            </div>
+
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" @bind="editProfile.Ephemeral" id="ephemeralCheck" />
+                <label class="form-check-label" for="ephemeralCheck">Ephemeral (single-use runners)</label>
+            </div>
+
+            @* Docker Image Config *@
+            @if (editProfile.ExecutionBackend == ExecutionBackend.Docker)
+            {
+                <h6 class="mt-3">Docker Image Configuration</h6>
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Registry URL</label>
+                        <input class="form-control" @bind="dockerRegistry" placeholder="ghcr.io" />
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Image Name</label>
+                        <input class="form-control" @bind="dockerImage" placeholder="org/image" />
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Tag</label>
+                        <input class="form-control" @bind="dockerTag" placeholder="latest" />
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Pull Policy</label>
+                        <select class="form-select" @bind="dockerPullPolicy">
+                            @foreach (var p in Enum.GetValues<PullPolicy>())
+                            {
+                                <option value="@p">@p</option>
+                            }
+                        </select>
                     </div>
                 </div>
+            }
+
+            @* Tart Image Config *@
+            @if (editProfile.ExecutionBackend == ExecutionBackend.Tart)
+            {
+                <h6 class="mt-3">Tart VM Image Configuration</h6>
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">OCI Registry URL</label>
+                        <input class="form-control" @bind="tartRegistry" placeholder="ghcr.io" />
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Image Name</label>
+                        <input class="form-control" @bind="tartImage" placeholder="cirruslabs/macos-sequoia-base" />
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Tag</label>
+                        <input class="form-control" @bind="tartTag" placeholder="latest" />
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">CPU Count</label>
+                        <input type="number" class="form-control" @bind="tartCpu" min="1" />
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Memory (GB)</label>
+                        <input type="number" class="form-control" @bind="tartMemory" min="1" />
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Disk (GB)</label>
+                        <input type="number" class="form-control" @bind="tartDisk" min="10" />
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">Display</label>
+                        <input class="form-control" @bind="tartDisplay" placeholder="1024x768" />
+                    </div>
+                </div>
+            }
+
+            @* Environment Variable Sets *@
+            <h6 class="mt-3">Environment Variable Sets</h6>
+            <p class="text-muted small">Select sets to compose (higher priority wins on key conflicts).</p>
+            @foreach (var evs in allEnvVarSets)
+            {
+                var isSelected = selectedEnvVarSetIds.Contains(evs.Id);
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" checked="@isSelected"
+                           @onchange="() => ToggleEnvVarSet(evs.Id)" id="evs-@evs.Id" />
+                    <label class="form-check-label" for="evs-@evs.Id">
+                        @evs.Name <span class="text-muted">(priority: @evs.Priority, @evs.Variables.Count vars)</span>
+                    </label>
+                </div>
+            }
+
+            @* Environment Overrides *@
+            <h6 class="mt-3">Profile-Level Environment Overrides</h6>
+            <table class="table table-sm">
+                <tbody>
+                    @foreach (var kvp in profileEnvOverrides)
+                    {
+                        <tr>
+                            <td><input class="form-control form-control-sm" value="@kvp.Key" @onchange="e => RenameOverrideKey(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td><input class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateOverrideValue(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => profileEnvOverrides.Remove(kvp.Key)">✕</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="row mb-3">
+                <div class="col-md-5">
+                    <input class="form-control form-control-sm" placeholder="KEY" @bind="newOverrideKey" />
+                </div>
+                <div class="col-md-5">
+                    <input class="form-control form-control-sm" placeholder="Value" @bind="newOverrideValue" />
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-sm btn-outline-success" @onclick="AddOverride">Add</button>
+                </div>
             </div>
+
             <button class="btn btn-success me-2" @onclick="SaveProfile">Save</button>
             <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
         </div>
@@ -89,6 +211,7 @@
             <th>Platform</th>
             <th>Backend</th>
             <th>Labels</th>
+            <th>Env Sets</th>
             <th>Max Parallel</th>
             <th>Actions</th>
         </tr>
@@ -102,6 +225,7 @@
                 <td>@profile.RequiredHostPlatform</td>
                 <td>@profile.ExecutionBackend</td>
                 <td>@string.Join(", ", profile.Labels)</td>
+                <td>@profile.EnvironmentVariableSetIds.Count set(s)</td>
                 <td>@profile.MaxParallelPerHost</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)">Edit</button>
@@ -114,20 +238,48 @@
 
 @code {
     private List<RunnerProfile> profiles = [];
+    private List<EnvironmentVariableSet> allEnvVarSets = [];
+    private List<ProviderCredential> credentials = [];
     private RunnerProfile editProfile = new() { Name = "" };
     private bool showForm;
     private bool isEditing;
     private string labelsInput = "";
 
+    // Docker config fields
+    private string dockerRegistry = "ghcr.io";
+    private string dockerImage = "";
+    private string dockerTag = "latest";
+    private PullPolicy dockerPullPolicy = PullPolicy.IfNotPresent;
+
+    // Tart config fields
+    private string tartRegistry = "ghcr.io";
+    private string tartImage = "";
+    private string tartTag = "latest";
+    private int? tartCpu;
+    private int? tartMemory;
+    private int? tartDisk;
+    private string tartDisplay = "";
+
+    // Env var composition
+    private HashSet<string> selectedEnvVarSetIds = [];
+    private Dictionary<string, string> profileEnvOverrides = new();
+    private string newOverrideKey = "";
+    private string newOverrideValue = "";
+
     protected override async Task OnInitializedAsync()
     {
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        allEnvVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
     }
 
     private void ShowCreateForm()
     {
         editProfile = new RunnerProfile { Name = "" };
         labelsInput = "";
+        ResetImageFields();
+        selectedEnvVarSetIds = [];
+        profileEnvOverrides = new();
         isEditing = false;
         showForm = true;
     }
@@ -136,6 +288,27 @@
     {
         editProfile = profile;
         labelsInput = string.Join(", ", profile.Labels);
+        selectedEnvVarSetIds = [.. profile.EnvironmentVariableSetIds];
+        profileEnvOverrides = new Dictionary<string, string>(profile.EnvironmentOverrides);
+
+        if (profile.DockerConfig is not null)
+        {
+            dockerRegistry = profile.DockerConfig.RegistryUrl;
+            dockerImage = profile.DockerConfig.ImageName;
+            dockerTag = profile.DockerConfig.Tag;
+            dockerPullPolicy = profile.DockerConfig.PullPolicy;
+        }
+        if (profile.TartConfig is not null)
+        {
+            tartRegistry = profile.TartConfig.RegistryUrl;
+            tartImage = profile.TartConfig.ImageName;
+            tartTag = profile.TartConfig.Tag;
+            tartCpu = profile.TartConfig.CpuCount;
+            tartMemory = profile.TartConfig.MemorySizeGb;
+            tartDisk = profile.TartConfig.DiskSizeGb;
+            tartDisplay = profile.TartConfig.Display ?? "";
+        }
+
         isEditing = true;
         showForm = true;
     }
@@ -145,7 +318,40 @@
         editProfile.Labels = labelsInput
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
+        editProfile.EnvironmentVariableSetIds = [.. selectedEnvVarSetIds];
+        editProfile.EnvironmentOverrides = new Dictionary<string, string>(profileEnvOverrides);
         editProfile.UpdatedAt = DateTime.UtcNow;
+
+        if (editProfile.ExecutionBackend == ExecutionBackend.Docker)
+        {
+            editProfile.DockerConfig = new DockerImageConfig
+            {
+                RegistryUrl = dockerRegistry,
+                ImageName = dockerImage,
+                Tag = dockerTag,
+                PullPolicy = dockerPullPolicy
+            };
+            editProfile.TartConfig = null;
+        }
+        else if (editProfile.ExecutionBackend == ExecutionBackend.Tart)
+        {
+            editProfile.TartConfig = new TartImageConfig
+            {
+                RegistryUrl = tartRegistry,
+                ImageName = tartImage,
+                Tag = tartTag,
+                CpuCount = tartCpu,
+                MemorySizeGb = tartMemory,
+                DiskSizeGb = tartDisk,
+                Display = string.IsNullOrWhiteSpace(tartDisplay) ? null : tartDisplay
+            };
+            editProfile.DockerConfig = null;
+        }
+        else
+        {
+            editProfile.DockerConfig = null;
+            editProfile.TartConfig = null;
+        }
 
         if (isEditing)
             await Store.Update(editProfile);
@@ -160,5 +366,42 @@
     {
         await Store.Remove<RunnerProfile>(id);
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+    }
+
+    private void OnBackendChanged() => StateHasChanged();
+
+    private void ToggleEnvVarSet(string id)
+    {
+        if (!selectedEnvVarSetIds.Remove(id))
+            selectedEnvVarSetIds.Add(id);
+    }
+
+    private void AddOverride()
+    {
+        if (!string.IsNullOrWhiteSpace(newOverrideKey))
+        {
+            profileEnvOverrides[newOverrideKey] = newOverrideValue;
+            newOverrideKey = "";
+            newOverrideValue = "";
+        }
+    }
+
+    private void RenameOverrideKey(string oldKey, string newKey)
+    {
+        if (profileEnvOverrides.TryGetValue(oldKey, out var val))
+        {
+            profileEnvOverrides.Remove(oldKey);
+            profileEnvOverrides[newKey] = val;
+        }
+    }
+
+    private void UpdateOverrideValue(string key, string value) => profileEnvOverrides[key] = value;
+
+    private void ResetImageFields()
+    {
+        dockerRegistry = "ghcr.io"; dockerImage = ""; dockerTag = "latest";
+        dockerPullPolicy = PullPolicy.IfNotPresent;
+        tartRegistry = "ghcr.io"; tartImage = ""; tartTag = "latest";
+        tartCpu = null; tartMemory = null; tartDisk = null; tartDisplay = "";
     }
 }

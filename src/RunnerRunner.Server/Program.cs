@@ -1,6 +1,9 @@
 using RunnerRunner.Server.Components;
 using RunnerRunner.Server.Data;
 using RunnerRunner.Server.Hubs;
+using RunnerRunner.Server.Providers;
+using RunnerRunner.Server.Services;
+using RunnerRunner.Core.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +13,16 @@ builder.Services.AddRunnerRunnerDocumentStore($"Data Source={dbPath}");
 
 // SignalR for agent communication
 builder.Services.AddSignalR();
+
+// HTTP client for provider APIs
+builder.Services.AddHttpClient();
+
+// Runner providers
+builder.Services.AddSingleton<IRunnerProviderPlugin, GitHubActionsProvider>();
+
+// Background services
+builder.Services.AddHostedService<OrchestrationEngine>();
+builder.Services.AddHostedService<VersionCheckService>();
 
 // Blazor
 builder.Services.AddRazorComponents()

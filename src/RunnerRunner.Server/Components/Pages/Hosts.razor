@@ -7,7 +7,7 @@
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 
 <h1>Hosts</h1>
-<p>Manage host machines running RunnerRunner agents.</p>
+<p>Manage host machines and assign runner profiles to them.</p>
 
 <div class="mb-3">
     <button class="btn btn-primary" @onclick="GenerateEnrollmentToken">
@@ -30,6 +30,7 @@
             <th>Status</th>
             <th>Architecture</th>
             <th>Capabilities</th>
+            <th>Assignments</th>
             <th>Last Heartbeat</th>
             <th>Actions</th>
         </tr>
@@ -37,6 +38,7 @@
     <tbody>
         @foreach (var host in hosts)
         {
+            var hostAssignments = assignments.Where(a => a.HostId == host.Id).ToList();
             <tr>
                 <td>@host.Name</td>
                 <td>@host.Platform</td>
@@ -45,8 +47,23 @@
                 </td>
                 <td>@host.Architecture</td>
                 <td>@string.Join(", ", host.Capabilities)</td>
+                <td>
+                    @if (hostAssignments.Any())
+                    {
+                        @foreach (var a in hostAssignments)
+                        {
+                            var profileName = profileNames.GetValueOrDefault(a.ProfileId, "?");
+                            <span class="badge bg-info me-1">@profileName ×@a.DesiredCount</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="text-muted">None</span>
+                    }
+                </td>
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">Assign</button>
                     <button class="btn btn-sm btn-danger" @onclick="() => RemoveHost(host.Id)">Remove</button>
                 </td>
             </tr>
@@ -54,13 +71,79 @@
     </tbody>
 </table>
 
+@* Assignment modal *@
+@if (showAssign && assignHost != null)
+{
+    <div class="card mt-3 mb-3">
+        <div class="card-body">
+            <h5>Assign Profile to @assignHost.Name</h5>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Profile</label>
+                    <select class="form-select" @bind="assignProfileId">
+                        <option value="">— Select profile —</option>
+                        @foreach (var p in compatibleProfiles)
+                        {
+                            <option value="@p.Id">@p.Name (@p.Provider, @p.ExecutionBackend)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Desired Instance Count</label>
+                    <input type="number" class="form-control" @bind="assignCount" min="1" />
+                </div>
+                <div class="col-md-3 mb-3 d-flex align-items-end">
+                    <button class="btn btn-success me-2" @onclick="SaveAssignment">Add Assignment</button>
+                    <button class="btn btn-secondary" @onclick="() => showAssign = false">Cancel</button>
+                </div>
+            </div>
+
+            <h6>Current Assignments</h6>
+            <table class="table table-sm">
+                <thead><tr><th>Profile</th><th>Desired Count</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var a in assignments.Where(a => a.HostId == assignHost.Id))
+                    {
+                        <tr>
+                            <td>@(profileNames.GetValueOrDefault(a.ProfileId, "?"))</td>
+                            <td>
+                                <input type="number" class="form-control form-control-sm" style="width:80px"
+                                       value="@a.DesiredCount" @onchange="e => UpdateAssignmentCount(a, int.Parse(e.Value?.ToString()!))" min="0" />
+                            </td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveAssignment(a.Id)">✕</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
 @code {
     private List<Host> hosts = [];
+    private List<RunnerAssignment> assignments = [];
+    private List<RunnerProfile> allProfiles = [];
+    private Dictionary<string, string> profileNames = new();
     private string? newToken;
+
+    // Assignment form
+    private bool showAssign;
+    private Host? assignHost;
+    private string assignProfileId = "";
+    private int assignCount = 1;
+    private List<RunnerProfile> compatibleProfiles = [];
 
     protected override async Task OnInitializedAsync()
     {
+        await ReloadData();
+    }
+
+    private async Task ReloadData()
+    {
         hosts = (await Store.Query<Host>().ToList()).ToList();
+        assignments = (await Store.Query<RunnerAssignment>().ToList()).ToList();
+        allProfiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        profileNames = allProfiles.ToDictionary(p => p.Id, p => p.Name);
     }
 
     private async Task GenerateEnrollmentToken()
@@ -73,13 +156,77 @@
             IsApproved = false
         };
         await Store.Insert(host);
-        hosts = (await Store.Query<Host>().ToList()).ToList();
+        await ReloadData();
     }
 
     private async Task RemoveHost(string id)
     {
         await Store.Remove<Host>(id);
-        hosts = (await Store.Query<Host>().ToList()).ToList();
+        // Remove all assignments for this host
+        var hostAssignments = assignments.Where(a => a.HostId == id).ToList();
+        foreach (var a in hostAssignments)
+            await Store.Remove<RunnerAssignment>(a.Id);
+        await ReloadData();
+    }
+
+    private void ShowAssignForm(Host host)
+    {
+        assignHost = host;
+        assignProfileId = "";
+        assignCount = 1;
+        // Filter profiles compatible with this host's platform
+        compatibleProfiles = allProfiles
+            .Where(p => p.RequiredHostPlatform == host.Platform)
+            .ToList();
+        showAssign = true;
+    }
+
+    private async Task SaveAssignment()
+    {
+        if (string.IsNullOrEmpty(assignProfileId) || assignHost == null) return;
+
+        var existing = assignments.FirstOrDefault(a => a.HostId == assignHost.Id && a.ProfileId == assignProfileId);
+        if (existing != null)
+        {
+            existing.DesiredCount += assignCount;
+            existing.UpdatedAt = DateTime.UtcNow;
+            await Store.Update(existing);
+        }
+        else
+        {
+            var assignment = new RunnerAssignment
+            {
+                HostId = assignHost.Id,
+                ProfileId = assignProfileId,
+                DesiredCount = assignCount
+            };
+            await Store.Insert(assignment);
+        }
+
+        await ReloadData();
+        assignProfileId = "";
+        assignCount = 1;
+    }
+
+    private async Task UpdateAssignmentCount(RunnerAssignment assignment, int newCount)
+    {
+        if (newCount <= 0)
+        {
+            await Store.Remove<RunnerAssignment>(assignment.Id);
+        }
+        else
+        {
+            assignment.DesiredCount = newCount;
+            assignment.UpdatedAt = DateTime.UtcNow;
+            await Store.Update(assignment);
+        }
+        await ReloadData();
+    }
+
+    private async Task RemoveAssignment(string id)
+    {
+        await Store.Remove<RunnerAssignment>(id);
+        await ReloadData();
     }
 
     private string GetStatusBadge(AgentStatus status) => status switch
