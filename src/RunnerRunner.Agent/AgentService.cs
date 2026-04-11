@@ -67,6 +67,7 @@ public class AgentService : BackgroundService
         _signalR.OnDeleteImage += HandleDeleteImage;
         _signalR.OnLoginRegistry += HandleLoginRegistry;
         _signalR.OnGetHostEnvironment += HandleGetHostEnvironment;
+        _signalR.OnGetRunnerLogs += HandleGetRunnerLogs;
         _signalR.OnReconnected += RegisterWithServer;
 
         // Connect to server
@@ -317,6 +318,55 @@ public class AgentService : BackgroundService
             HostId = _agentId,
             EnvironmentVariables = envVars
         });
+    }
+
+    private async Task HandleGetRunnerLogs(GetRunnerLogsCommand command)
+    {
+        _logger.LogInformation("Fetching logs for runner {Handle}", command.InstanceHandle);
+        try
+        {
+            var logs = "";
+            // Try Docker logs first
+            if (_dockerBackend is Backends.DockerBackend docker)
+            {
+                try
+                {
+                    var stream = await docker.GetClient().Containers.GetContainerLogsAsync(
+                        command.InstanceHandle,
+                        false,
+                        new Docker.DotNet.Models.ContainerLogsParameters
+                        {
+                            ShowStdout = true,
+                            ShowStderr = true,
+                            Tail = command.TailLines.ToString()
+                        });
+                    var (stdout, stderr) = await stream.ReadOutputToEndAsync(default);
+                    logs = stdout + stderr;
+                }
+                catch { /* Not a Docker container */ }
+            }
+
+            // If no Docker logs, try reading from process output
+            if (string.IsNullOrEmpty(logs))
+                logs = "(No logs available for this runner instance)";
+
+            await _signalR.SendRunnerLogs(new RunnerLogsEvent
+            {
+                HostId = _agentId,
+                InstanceHandle = command.InstanceHandle,
+                Logs = logs
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch runner logs");
+            await _signalR.SendRunnerLogs(new RunnerLogsEvent
+            {
+                HostId = _agentId,
+                InstanceHandle = command.InstanceHandle,
+                Logs = $"Error fetching logs: {ex.Message}"
+            });
+        }
     }
 
     private async Task RegisterWithServer()

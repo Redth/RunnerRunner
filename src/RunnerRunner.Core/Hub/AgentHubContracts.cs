@@ -15,6 +15,7 @@ public interface IAgentHubClient
     Task DeleteImage(DeleteImageCommand command);
     Task LoginRegistry(LoginRegistryCommand command);
     Task GetHostEnvironment();
+    Task GetRunnerLogs(GetRunnerLogsCommand command);
 }
 
 /// <summary>
@@ -34,6 +35,7 @@ public interface IAgentHubServer
     Task ImageDeleted(ImageDeletedEvent evt);
     Task HostEnvironmentResponse(HostEnvironmentEvent evt);
     Task RunnerDiscovery(RunnerDiscoveryEvent evt);
+    Task RunnerLogsResponse(RunnerLogsEvent evt);
 }
 
 // --- Commands (Server → Agent) ---
@@ -226,4 +228,17 @@ public class DiscoveredRunnerInfo
     public string ContainerId { get; set; } = "";
     public bool IsRunning { get; set; }
     public string Status { get; set; } = "";
+}
+
+public class GetRunnerLogsCommand
+{
+    public required string InstanceHandle { get; set; }
+    public int TailLines { get; set; } = 100;
+}
+
+public class RunnerLogsEvent
+{
+    public required string HostId { get; set; }
+    public required string InstanceHandle { get; set; }
+    public string Logs { get; set; } = "";
 }

@@ -322,6 +322,14 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
     public static event Action<ImagePullProgressEvent>? OnImagePullProgressReceived;
     public static event Action<ImagePullCompleteEvent>? OnImagePullCompleteReceived;
     public static event Action<ImageDeletedEvent>? OnImageDeletedReceived;
+    public static event Action<RunnerLogsEvent>? OnRunnerLogsReceived;
+
+    public Task RunnerLogsResponse(RunnerLogsEvent evt)
+    {
+        _logger.LogDebug("Received runner logs for {Handle}", evt.InstanceHandle);
+        OnRunnerLogsReceived?.Invoke(evt);
+        return Task.CompletedTask;
+    }
 
     // Static accessors for the orchestration engine
     public static IReadOnlyDictionary<string, ConnectedAgent> GetConnectedAgents() => ConnectedAgents;

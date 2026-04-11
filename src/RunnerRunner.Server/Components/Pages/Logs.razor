@@ -5,8 +5,10 @@
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Hubs
 @using Microsoft.AspNetCore.SignalR
+@using Microsoft.AspNetCore.Components
 @inject IDocumentStore Store
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject NavigationManager Nav
 @implements IDisposable
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
@@ -17,10 +19,14 @@
     <div class="col-md-4">
         <label class="form-label">Source</label>
         <select class="form-select" @bind="selectedSource" @bind:after="OnSourceChanged">
-            <option value="server">Server (docker compose logs)</option>
+            <option value="server">Server (overview)</option>
             @foreach (var h in hosts)
             {
                 <option value="agent:@h.Name">Agent: @h.Name (@h.Platform)</option>
+            }
+            @foreach (var inst in runnerInstances)
+            {
+                <option value="runner:@inst.Id">Runner: @inst.RunnerName (@(hostNames.GetValueOrDefault(inst.HostId, "?")))</option>
             }
         </select>
     </div>
@@ -67,14 +73,32 @@
 
 @code {
     private List<Host> hosts = [];
+    private List<RunnerInstance> runnerInstances = [];
+    private Dictionary<string, string> hostNames = [];
     private string selectedSource = "server";
     private int tailLines = 100;
     private string logContent = "";
     private bool isLoading;
+    private TaskCompletionSource<string>? _runnerLogsTcs;
 
     protected override async Task OnInitializedAsync()
     {
         hosts = (await Store.Query<Host>().ToList()).ToList();
+        runnerInstances = (await Store.Query<RunnerInstance>().ToList())
+            .Where(i => i.Status == RunnerInstanceStatus.Running || i.Status == RunnerInstanceStatus.Starting)
+            .ToList();
+        hostNames = hosts.ToDictionary(h => h.Id, h => h.Name);
+        AgentHub.OnRunnerLogsReceived += OnRunnerLogsReceived;
+
+        // Check for query string parameter
+        var uri = new Uri(Nav.Uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var source = query["source"];
+        if (!string.IsNullOrEmpty(source))
+        {
+            selectedSource = source;
+            await FetchLogs();
+        }
     }
 
     private async Task OnSourceChanged()
@@ -99,6 +123,11 @@
                 var hostName = selectedSource["agent:".Length..];
                 logContent = await GetAgentLogsAsync(hostName);
             }
+            else if (selectedSource.StartsWith("runner:"))
+            {
+                var instanceId = selectedSource["runner:".Length..];
+                logContent = await GetRunnerLogsAsync(instanceId);
+            }
         }
         catch (Exception ex)
         {
@@ -111,11 +140,46 @@
         }
     }
 
+    private async Task<string> GetRunnerLogsAsync(string instanceId)
+    {
+        var instance = runnerInstances.FirstOrDefault(i => i.Id == instanceId);
+        if (instance == null) return "Runner instance not found.";
+
+        var host = hosts.FirstOrDefault(h => h.Id == instance.HostId);
+        if (host == null) return "Host not found.";
+
+        // Find connected agent for this host
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+
+        if (agent == null)
+            return $"Agent for host '{host.Name}' is not connected.";
+
+        // Use ContainerId or RunnerName as the handle
+        var handle = instance.ContainerId ?? instance.RunnerName;
+
+        // Set up a task to wait for the response
+        _runnerLogsTcs = new TaskCompletionSource<string>();
+        var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines };
+
+        await HubContext.Clients.Client(agent.ConnectionId).GetRunnerLogs(command);
+
+        // Wait with timeout
+        var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        if (completedTask == _runnerLogsTcs.Task)
+            return await _runnerLogsTcs.Task;
+
+        return $"Timeout waiting for logs from agent '{host.Name}' for runner '{instance.RunnerName}'.";
+    }
+
+    private void OnRunnerLogsReceived(RunnerLogsEvent evt)
+    {
+        _runnerLogsTcs?.TrySetResult(evt.Logs ?? "(empty)");
+        InvokeAsync(StateHasChanged);
+    }
+
     private Task<string> GetServerLogsAsync()
     {
-        // Server logs come from the current process — read from the logging pipeline
-        // For Docker deployments, users can use `docker compose logs` directly
-        // Here we show recent orchestration activity from the audit/log store
         var lines = new List<string>();
         lines.Add($"=== RunnerRunner Server Logs (last activity) ===");
         lines.Add($"Timestamp: {DateTime.UtcNow:u}");
@@ -154,7 +218,6 @@
         lines.Add($"Capabilities: {string.Join(", ", host.Capabilities)}");
         lines.Add("");
 
-        // Show runner instances on this host
         var instances = (await Store.Query<RunnerInstance>().ToList())
             .Where(i => i.HostId == host.Id).ToList();
 
@@ -183,5 +246,8 @@
         return string.Join("\n", lines);
     }
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        AgentHub.OnRunnerLogsReceived -= OnRunnerLogsReceived;
+    }
 }

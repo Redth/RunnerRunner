@@ -15,6 +15,7 @@ public class DockerBackend : IRunnerBackend
     private readonly DockerClient _client;
 
     public ExecutionBackend BackendType => ExecutionBackend.Docker;
+    public DockerClient GetClient() => _client;
 
     public DockerBackend(ILogger<DockerBackend> logger)
     {

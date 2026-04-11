@@ -44,6 +44,7 @@
                 <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
                 <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
                 <td>
+                    <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
                     @if (inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
                     {
                         <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)">  <i class="bi bi-stop-circle"></i> Stop</button>

@@ -63,6 +63,7 @@
                 </td>
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td>
+                    <a href="/logs?source=agent:@host.Name" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">  <i class="bi bi-link-45deg"></i> Assign</button>
                     <button class="btn btn-sm btn-danger" @onclick="() => RemoveHost(host.Id)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
