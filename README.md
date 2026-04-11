@@ -1,0 +1,388 @@
+# 🏃 RunnerRunner
+
+A self-hosted CI/CD runner orchestration platform for managing GitHub Actions, Gitea Actions, and Azure DevOps runners across a fleet of heterogeneous machines (macOS, Linux, Windows) from a single web UI.
+
+## What It Does
+
+RunnerRunner lets you:
+
+- **Declare runner profiles** — pick a CI provider, execution backend, env vars, image config, and labels
+- **Assign profiles to hosts** — say "run 3 instances of this profile on that machine" and the system converges
+- **Compose environment variables** — build reusable env var sets (e.g. `dotnet-8-sdk`, `xcode-15-env`) and layer them with priority
+- **Auto-register/deregister runners** — runners register with GitHub/Gitea/AzDO on startup, deregister on shutdown
+- **Orchestrate multiple hosts** — agents connect to the central server from macOS, Linux, or Windows machines
+
+## Architecture
+
+```
+┌──────────────────────────────────────────┐
+│          RunnerRunner.Server             │
+│   Blazor Web UI + SignalR Hub + SQLite   │
+└──────────────┬───────────────────────────┘
+               │ SignalR (WebSocket)
+    ┌──────────┼──────────────────┐
+    │          │                  │
+┌───▼────┐ ┌──▼─────┐  ┌────────▼──┐
+│ Agent  │ │ Agent  │  │  Agent    │
+│ macOS  │ │ Linux  │  │  Windows  │
+└───┬────┘ └──┬─────┘  └────┬─────┘
+    │         │              │
+ Tart VMs  Docker         Docker /
+ / Native  Containers     Native
+```
+
+**Server** — Blazor web UI for managing profiles, hosts, env vars, credentials. Runs the desired-state reconciliation engine that auto-scales runners via SignalR commands.
+
+**Agent** — Lightweight worker deployed on each host machine. Connects outbound to the server (no inbound ports needed). Executes runner lifecycle using Docker, Tart VMs, or native processes.
+
+## Quick Start
+
+### Prerequisites
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- Docker (for Docker-based runners and docker-compose deployment)
+- [Aspire CLI](https://learn.microsoft.com/dotnet/aspire/fundamentals/setup-tooling) (optional, for local dev)
+
+### Option 1: Aspire (Local Development — Recommended)
+
+The easiest way to run everything locally with a full dashboard:
+
+```bash
+# Install Aspire CLI if you haven't
+dotnet tool install -g aspire
+
+# Run the full stack
+cd src/RunnerRunner.AppHost
+aspire run
+```
+
+This starts:
+- **Server** on `http://localhost:5080` — the web UI
+- **Agent** auto-connected to the server
+- **Aspire Dashboard** with real-time logs, traces, and metrics for all services
+
+### Option 2: Docker Compose (Production / Standalone)
+
+```bash
+docker compose up -d
+```
+
+The server is available at `http://localhost:8080`.
+
+### Option 3: Manual (dotnet run)
+
+```bash
+# Terminal 1: Start the server
+cd src/RunnerRunner.Server
+dotnet run
+
+# Terminal 2: Start a local agent
+cd src/RunnerRunner.Agent
+dotnet run -- --RunnerRunner:ServerUrl=http://localhost:5080 --RunnerRunner:AgentName=my-local-agent
+```
+
+## Getting Started
+
+### 1. Configure Provider Credentials
+
+Navigate to **Settings** in the web UI and add your CI provider credentials:
+
+| Provider | Required Fields |
+|---|---|
+| **GitHub Actions** | Organization, PAT (with `admin:org` or `repo` scope) |
+| **Gitea Actions** | Instance URL, Runner Token (from Gitea admin) |
+| **Azure DevOps** | Organization URL, Project Name, PAT, Pool Name |
+
+### 2. Create Environment Variable Sets
+
+Go to **Env Variable Sets** and create reusable sets:
+
+```
+Name: dotnet-8-sdk
+Priority: 1
+Variables:
+  DOTNET_ROOT=/usr/share/dotnet
+  DOTNET_CLI_TELEMETRY_OPTOUT=1
+  DOTNET_NOLOGO=1
+```
+
+```
+Name: android-sdk
+Priority: 2
+Variables:
+  ANDROID_HOME=/usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+```
+
+Higher priority sets win when keys conflict. Profiles compose multiple sets.
+
+### 3. Create Runner Profiles
+
+Go to **Runner Profiles** and create a profile:
+
+| Field | Example |
+|---|---|
+| Name | `github-linux-builder` |
+| Provider | GitHub Actions |
+| Credential | (select from dropdown) |
+| Host Platform | Linux |
+| Execution Backend | Docker |
+| Labels | `linux, docker, x64` |
+| Max Parallel Per Host | 4 |
+| Docker Registry | `ghcr.io` |
+| Docker Image | `myorg/runner-image` |
+| Docker Tag | `latest` |
+| Env Var Sets | ✅ dotnet-8-sdk, ✅ android-sdk |
+
+### 4. Assign Profiles to Hosts
+
+Go to **Hosts**, click **Assign** on a connected host, select a profile and desired instance count. The orchestration engine will automatically deploy runners.
+
+## Deploying Agents
+
+### Linux (Docker)
+
+```bash
+docker run -d \
+  --name runnerrunner-agent \
+  -e RunnerRunner__ServerUrl=https://your-server:8080 \
+  -e RunnerRunner__AgentName=linux-build-01 \
+  -e RunnerRunner__AgentToken=your-enrollment-token \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --restart unless-stopped \
+  ghcr.io/your-org/runnerrunner-agent:latest
+```
+
+### macOS (Native Binary)
+
+Since macOS agents need access to `tart` CLI and native processes:
+
+```bash
+cd src/RunnerRunner.Agent
+dotnet publish -c Release -r osx-arm64 --self-contained -o ./publish
+
+./publish/RunnerRunner.Agent \
+  --RunnerRunner:ServerUrl=https://your-server:8080 \
+  --RunnerRunner:AgentName=mac-mini-01 \
+  --RunnerRunner:AgentToken=your-enrollment-token
+```
+
+### Windows (Docker or Native)
+
+```powershell
+# Docker
+docker run -d `
+  -e RunnerRunner__ServerUrl=https://your-server:8080 `
+  -e RunnerRunner__AgentName=windows-build-01 `
+  -e RunnerRunner__AgentToken=your-enrollment-token `
+  ghcr.io/your-org/runnerrunner-agent:latest
+
+# Or native
+dotnet run --project src/RunnerRunner.Agent -- `
+  --RunnerRunner:ServerUrl=https://your-server:8080 `
+  --RunnerRunner:AgentName=windows-build-01
+```
+
+## Docker Compose Examples
+
+### Basic: Server + Local Agent
+
+```yaml
+services:
+  server:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Server/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - server-data:/app/data
+    environment:
+      - Database__Path=/app/data/runnerrunner.db
+      - ASPNETCORE_URLS=http://+:8080
+
+  agent:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Agent/Dockerfile
+    environment:
+      - RunnerRunner__ServerUrl=http://server:8080
+      - RunnerRunner__AgentName=local-docker-host
+      - RunnerRunner__AgentToken=changeme
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - server
+
+volumes:
+  server-data:
+```
+
+### Production: Server Behind Reverse Proxy
+
+```yaml
+services:
+  server:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Server/Dockerfile
+    expose:
+      - "8080"
+    volumes:
+      - server-data:/app/data
+    environment:
+      - Database__Path=/app/data/runnerrunner.db
+      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  server-data:
+```
+
+### Multi-Agent: Server + Multiple Hosts
+
+```yaml
+services:
+  server:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Server/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - server-data:/app/data
+    environment:
+      - Database__Path=/app/data/runnerrunner.db
+      - ASPNETCORE_URLS=http://+:8080
+
+  agent-linux-1:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Agent/Dockerfile
+    environment:
+      - RunnerRunner__ServerUrl=http://server:8080
+      - RunnerRunner__AgentName=linux-build-01
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - server
+
+  agent-linux-2:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Agent/Dockerfile
+    environment:
+      - RunnerRunner__ServerUrl=http://server:8080
+      - RunnerRunner__AgentName=linux-build-02
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - server
+
+volumes:
+  server-data:
+```
+
+> **Note:** macOS agents can't run in Docker — deploy the agent as a native binary on Mac hosts and point them at the server URL.
+
+## Execution Backends
+
+| Backend | Platform | How It Works |
+|---|---|---|
+| **Docker** | Linux, Windows | Spins up a container per runner instance. Image provides the runner environment. Registration happens in the container's entrypoint. |
+| **Tart** | macOS | Clones an OCI VM image, configures via shared directory `.env` file, starts the VM. Used for macOS CI (Xcode builds, iOS testing). |
+| **Native** | Any | Runs the runner agent binary directly as a child process. Multiple runners share the host OS. Best for bare-metal macOS. |
+
+## Environment Variable Composition
+
+Env vars are composed in layers (later layers win on key conflicts):
+
+```
+Layer 1: Env Var Sets (ordered by priority — higher wins)
+   └─ dotnet-8-sdk (priority 1): DOTNET_ROOT=/usr/share/dotnet
+   └─ android-sdk (priority 2): ANDROID_HOME=/opt/android
+
+Layer 2: Profile Overrides
+   └─ DOTNET_ROOT=/custom/dotnet  (overrides set value)
+
+Layer 3: Host Overrides
+   └─ ANDROID_HOME=/local/android  (overrides everything for this host)
+
+Layer 4: Instance (auto-injected)
+   └─ RUNNER_NAME=profile-abc123
+```
+
+## Configuration Reference
+
+### Server
+
+| Setting | Default | Description |
+|---|---|---|
+| `Database:Path` | `runnerrunner.db` | Path to the SQLite database file |
+| `ASPNETCORE_URLS` | `http://localhost:5000` | Server listen URL |
+
+### Agent
+
+| Setting | Default | Description |
+|---|---|---|
+| `RunnerRunner:ServerUrl` | `http://localhost:8080` | URL of the RunnerRunner server |
+| `RunnerRunner:AgentName` | Machine hostname | Display name for this agent |
+| `RunnerRunner:AgentToken` | *(empty)* | Enrollment token (generated in server UI) |
+| `RunnerRunner:AgentId` | *(auto-generated)* | Unique agent identifier |
+
+All settings can be provided via:
+- `appsettings.json`
+- Environment variables (e.g. `RunnerRunner__ServerUrl`)
+- Command-line args (e.g. `--RunnerRunner:ServerUrl=...`)
+
+## Development
+
+### Build
+
+```bash
+dotnet build
+```
+
+### Test
+
+```bash
+dotnet test
+```
+
+55 tests across 3 projects:
+- **Core.Tests** — Model defaults, Id generation
+- **Server.Tests** — Provider API tests (mocked HTTP), orchestration engine logic, DocumentStore integration
+- **Agent.Tests** — Lifecycle manager, health reporter
+
+### Project Structure
+
+```
+src/
+├── RunnerRunner.AppHost/           # Aspire orchestrator (local dev)
+├── RunnerRunner.ServiceDefaults/   # Shared OTEL, health checks, service discovery
+├── RunnerRunner.Core/              # Domain models, interfaces, SignalR contracts
+├── RunnerRunner.Server/            # Blazor web UI + orchestration engine
+└── RunnerRunner.Agent/             # Remote agent (deploys on each host)
+
+tests/
+├── RunnerRunner.Core.Tests/
+├── RunnerRunner.Server.Tests/
+└── RunnerRunner.Agent.Tests/
+```
+
+## License
+
+MIT
