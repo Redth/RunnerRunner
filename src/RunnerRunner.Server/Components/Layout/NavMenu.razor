@@ -1,48 +1,37 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="">🏃 RunnerRunner</a>
+﻿<div class="nav-brand">
+    <span class="brand-icon">🏃</span>
+    <span class="brand-text">RunnerRunner</span>
+</div>
+
+<nav class="nav-menu">
+    <div class="nav-section">
+        <span class="nav-section-label">Overview</span>
+        <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
+            <span class="nav-icon">📊</span> Dashboard
+        </NavLink>
     </div>
-</div>
 
-<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+    <div class="nav-section">
+        <span class="nav-section-label">Infrastructure</span>
+        <NavLink class="nav-item" href="hosts">
+            <span class="nav-icon">🖥️</span> Hosts
+        </NavLink>
+        <NavLink class="nav-item" href="runners">
+            <span class="nav-icon">⚡</span> Runners
+        </NavLink>
+    </div>
 
-<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
-    <nav class="nav flex-column">
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Dashboard
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="hosts">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Hosts
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="profiles">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Runner Profiles
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="envvarsets">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Env Variable Sets
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="runners">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> Runner Instances
-            </NavLink>
-        </div>
-
-        <div class="nav-item px-3">
-            <NavLink class="nav-link" href="settings">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Settings
-            </NavLink>
-        </div>
-    </nav>
-</div>
+    <div class="nav-section">
+        <span class="nav-section-label">Configuration</span>
+        <NavLink class="nav-item" href="profiles">
+            <span class="nav-icon">📋</span> Profiles
+        </NavLink>
+        <NavLink class="nav-item" href="envvarsets">
+            <span class="nav-icon">🔧</span> Env Variables
+        </NavLink>
+        <NavLink class="nav-item" href="settings">
+            <span class="nav-icon">⚙️</span> Settings
+        </NavLink>
+    </div>
+</nav>
 

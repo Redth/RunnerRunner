@@ -1,16 +1,24 @@
 ﻿@inherits LayoutComponentBase
 
 <div class="page">
-    <div class="sidebar">
+    <aside class="sidebar">
         <NavMenu />
-    </div>
+    </aside>
 
     <main>
-        <div class="top-row px-4">
-            <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
-        </div>
+        <header class="top-bar">
+            <div class="top-bar-left">
+                <h1 class="page-context">@(pageTitle ?? "")</h1>
+            </div>
+            <div class="top-bar-right">
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <span class="theme-icon-light">☀️</span>
+                    <span class="theme-icon-dark">🌙</span>
+                </button>
+            </div>
+        </header>
 
-        <article class="content px-4">
+        <article class="content-area">
             @Body
         </article>
     </main>
@@ -21,3 +29,7 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    private string? pageTitle;
+}
