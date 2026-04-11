@@ -8,8 +8,9 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
+        <string>-l</string>
         <string>-c</string>
-        <string>sleep 5 &amp;&amp; exec /opt/runnerrunner/RunnerRunner.Agent</string>
+        <string>exec /opt/runnerrunner/RunnerRunner.Agent</string>
     </array>
 
     <key>WorkingDirectory</key>
