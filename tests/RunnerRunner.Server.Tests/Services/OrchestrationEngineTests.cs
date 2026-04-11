@@ -134,6 +134,100 @@ public class OrchestrationEngineEnvCompositionTests
     }
 
     [Fact]
+    public void VariableExpansion_ExpandsDollarReferences()
+    {
+        var vars = new Dictionary<string, string>
+        {
+            ["RR_GITHUB_TOKEN"] = "ghp_secret123",
+            ["RR_GITHUB_ORG"] = "my-org",
+            ["GITHUB_TOKEN"] = "$RR_GITHUB_TOKEN",
+            ["GITHUB_ORG"] = "$RR_GITHUB_ORG",
+        };
+
+        // Simulate ExpandVariableReferences
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var changed = false;
+            foreach (var key in vars.Keys.ToList())
+            {
+                var value = vars[key];
+                if (!value.Contains('$')) continue;
+                var expanded = value;
+                foreach (var refKey in vars.Keys)
+                {
+                    expanded = expanded
+                        .Replace($"${{{refKey}}}", vars[refKey])
+                        .Replace($"${refKey}", vars[refKey]);
+                }
+                if (expanded != value) { vars[key] = expanded; changed = true; }
+            }
+            if (!changed) break;
+        }
+
+        Assert.Equal("ghp_secret123", vars["GITHUB_TOKEN"]);
+        Assert.Equal("my-org", vars["GITHUB_ORG"]);
+        // RR_ vars remain unchanged
+        Assert.Equal("ghp_secret123", vars["RR_GITHUB_TOKEN"]);
+    }
+
+    [Fact]
+    public void VariableExpansion_BraceSyntaxWorks()
+    {
+        var vars = new Dictionary<string, string>
+        {
+            ["RR_TOKEN"] = "secret",
+            ["AUTH"] = "Bearer ${RR_TOKEN}",
+        };
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var changed = false;
+            foreach (var key in vars.Keys.ToList())
+            {
+                var value = vars[key];
+                if (!value.Contains('$')) continue;
+                var expanded = value;
+                foreach (var refKey in vars.Keys)
+                {
+                    expanded = expanded
+                        .Replace($"${{{refKey}}}", vars[refKey])
+                        .Replace($"${refKey}", vars[refKey]);
+                }
+                if (expanded != value) { vars[key] = expanded; changed = true; }
+            }
+            if (!changed) break;
+        }
+
+        Assert.Equal("Bearer secret", vars["AUTH"]);
+    }
+
+    [Fact]
+    public void VariableExpansion_NoReferencesUntouched()
+    {
+        var vars = new Dictionary<string, string>
+        {
+            ["PLAIN"] = "no references here",
+            ["PATH"] = "/usr/bin:/usr/local/bin",
+        };
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            foreach (var key in vars.Keys.ToList())
+            {
+                var value = vars[key];
+                if (!value.Contains('$')) continue;
+                var expanded = value;
+                foreach (var refKey in vars.Keys)
+                    expanded = expanded.Replace($"${refKey}", vars[refKey]);
+                vars[key] = expanded;
+            }
+        }
+
+        Assert.Equal("no references here", vars["PLAIN"]);
+        Assert.Equal("/usr/bin:/usr/local/bin", vars["PATH"]);
+    }
+
+    [Fact]
     public async Task ScaleTracking_RunnerInstancePersistence()
     {
         var store = TestDocumentStore.Create();

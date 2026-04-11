@@ -142,15 +142,17 @@ public class OrchestrationEngine : BackgroundService
         ConnectedAgent agent,
         CancellationToken ct)
     {
-        // Compose environment variables (profile sets + profile overrides + host overrides)
+        // Resolve credential first (needed for both env var injection and registration token)
+        var credential = credentials.FirstOrDefault(c => c.Id == profile.ProviderCredentialId);
+
+        // Compose environment variables (credential RR_* vars + profile sets + overrides + host overrides)
         var host = await store.Get<Host>(assignment.HostId);
-        var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host);
+        var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host, credential);
 
         // Get registration token from provider
         string? registrationToken = null;
         string? runnerUrl = null;
 
-        var credential = credentials.FirstOrDefault(c => c.Id == profile.ProviderCredentialId);
         if (credential != null)
         {
             try
@@ -229,9 +231,16 @@ public class OrchestrationEngine : BackgroundService
     }
 
     private async Task<Dictionary<string, string>> ComposeEnvironmentVariablesAsync(
-        IDocumentStore store, RunnerProfile profile, Host? host = null)
+        IDocumentStore store, RunnerProfile profile, Host? host = null,
+        ProviderCredential? credential = null)
     {
         var result = new Dictionary<string, string>();
+
+        // Layer 0: Auto-injected provider credential vars (RR_ prefixed)
+        if (credential != null)
+        {
+            InjectCredentialVars(result, credential);
+        }
 
         // Layer 1: Environment variable sets (ordered by priority)
         var allSets = (await store.Query<EnvironmentVariableSet>().ToList()).ToList();
@@ -257,7 +266,76 @@ public class OrchestrationEngine : BackgroundService
                 result[kvp.Key] = kvp.Value;
         }
 
+        // Layer 4: Instance-level (runner name injected by caller)
+
+        // Expand $RR_* variable references in all values
+        ExpandVariableReferences(result);
+
         return result;
+    }
+
+    /// <summary>
+    /// Injects provider credential fields as RR_-prefixed environment variables.
+    /// These can be referenced in env var sets/profiles as $RR_GITHUB_TOKEN etc.
+    /// </summary>
+    private static void InjectCredentialVars(Dictionary<string, string> vars, ProviderCredential cred)
+    {
+        switch (cred.Provider)
+        {
+            case RunnerProvider.GitHubActions:
+                if (!string.IsNullOrEmpty(cred.GitHubToken)) vars["RR_GITHUB_TOKEN"] = cred.GitHubToken;
+                if (!string.IsNullOrEmpty(cred.GitHubOrg)) vars["RR_GITHUB_ORG"] = cred.GitHubOrg;
+                if (!string.IsNullOrEmpty(cred.GitHubRepo)) vars["RR_GITHUB_REPO"] = cred.GitHubRepo;
+                if (!string.IsNullOrEmpty(cred.GitHubApiUrl)) vars["RR_GITHUB_API_URL"] = cred.GitHubApiUrl;
+                if (!string.IsNullOrEmpty(cred.GitHubServerUrl)) vars["RR_GITHUB_SERVER_URL"] = cred.GitHubServerUrl;
+                break;
+
+            case RunnerProvider.GiteaActions:
+                if (!string.IsNullOrEmpty(cred.GiteaRunnerToken)) vars["RR_GITEA_RUNNER_TOKEN"] = cred.GiteaRunnerToken;
+                if (!string.IsNullOrEmpty(cred.GiteaInstanceUrl)) vars["RR_GITEA_INSTANCE_URL"] = cred.GiteaInstanceUrl;
+                break;
+
+            case RunnerProvider.AzureDevOps:
+                if (!string.IsNullOrEmpty(cred.AzDoPat)) vars["RR_AZDO_PAT"] = cred.AzDoPat;
+                if (!string.IsNullOrEmpty(cred.AzDoOrgUrl)) vars["RR_AZDO_ORG_URL"] = cred.AzDoOrgUrl;
+                if (!string.IsNullOrEmpty(cred.AzDoProjectName)) vars["RR_AZDO_PROJECT"] = cred.AzDoProjectName;
+                if (!string.IsNullOrEmpty(cred.AzDoPoolName)) vars["RR_AZDO_POOL"] = cred.AzDoPoolName;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Expands $VARNAME and ${VARNAME} references in environment variable values.
+    /// Only expands references to variables that exist in the same dictionary.
+    /// Example: GITHUB_TOKEN=$RR_GITHUB_TOKEN → GITHUB_TOKEN=ghp_abc123
+    /// </summary>
+    private static void ExpandVariableReferences(Dictionary<string, string> vars)
+    {
+        // Multiple passes to handle chained references (max 3 to prevent infinite loops)
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var changed = false;
+            foreach (var key in vars.Keys.ToList())
+            {
+                var value = vars[key];
+                if (!value.Contains('$')) continue;
+
+                var expanded = value;
+                foreach (var refKey in vars.Keys)
+                {
+                    expanded = expanded
+                        .Replace($"${{{refKey}}}", vars[refKey])
+                        .Replace($"${refKey}", vars[refKey]);
+                }
+
+                if (expanded != value)
+                {
+                    vars[key] = expanded;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
     }
 
     private IRunnerProviderPlugin? ResolveProvider(RunnerProvider provider)
