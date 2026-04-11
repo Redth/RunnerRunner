@@ -55,8 +55,6 @@ dotnet publish "${AGENT_PROJECT}" \
     -r "${RID}" \
     --self-contained \
     -o "${PUBLISH_DIR}" \
-    -p:PublishSingleFile=true \
-    -p:IncludeNativeLibrariesForSelfExtract=true \
     /p:DebugType=None \
     /p:DebugSymbols=false \
     --nologo -v quiet
@@ -112,7 +110,7 @@ _scp "${SCRIPT_DIR}/${PLIST_NAME}" "/tmp/${PLIST_NAME}"
 
 # --- Step 6: Set permissions and install plist ---
 log "Setting up agent binary..."
-_ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent"
+_ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent && codesign --force -s - ${INSTALL_DIR}/RunnerRunner.Agent"
 
 log "Installing LaunchAgent plist..."
 _ssh "mkdir -p ~/Library/LaunchAgents && cp /tmp/${PLIST_NAME} ~/Library/LaunchAgents/${PLIST_NAME}"
