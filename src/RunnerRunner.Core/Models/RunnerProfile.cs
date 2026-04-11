@@ -13,6 +13,7 @@ public class RunnerProfile
     // References to EnvironmentVariableSet IDs (composed in priority order)
     public List<string> EnvironmentVariableSetIds { get; set; } = [];
     public Dictionary<string, string> EnvironmentOverrides { get; set; } = new();
+    public HashSet<string> EnvironmentOverrideSecretKeys { get; set; } = [];
 
     // Image configuration (embedded documents)
     public DockerImageConfig? DockerConfig { get; set; }

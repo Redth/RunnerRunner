@@ -174,26 +174,35 @@
             @* Environment Overrides *@
             <h6 class="mt-3">Profile-Level Environment Overrides</h6>
             <table class="table table-sm">
+                <thead>
+                    <tr><th>Key</th><th>Value</th><th style="width:60px" class="text-center"><i class="bi bi-shield-lock" title="Secret"></i></th><th style="width:40px"></th></tr>
+                </thead>
                 <tbody>
                     @foreach (var kvp in profileEnvOverrides)
                     {
+                        var isSecret = profileOverrideSecretKeys.Contains(kvp.Key);
                         <tr>
                             <td><input class="form-control form-control-sm" value="@kvp.Key" @onchange="e => RenameOverrideKey(kvp.Key, e.Value?.ToString()!)" /></td>
-                            <td><input class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateOverrideValue(kvp.Key, e.Value?.ToString()!)" /></td>
-                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => profileEnvOverrides.Remove(kvp.Key)">✕</button></td>
+                            <td><input type="@(isSecret ? "password" : "text")" class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateOverrideValue(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSecret" @onchange="() => ToggleOverrideSecret(kvp.Key)" title="Mark as secret" /></td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveOverride(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
                         </tr>
                     }
                 </tbody>
             </table>
             <div class="row mb-3">
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <input class="form-control form-control-sm" placeholder="KEY" @bind="newOverrideKey" />
                 </div>
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <input class="form-control form-control-sm" placeholder="Value" @bind="newOverrideValue" />
                 </div>
+                <div class="col-md-2 d-flex align-items-center">
+                    <input type="checkbox" class="form-check-input me-1" @bind="newOverrideIsSecret" id="newOverrideSecretCheck" />
+                    <label class="form-check-label small" for="newOverrideSecretCheck">Secret</label>
+                </div>
                 <div class="col-md-2">
-                    <button class="btn btn-sm btn-outline-success" @onclick="AddOverride">Add</button>
+                    <button class="btn btn-sm btn-outline-success" @onclick="AddOverride"><i class="bi bi-plus-lg"></i> Add</button>
                 </div>
             </div>
 
@@ -263,8 +272,10 @@
     // Env var composition
     private HashSet<string> selectedEnvVarSetIds = [];
     private Dictionary<string, string> profileEnvOverrides = new();
+    private HashSet<string> profileOverrideSecretKeys = [];
     private string newOverrideKey = "";
     private string newOverrideValue = "";
+    private bool newOverrideIsSecret;
 
     protected override async Task OnInitializedAsync()
     {
@@ -280,6 +291,8 @@
         ResetImageFields();
         selectedEnvVarSetIds = [];
         profileEnvOverrides = new();
+        profileOverrideSecretKeys = [];
+        newOverrideIsSecret = false;
         isEditing = false;
         showForm = true;
     }
@@ -290,6 +303,7 @@
         labelsInput = string.Join(", ", profile.Labels);
         selectedEnvVarSetIds = [.. profile.EnvironmentVariableSetIds];
         profileEnvOverrides = new Dictionary<string, string>(profile.EnvironmentOverrides);
+        profileOverrideSecretKeys = [.. profile.EnvironmentOverrideSecretKeys];
 
         if (profile.DockerConfig is not null)
         {
@@ -320,6 +334,7 @@
             .ToList();
         editProfile.EnvironmentVariableSetIds = [.. selectedEnvVarSetIds];
         editProfile.EnvironmentOverrides = new Dictionary<string, string>(profileEnvOverrides);
+        editProfile.EnvironmentOverrideSecretKeys = [.. profileOverrideSecretKeys];
         editProfile.UpdatedAt = DateTime.UtcNow;
 
         if (editProfile.ExecutionBackend == ExecutionBackend.Docker)
@@ -381,9 +396,17 @@
         if (!string.IsNullOrWhiteSpace(newOverrideKey))
         {
             profileEnvOverrides[newOverrideKey] = newOverrideValue;
+            if (newOverrideIsSecret) profileOverrideSecretKeys.Add(newOverrideKey);
             newOverrideKey = "";
             newOverrideValue = "";
+            newOverrideIsSecret = false;
         }
+    }
+
+    private void RemoveOverride(string key)
+    {
+        profileEnvOverrides.Remove(key);
+        profileOverrideSecretKeys.Remove(key);
     }
 
     private void RenameOverrideKey(string oldKey, string newKey)
@@ -392,7 +415,15 @@
         {
             profileEnvOverrides.Remove(oldKey);
             profileEnvOverrides[newKey] = val;
+            if (profileOverrideSecretKeys.Remove(oldKey))
+                profileOverrideSecretKeys.Add(newKey);
         }
+    }
+
+    private void ToggleOverrideSecret(string key)
+    {
+        if (!profileOverrideSecretKeys.Remove(key))
+            profileOverrideSecretKeys.Add(key);
     }
 
     private void UpdateOverrideValue(string key, string value) => profileEnvOverrides[key] = value;
