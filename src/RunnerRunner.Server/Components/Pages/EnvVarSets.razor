@@ -37,29 +37,36 @@
                     <tr>
                         <th>Key</th>
                         <th>Value</th>
-                        <th></th>
+                        <th style="width:60px" class="text-center"><i class="bi bi-shield-lock" title="Secret"></i></th>
+                        <th style="width:40px"></th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (var kvp in editVariables)
                     {
+                        var isSecret = editSecretKeys.Contains(kvp.Key);
                         <tr>
                             <td><input class="form-control form-control-sm" value="@kvp.Key" @onchange="e => RenameKey(kvp.Key, e.Value?.ToString()!)" /></td>
-                            <td><input class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateValue(kvp.Key, e.Value?.ToString()!)" /></td>
-                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVariable(kvp.Key)">✕</button></td>
+                            <td><input type="@(isSecret ? "password" : "text")" class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateValue(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSecret" @onchange="() => ToggleSecret(kvp.Key)" title="Mark as secret" /></td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVariable(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
                         </tr>
                     }
                 </tbody>
             </table>
             <div class="row mb-3">
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <input class="form-control form-control-sm" placeholder="KEY" @bind="newKey" />
                 </div>
-                <div class="col-md-5">
+                <div class="col-md-4">
                     <input class="form-control form-control-sm" placeholder="Value" @bind="newValue" />
                 </div>
+                <div class="col-md-2 d-flex align-items-center">
+                    <input type="checkbox" class="form-check-input me-1" @bind="newIsSecret" id="newSecretCheck" />
+                    <label class="form-check-label small" for="newSecretCheck">Secret</label>
+                </div>
                 <div class="col-md-2">
-                    <button class="btn btn-sm btn-outline-success" @onclick="AddVariable">Add</button>
+                    <button class="btn btn-sm btn-outline-success" @onclick="AddVariable"><i class="bi bi-plus-lg"></i> Add</button>
                 </div>
             </div>
 
@@ -86,10 +93,16 @@
                 <td>@set.Name</td>
                 <td>@set.Description</td>
                 <td>@set.Priority</td>
-                <td>@set.Variables.Count variable(s)</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditSet(set)">Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteSet(set.Id)">Delete</button>
+                    @set.Variables.Count variable(s)
+                    @if (set.SecretKeys.Count > 0)
+                    {
+                        <span class="badge bg-secondary ms-1"><i class="bi bi-shield-lock"></i> @set.SecretKeys.Count secret(s)</span>
+                    }
+                </td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditSet(set)"><i class="bi bi-pencil-square"></i> Edit</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteSet(set.Id)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }
@@ -100,10 +113,12 @@
     private List<EnvironmentVariableSet> envVarSets = [];
     private EnvironmentVariableSet editSet = new() { Name = "" };
     private Dictionary<string, string> editVariables = new();
+    private HashSet<string> editSecretKeys = [];
     private bool showForm;
     private bool isEditing;
     private string newKey = "";
     private string newValue = "";
+    private bool newIsSecret;
 
     protected override async Task OnInitializedAsync()
     {
@@ -114,6 +129,8 @@
     {
         editSet = new EnvironmentVariableSet { Name = "" };
         editVariables = new();
+        editSecretKeys = [];
+        newIsSecret = false;
         isEditing = false;
         showForm = true;
     }
@@ -122,6 +139,7 @@
     {
         editSet = set;
         editVariables = new Dictionary<string, string>(set.Variables);
+        editSecretKeys = [.. set.SecretKeys];
         isEditing = true;
         showForm = true;
     }
@@ -131,12 +149,18 @@
         if (!string.IsNullOrWhiteSpace(newKey))
         {
             editVariables[newKey] = newValue;
+            if (newIsSecret) editSecretKeys.Add(newKey);
             newKey = "";
             newValue = "";
+            newIsSecret = false;
         }
     }
 
-    private void RemoveVariable(string key) => editVariables.Remove(key);
+    private void RemoveVariable(string key)
+    {
+        editVariables.Remove(key);
+        editSecretKeys.Remove(key);
+    }
 
     private void RenameKey(string oldKey, string newKeyName)
     {
@@ -144,7 +168,15 @@
         {
             editVariables.Remove(oldKey);
             editVariables[newKeyName] = val;
+            if (editSecretKeys.Remove(oldKey))
+                editSecretKeys.Add(newKeyName);
         }
+    }
+
+    private void ToggleSecret(string key)
+    {
+        if (!editSecretKeys.Remove(key))
+            editSecretKeys.Add(key);
     }
 
     private void UpdateValue(string key, string value) => editVariables[key] = value;
@@ -152,6 +184,7 @@
     private async Task SaveSet()
     {
         editSet.Variables = new Dictionary<string, string>(editVariables);
+        editSet.SecretKeys = [.. editSecretKeys];
         editSet.UpdatedAt = DateTime.UtcNow;
 
         if (isEditing)
