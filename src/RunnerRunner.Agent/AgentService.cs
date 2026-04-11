@@ -62,6 +62,7 @@ public class AgentService : BackgroundService
         _signalR.OnPullImage += HandlePullImage;
         _signalR.OnDeleteImage += HandleDeleteImage;
         _signalR.OnLoginRegistry += HandleLoginRegistry;
+        _signalR.OnGetHostEnvironment += HandleGetHostEnvironment;
 
         // Connect to server
         await _signalR.ConnectAsync(stoppingToken);
@@ -304,6 +305,24 @@ public class AgentService : BackgroundService
         {
             _logger.LogError(ex, "Failed to login to registry {Registry}", command.RegistryUrl);
         }
+    }
+
+    private async Task HandleGetHostEnvironment()
+    {
+        _logger.LogInformation("Reporting host environment variables");
+
+        var envVars = new Dictionary<string, string>();
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is string key && entry.Value is string value)
+                envVars[key] = value;
+        }
+
+        await _signalR.SendHostEnvironment(new HostEnvironmentEvent
+        {
+            HostId = _agentId,
+            EnvironmentVariables = envVars
+        });
     }
 
     private static HostPlatform GetCurrentPlatform()

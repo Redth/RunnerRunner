@@ -14,6 +14,7 @@ public interface IAgentHubClient
     Task ListImages(ListImagesCommand command);
     Task DeleteImage(DeleteImageCommand command);
     Task LoginRegistry(LoginRegistryCommand command);
+    Task GetHostEnvironment();
 }
 
 /// <summary>
@@ -31,6 +32,7 @@ public interface IAgentHubServer
     Task ImagePullProgress(ImagePullProgressEvent evt);
     Task ImagePullComplete(ImagePullCompleteEvent evt);
     Task ImageDeleted(ImageDeletedEvent evt);
+    Task HostEnvironmentResponse(HostEnvironmentEvent evt);
 }
 
 // --- Commands (Server → Agent) ---
@@ -202,4 +204,10 @@ public class ImageDeletedEvent
     public required string ImageId { get; set; }
     public bool Success { get; set; }
     public string? Error { get; set; }
+}
+
+public class HostEnvironmentEvent
+{
+    public required string HostId { get; set; }
+    public Dictionary<string, string> EnvironmentVariables { get; set; } = new();
 }

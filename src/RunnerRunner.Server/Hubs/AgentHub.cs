@@ -223,6 +223,25 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
         return Task.CompletedTask;
     }
 
+    public async Task HostEnvironmentResponse(HostEnvironmentEvent evt)
+    {
+        _logger.LogInformation("Received {Count} host env vars from agent {HostId}",
+            evt.EnvironmentVariables.Count, evt.HostId);
+
+        var agent = ConnectedAgents.Values.FirstOrDefault(a => a.AgentInfo.AgentId == evt.HostId);
+        var hostName = agent?.AgentInfo.Name;
+        var host = hostName != null
+            ? (await _store.Query<Host>().ToList()).FirstOrDefault(h => h.Name == hostName)
+            : null;
+
+        if (host != null)
+        {
+            host.ReportedEnvironment = evt.EnvironmentVariables;
+            host.UpdatedAt = DateTime.UtcNow;
+            await _store.Update(host);
+        }
+    }
+
     // Static events for UI components to subscribe to
     public static event Action<ImagePullProgressEvent>? OnImagePullProgressReceived;
     public static event Action<ImagePullCompleteEvent>? OnImagePullCompleteReceived;

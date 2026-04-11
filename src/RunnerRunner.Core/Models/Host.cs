@@ -27,6 +27,12 @@ public class Host
     /// </summary>
     public string? WorkDirectory { get; set; }
 
+    /// <summary>
+    /// Cached host environment variables reported by the agent.
+    /// Used as reference in the env var editor UI.
+    /// </summary>
+    public Dictionary<string, string> ReportedEnvironment { get; set; } = new();
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

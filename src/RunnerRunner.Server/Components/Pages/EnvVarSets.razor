@@ -31,12 +31,68 @@
                 </div>
             </div>
 
+            @* RR_ Predefined Variables Reference *@
+            <div class="mb-3">
+                <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => showRrHelp = !showRrHelp">
+                    <i class="bi bi-info-circle me-1"></i> Available <code>$RR_</code> Variables
+                    <i class="bi @(showRrHelp ? "bi-chevron-up" : "bi-chevron-down") ms-1"></i>
+                </button>
+                @if (showRrHelp)
+                {
+                    <div class="card card-body mt-2" style="background: var(--bg-tertiary); font-size: 0.85rem;">
+                        <p class="mb-2 text-muted">These are auto-injected from your provider credentials. Use them as values like <code>$RR_GITHUB_TOKEN</code> or <code>${RR_GITHUB_ORG}</code></p>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <strong>GitHub Actions</strong>
+                                @foreach (var v in rrVarsGitHub)
+                                {
+                                    <div class="d-flex align-items-center gap-1 mt-1">
+                                        <code style="cursor:pointer" @onclick="() => InsertVarRef(v.Key)" title="Click to use as new value">@v.Key</code>
+                                        @if (v.Value != null)
+                                        {
+                                            <span class="badge bg-success" style="font-size:0.65rem">configured</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            <div class="col-md-4">
+                                <strong>Gitea Actions</strong>
+                                @foreach (var v in rrVarsGitea)
+                                {
+                                    <div class="d-flex align-items-center gap-1 mt-1">
+                                        <code style="cursor:pointer" @onclick="() => InsertVarRef(v.Key)" title="Click to use as new value">@v.Key</code>
+                                        @if (v.Value != null)
+                                        {
+                                            <span class="badge bg-success" style="font-size:0.65rem">configured</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            <div class="col-md-4">
+                                <strong>Azure DevOps</strong>
+                                @foreach (var v in rrVarsAzdo)
+                                {
+                                    <div class="d-flex align-items-center gap-1 mt-1">
+                                        <code style="cursor:pointer" @onclick="() => InsertVarRef(v.Key)" title="Click to use as new value">@v.Key</code>
+                                        @if (v.Value != null)
+                                        {
+                                            <span class="badge bg-success" style="font-size:0.65rem">configured</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+
             <h6>Variables</h6>
             <table class="table table-sm">
                 <thead>
                     <tr>
                         <th>Key</th>
                         <th>Value</th>
+                        <th style="width:150px">Resolves To</th>
                         <th style="width:60px" class="text-center"><i class="bi bi-shield-lock" title="Secret"></i></th>
                         <th style="width:40px"></th>
                     </tr>
@@ -45,9 +101,27 @@
                     @foreach (var kvp in editVariables)
                     {
                         var isSecret = editSecretKeys.Contains(kvp.Key);
+                        var resolved = ResolvePreview(kvp.Value);
                         <tr>
                             <td><input class="form-control form-control-sm" value="@kvp.Key" @onchange="e => RenameKey(kvp.Key, e.Value?.ToString()!)" /></td>
                             <td><input type="@(isSecret ? "password" : "text")" class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateValue(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td>
+                                @if (resolved != null)
+                                {
+                                    @if (resolved.IsSecret)
+                                    {
+                                        <code class="text-muted" style="font-size:0.75rem">••••••••</code>
+                                    }
+                                    else if (resolved.IsUnknown)
+                                    {
+                                        <span class="text-warning" style="font-size:0.75rem"><i class="bi bi-exclamation-triangle"></i> unknown</span>
+                                    }
+                                    else
+                                    {
+                                        <code style="font-size:0.75rem; color: var(--success)">@resolved.Value</code>
+                                    }
+                                }
+                            </td>
                             <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSecret" @onchange="() => ToggleSecret(kvp.Key)" title="Mark as secret" /></td>
                             <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVariable(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
                         </tr>
@@ -55,11 +129,11 @@
                 </tbody>
             </table>
             <div class="row mb-3">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <input class="form-control form-control-sm" placeholder="KEY" @bind="newKey" />
                 </div>
                 <div class="col-md-4">
-                    <input class="form-control form-control-sm" placeholder="Value" @bind="newValue" />
+                    <input class="form-control form-control-sm" placeholder="Value or $RR_VARIABLE" @bind="newValue" />
                 </div>
                 <div class="col-md-2 d-flex align-items-center">
                     <input type="checkbox" class="form-check-input me-1" @bind="newIsSecret" id="newSecretCheck" />
@@ -111,6 +185,7 @@
 
 @code {
     private List<EnvironmentVariableSet> envVarSets = [];
+    private List<ProviderCredential> providerCreds = [];
     private EnvironmentVariableSet editSet = new() { Name = "" };
     private Dictionary<string, string> editVariables = new();
     private HashSet<string> editSecretKeys = [];
@@ -119,10 +194,22 @@
     private string newKey = "";
     private string newValue = "";
     private bool newIsSecret;
+    private bool showRrHelp;
+
+    // RR_ variable availability (key → value if configured, null if not)
+    private Dictionary<string, string?> rrVarsGitHub = new();
+    private Dictionary<string, string?> rrVarsGitea = new();
+    private Dictionary<string, string?> rrVarsAzdo = new();
+    // All resolvable RR_ vars for preview
+    private Dictionary<string, string> allRrVars = new();
+    // Secret RR_ keys (tokens, pats)
+    private HashSet<string> rrSecretKeys = ["RR_GITHUB_TOKEN", "RR_GITEA_RUNNER_TOKEN", "RR_AZDO_PAT"];
 
     protected override async Task OnInitializedAsync()
     {
         envVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+        providerCreds = (await Store.Query<ProviderCredential>().ToList()).ToList();
+        BuildRrVarLookups();
     }
 
     private void ShowCreateForm()
@@ -200,5 +287,98 @@
     {
         await Store.Remove<EnvironmentVariableSet>(id);
         envVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+    }
+
+    // --- RR_ Variable Helpers ---
+
+    private void BuildRrVarLookups()
+    {
+        allRrVars.Clear();
+
+        // GitHub
+        var gh = providerCreds.FirstOrDefault(c => c.Provider == RunnerProvider.GitHubActions);
+        rrVarsGitHub = new()
+        {
+            ["$RR_GITHUB_TOKEN"] = gh?.GitHubToken,
+            ["$RR_GITHUB_ORG"] = gh?.GitHubOrg,
+            ["$RR_GITHUB_REPO"] = gh?.GitHubRepo,
+            ["$RR_GITHUB_API_URL"] = gh?.GitHubApiUrl,
+            ["$RR_GITHUB_SERVER_URL"] = gh?.GitHubServerUrl,
+        };
+
+        // Gitea
+        var gt = providerCreds.FirstOrDefault(c => c.Provider == RunnerProvider.GiteaActions);
+        rrVarsGitea = new()
+        {
+            ["$RR_GITEA_RUNNER_TOKEN"] = gt?.GiteaRunnerToken,
+            ["$RR_GITEA_INSTANCE_URL"] = gt?.GiteaInstanceUrl,
+        };
+
+        // AzDO
+        var az = providerCreds.FirstOrDefault(c => c.Provider == RunnerProvider.AzureDevOps);
+        rrVarsAzdo = new()
+        {
+            ["$RR_AZDO_PAT"] = az?.AzDoPat,
+            ["$RR_AZDO_ORG_URL"] = az?.AzDoOrgUrl,
+            ["$RR_AZDO_PROJECT"] = az?.AzDoProjectName,
+            ["$RR_AZDO_POOL"] = az?.AzDoPoolName,
+        };
+
+        // Merge all configured values for resolution
+        foreach (var dict in new[] { rrVarsGitHub, rrVarsGitea, rrVarsAzdo })
+        {
+            foreach (var kv in dict)
+            {
+                if (kv.Value != null)
+                    allRrVars[kv.Key.TrimStart('$')] = kv.Value;
+            }
+        }
+    }
+
+    private void InsertVarRef(string varName)
+    {
+        newValue = varName;
+    }
+
+    private ResolvedValue? ResolvePreview(string value)
+    {
+        if (string.IsNullOrEmpty(value) || !value.Contains('$'))
+            return null;
+
+        // Try to resolve each $VAR reference
+        var resolved = value;
+        var hasSecret = false;
+        var hasUnknown = false;
+
+        foreach (var rrKey in allRrVars.Keys)
+        {
+            if (resolved.Contains($"${{{rrKey}}}") || resolved.Contains($"${rrKey}"))
+            {
+                if (rrSecretKeys.Contains(rrKey))
+                    hasSecret = true;
+
+                resolved = resolved
+                    .Replace($"${{{rrKey}}}", allRrVars[rrKey])
+                    .Replace($"${rrKey}", allRrVars[rrKey]);
+            }
+        }
+
+        // Check for unresolved references
+        if (resolved.Contains('$'))
+            hasUnknown = true;
+
+        if (hasSecret)
+            return new ResolvedValue { IsSecret = true };
+        if (hasUnknown)
+            return new ResolvedValue { IsUnknown = true };
+
+        return resolved != value ? new ResolvedValue { Value = resolved } : null;
+    }
+
+    private class ResolvedValue
+    {
+        public string? Value { get; set; }
+        public bool IsSecret { get; set; }
+        public bool IsUnknown { get; set; }
     }
 }
