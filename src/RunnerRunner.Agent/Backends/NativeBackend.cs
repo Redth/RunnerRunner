@@ -37,10 +37,22 @@ public class NativeBackend : IRunnerBackend
 
         // Step 1: Ensure the runner agent binary is downloaded
         var agentDir = Path.Combine(basePath, "agents", provider.ToString().ToLower(), agentVersion);
-        if (!Directory.Exists(agentDir))
+        if (!Directory.Exists(agentDir) || Directory.GetFiles(agentDir, "*", SearchOption.AllDirectories).Length == 0)
         {
+            if (Directory.Exists(agentDir)) Directory.Delete(agentDir, recursive: true);
             _logger.LogInformation("Runner agent not found at {Dir}, attempting download...", agentDir);
             await DownloadRunnerAgentAsync(provider, agentVersion, agentDir, ct);
+        }
+
+        // Verify download succeeded
+        var configExists = File.Exists(Path.Combine(agentDir, "config.sh"))
+            || File.Exists(Path.Combine(agentDir, "config.cmd"))
+            || File.Exists(Path.Combine(agentDir, "act_runner"));
+        if (!configExists)
+        {
+            throw new InvalidOperationException(
+                $"Runner agent at {agentDir} is missing config scripts. Download may have failed. " +
+                $"Contents: [{string.Join(", ", Directory.GetFiles(agentDir).Select(Path.GetFileName).Take(10))}]");
         }
 
         // Step 2: Create isolated instance directory (clone the agent)

@@ -199,6 +199,21 @@ public class OrchestrationEngine : BackgroundService
         };
         await store.Insert(instance);
 
+        // Resolve runner agent version — if null or "latest", look up actual version
+        var agentVersion = profile.RunnerAgentVersion;
+        if (string.IsNullOrEmpty(agentVersion) || agentVersion == "latest")
+        {
+            var versions = (await store.Query<RunnerAgentVersion>().ToList())
+                .Where(v => v.Provider == profile.Provider)
+                .OrderByDescending(v => v.IsLatest)
+                .ThenByDescending(v => v.Version)
+                .ToList();
+            agentVersion = versions.FirstOrDefault()?.Version;
+            if (agentVersion != null)
+                _logger.LogInformation("Resolved runner agent version to {Version} for {Provider}",
+                    agentVersion, profile.Provider);
+        }
+
         // Send deploy command to agent
         var command = new DeployRunnerCommand
         {
@@ -208,7 +223,7 @@ public class OrchestrationEngine : BackgroundService
             Backend = profile.ExecutionBackend,
             Provider = profile.Provider,
             EnvironmentVariables = envVars,
-            RunnerAgentVersion = profile.RunnerAgentVersion,
+            RunnerAgentVersion = agentVersion,
             DockerConfig = profile.DockerConfig,
             TartConfig = profile.TartConfig,
             Labels = profile.Labels,
