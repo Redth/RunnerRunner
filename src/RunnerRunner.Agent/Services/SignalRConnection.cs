@@ -46,20 +46,9 @@ public class SignalRConnection : IAsyncDisposable
                     options.Headers.Add("X-Agent-Token", token);
                 }
 
-                // Force IPv4 to avoid "No route to host" under macOS launchd
-                options.HttpMessageHandlerFactory = _ => new SocketsHttpHandler
-                {
-                    ConnectCallback = async (context, ct) =>
-                    {
-                        var socket = new System.Net.Sockets.Socket(
-                            System.Net.Sockets.AddressFamily.InterNetwork,
-                            System.Net.Sockets.SocketType.Stream,
-                            System.Net.Sockets.ProtocolType.Tcp);
-                        await socket.ConnectAsync(context.DnsEndPoint.Host,
-                            context.DnsEndPoint.Port, ct);
-                        return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
-                    }
-                };
+                // Use ServerSentEvents transport — WebSockets fail under macOS launchd
+                // due to socket-level "No route to host" errors that don't affect HTTP
+                options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.ServerSentEvents;
             })
             .WithAutomaticReconnect(new RetryPolicy())
             .Build();

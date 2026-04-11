@@ -34,6 +34,8 @@
         <string>Production</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>DOTNET_SYSTEM_NET_DISABLEIPV6</key>
+        <string>1</string>
     </dict>
 
     <!-- Logging -->
