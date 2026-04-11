@@ -1,0 +1,187 @@
+@page "/logs"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@using RunnerRunner.Core.Hub
+@using RunnerRunner.Server.Hubs
+@using Microsoft.AspNetCore.SignalR
+@inject IDocumentStore Store
+@inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@implements IDisposable
+
+<PageTitle>Logs - RunnerRunner</PageTitle>
+
+<h1><i class="bi bi-terminal-fill me-2"></i>Logs</h1>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <label class="form-label">Source</label>
+        <select class="form-select" @bind="selectedSource" @bind:after="OnSourceChanged">
+            <option value="server">Server (docker compose logs)</option>
+            @foreach (var h in hosts)
+            {
+                <option value="agent:@h.Name">Agent: @h.Name (@h.Platform)</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-2">
+        <label class="form-label">Lines</label>
+        <select class="form-select" @bind="tailLines">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+        </select>
+    </div>
+    <div class="col-md-2 d-flex align-items-end">
+        <button class="btn btn-primary" @onclick="FetchLogs">
+            <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+        </button>
+    </div>
+    <div class="col-md-4 d-flex align-items-end justify-content-end">
+        @if (isLoading)
+        {
+            <span class="text-muted"><i class="bi bi-hourglass-split"></i> Loading...</span>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <pre class="log-output" style="
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            padding: 1rem;
+            margin: 0;
+            max-height: 70vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border-radius: var(--radius-lg);
+        ">@(string.IsNullOrEmpty(logContent) ? "Select a source and click Refresh to view logs." : logContent)</pre>
+    </div>
+</div>
+
+@code {
+    private List<Host> hosts = [];
+    private string selectedSource = "server";
+    private int tailLines = 100;
+    private string logContent = "";
+    private bool isLoading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        hosts = (await Store.Query<Host>().ToList()).ToList();
+    }
+
+    private async Task OnSourceChanged()
+    {
+        logContent = "";
+        await FetchLogs();
+    }
+
+    private async Task FetchLogs()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            if (selectedSource == "server")
+            {
+                logContent = await GetServerLogsAsync();
+            }
+            else if (selectedSource.StartsWith("agent:"))
+            {
+                var hostName = selectedSource["agent:".Length..];
+                logContent = await GetAgentLogsAsync(hostName);
+            }
+        }
+        catch (Exception ex)
+        {
+            logContent = $"Error fetching logs: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task<string> GetServerLogsAsync()
+    {
+        // Server logs come from the current process — read from the logging pipeline
+        // For Docker deployments, users can use `docker compose logs` directly
+        // Here we show recent orchestration activity from the audit/log store
+        var lines = new List<string>();
+        lines.Add($"=== RunnerRunner Server Logs (last activity) ===");
+        lines.Add($"Timestamp: {DateTime.UtcNow:u}");
+        lines.Add("");
+
+        var connectedAgents = AgentHub.GetConnectedAgents();
+        lines.Add($"Connected agents: {connectedAgents.Count}");
+        foreach (var agent in connectedAgents.Values)
+        {
+            var lastHb = agent.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
+            var runners = agent.LastMetrics?.RunningInstanceCount ?? 0;
+            lines.Add($"  {agent.AgentInfo.Name} ({agent.AgentInfo.Platform} {agent.AgentInfo.Architecture}) - heartbeat: {lastHb}, runners: {runners}");
+        }
+        lines.Add("");
+        lines.Add("For full server container logs:");
+        lines.Add("  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs server --tail 100'");
+
+        return Task.FromResult(string.Join("\n", lines));
+    }
+
+    private async Task<string> GetAgentLogsAsync(string hostName)
+    {
+        var host = hosts.FirstOrDefault(h => h.Name == hostName);
+        if (host == null) return "Host not found.";
+
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == hostName);
+
+        if (agent == null)
+            return $"Agent '{hostName}' is not connected.\n\nCheck the agent logs manually:\n  ssh <user>@<host> 'tail -{tailLines} /tmp/runnerrunner-agent.log'";
+
+        var lines = new List<string>();
+        lines.Add($"=== Agent: {hostName} ({host.Platform} {host.Architecture}) ===");
+        lines.Add($"Status: {host.AgentStatus}");
+        lines.Add($"Last heartbeat: {host.LastHeartbeat?.ToString("u") ?? "never"}");
+        lines.Add($"Capabilities: {string.Join(", ", host.Capabilities)}");
+        lines.Add("");
+
+        // Show runner instances on this host
+        var instances = (await Store.Query<RunnerInstance>().ToList())
+            .Where(i => i.HostId == host.Id).ToList();
+
+        if (instances.Count > 0)
+        {
+            lines.Add($"Runner instances: {instances.Count}");
+            foreach (var inst in instances.OrderByDescending(i => i.StartedAt ?? i.CreatedAt))
+            {
+                lines.Add($"  {inst.RunnerName} - {inst.Status} (started: {inst.StartedAt?.ToString("HH:mm:ss") ?? "—"}, container: {inst.ContainerId?[..Math.Min(12, inst.ContainerId?.Length ?? 0)] ?? "—"})");
+                if (inst.ErrorMessage != null)
+                    lines.Add($"    Error: {inst.ErrorMessage}");
+            }
+        }
+        else
+        {
+            lines.Add("No runner instances on this host.");
+        }
+
+        lines.Add("");
+        lines.Add("For full agent logs:");
+        if (host.Platform == HostPlatform.Linux)
+            lines.Add("  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs agent --tail 100'");
+        else
+            lines.Add($"  ssh <user>@{hostName} 'tail -{tailLines} /tmp/runnerrunner-agent.log'");
+
+        return string.Join("\n", lines);
+    }
+
+    public void Dispose() { }
+}

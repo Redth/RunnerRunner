@@ -172,7 +172,7 @@ remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
 
 step "Starting services..."
 remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
-    "cd ${LINUX_DEPLOY_DIR} && docker compose up -d --remove-orphans"
+    "cd ${LINUX_DEPLOY_DIR} && docker compose up -d --force-recreate --remove-orphans"
 
 success "Linux stack deployed: http://${LINUX_HOST}:${SERVER_PORT}"
 
