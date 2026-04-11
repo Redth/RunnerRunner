@@ -104,6 +104,10 @@ public class OrchestrationEngine : BackgroundService
             var currentCount = runningForAssignment.Count;
             var desiredCount = assignment.DesiredCount;
 
+            _logger.LogInformation("Assignment {Profile} on {Host}: desired={Desired}, current={Current} ({Statuses})",
+                profile.Name, host.Name, desiredCount, currentCount,
+                string.Join(", ", runningForAssignment.Select(i => $"{i.RunnerName}:{i.Status}")));
+
             if (currentCount < desiredCount)
             {
                 // Need to scale up
