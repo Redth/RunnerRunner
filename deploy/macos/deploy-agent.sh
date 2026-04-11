@@ -33,9 +33,9 @@ log() { echo "▸ $*"; }
 # SSH wrapper: uses sshpass if SSHPASS is set
 _ssh() {
     if [[ -n "${SSHPASS}" ]]; then
-        sshpass -p "${SSHPASS}" ssh -o StrictHostKeyChecking=no "${SSH_USER}@${HOST}" "$@"
+        sshpass -p "${SSHPASS}" ssh -t -o StrictHostKeyChecking=no "${SSH_USER}@${HOST}" "$@"
     else
-        ssh "${SSH_USER}@${HOST}" "$@"
+        ssh -t "${SSH_USER}@${HOST}" "$@"
     fi
 }
 _scp() {

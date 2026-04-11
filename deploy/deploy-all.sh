@@ -182,15 +182,13 @@ if [[ ! -x "${MACOS_DEPLOY}" ]]; then
 else
     # Ensure agent.env exists with the correct server URL
     MACOS_ENV="${SCRIPT_DIR}/macos/agent.env"
-    if [[ ! -f "${MACOS_ENV}" ]]; then
-        step "Creating agent.env with Linux host server URL..."
-        cat > "${MACOS_ENV}" <<ENV_EOF
-RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:4779
+    step "Writing agent.env with server URL http://${LINUX_HOST}:${SERVER_PORT}..."
+    cat > "${MACOS_ENV}" <<ENV_EOF
+RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:${SERVER_PORT}
 RUNNERRUNNER_AGENT_NAME=mac-agent-${MACOS_HOST}
 RUNNERRUNNER_AGENT_TOKEN=
 RUNNERRUNNER_AGENT_ID=
 ENV_EOF
-    fi
 
     # Pass password through to the macOS deploy script
     export SSH_USER="${MACOS_USER}"
