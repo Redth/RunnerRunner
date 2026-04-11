@@ -35,7 +35,7 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             _logger.LogInformation("Agent disconnected: {AgentName} ({AgentId})", agent.AgentInfo.Name, agentId);
 
             // Mark host as offline
-            var hosts = (await _store.Query<Host>().Where(h => h.Name == agent.AgentInfo.Name).ToList()).ToList();
+            var hosts = (await _store.Query<Host>().ToList()).Where(h => h.Name == agent.AgentInfo.Name).ToList();
             foreach (var host in hosts)
             {
                 host.AgentStatus = AgentStatus.Offline;
@@ -62,7 +62,7 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             agentInfo.Name, agentInfo.AgentId, agentInfo.Platform, agentInfo.Architecture);
 
         // Upsert host record in the document store
-        var existingHosts = (await _store.Query<Host>().Where(h => h.Name == agentInfo.Name).ToList()).ToList();
+        var existingHosts = (await _store.Query<Host>().ToList()).Where(h => h.Name == agentInfo.Name).ToList();
         if (existingHosts.Count != 0)
         {
             var host = existingHosts[0];
@@ -153,7 +153,7 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             agent.LastMetrics = evt;
 
             // Update host heartbeat in DB
-            var hosts = (await _store.Query<Host>().Where(h => h.Name == agent.AgentInfo.Name).ToList()).ToList();
+            var hosts = (await _store.Query<Host>().ToList()).Where(h => h.Name == agent.AgentInfo.Name).ToList();
             foreach (var host in hosts)
             {
                 host.LastHeartbeat = DateTime.UtcNow;

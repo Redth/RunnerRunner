@@ -50,17 +50,19 @@ public class GiteaActionsProvider : IRunnerProviderPlugin
         try
         {
             var client = _httpFactory.CreateClient();
+            // Use Gitea API (not web page) for releases
             using var request = new HttpRequestMessage(HttpMethod.Get,
-                "https://gitea.com/gitea/act_runner/releases?type=json&limit=10");
+                "https://gitea.com/api/v1/repos/gitea/act_runner/releases?limit=10");
             request.Headers.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             var response = await client.SendAsync(request, ct);
 
             if (!response.IsSuccessStatusCode)
             {
-                // Fall back to GitHub mirror
+                // Fall back to GitHub mirror of act_runner
                 using var ghRequest = new HttpRequestMessage(HttpMethod.Get,
-                    "https://api.github.com/repos/nektos/act/releases?per_page=10");
+                    "https://api.github.com/repos/gitea/act_runner/releases?per_page=10");
                 ghRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
                 ghRequest.Headers.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
                 response = await client.SendAsync(ghRequest, ct);

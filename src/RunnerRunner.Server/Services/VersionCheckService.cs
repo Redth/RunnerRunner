@@ -53,9 +53,8 @@ public class VersionCheckService : BackgroundService
             try
             {
                 var versions = await provider.GetAvailableVersionsAsync(ct);
-                var existing = (await store.Query<RunnerAgentVersion>()
-                    .Where(v => v.Provider == provider.Provider)
-                    .ToList()).ToList();
+                var allExisting = (await store.Query<RunnerAgentVersion>().ToList()).ToList();
+                var existing = allExisting.Where(v => v.Provider == provider.Provider).ToList();
 
                 var existingVersionStrings = existing.Select(v => v.Version).ToHashSet();
 
