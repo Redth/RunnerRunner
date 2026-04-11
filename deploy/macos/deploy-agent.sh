@@ -21,8 +21,9 @@ SSH_USER="${SSH_USER:-root}"
 SSHPASS="${SSHPASS:-}"
 INSTALL_DIR="/opt/runnerrunner"
 PLIST_NAME="com.runnerrunner.agent.plist"
-PLIST_DEST="/Library/LaunchAgents/${PLIST_NAME}"
+PLIST_DEST="~/Library/LaunchAgents/${PLIST_NAME}"
 OLD_PLIST_DEST="/Library/LaunchDaemons/${PLIST_NAME}"
+OLD_AGENT_PLIST="/Library/LaunchAgents/${PLIST_NAME}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 AGENT_PROJECT="${PROJECT_ROOT}/src/RunnerRunner.Agent/RunnerRunner.Agent.csproj"
@@ -97,10 +98,10 @@ _ssh "mkdir -p ${INSTALL_DIR}"
 
 # --- Step 4: Stop existing service if running ---
 log "Stopping existing agent service (if any)..."
-_ssh "sudo launchctl bootout system/${PLIST_NAME%.plist} 2>/dev/null; launchctl bootout gui/\$(id -u)/${PLIST_NAME%.plist} 2>/dev/null; true"
+_ssh "launchctl bootout gui/\$(id -u)/${PLIST_NAME%.plist} 2>/dev/null; true"
 
-# Clean up old LaunchDaemon plist if it exists
-_ssh "sudo rm -f ${OLD_PLIST_DEST} 2>/dev/null; true"
+# Clean up old plists from previous install locations
+_ssh "sudo rm -f ${OLD_PLIST_DEST} ${OLD_AGENT_PLIST} 2>/dev/null; true"
 
 # --- Step 5: Copy files to remote host ---
 log "Copying agent binary and config to ${HOST}:${INSTALL_DIR}..."
@@ -114,11 +115,11 @@ log "Setting up agent binary..."
 _ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent"
 
 log "Installing LaunchAgent plist..."
-_ssh "sudo mv /tmp/${PLIST_NAME} ${PLIST_DEST} && sudo chown root:wheel ${PLIST_DEST} && sudo chmod 644 ${PLIST_DEST}"
+_ssh "mkdir -p ~/Library/LaunchAgents && cp /tmp/${PLIST_NAME} ~/Library/LaunchAgents/${PLIST_NAME}"
 
 # --- Step 7: Load and start the service in user domain ---
 log "Loading LaunchAgent service..."
-_ssh "launchctl bootstrap gui/\$(id -u) ${PLIST_DEST} 2>/dev/null || launchctl kickstart -k gui/\$(id -u)/${PLIST_NAME%.plist} 2>/dev/null || true"
+_ssh "launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/${PLIST_NAME} 2>/dev/null || launchctl kickstart -k gui/\$(id -u)/${PLIST_NAME%.plist} 2>/dev/null || true"
 
 log ""
 log "✅ RunnerRunner Agent deployed to ${HOST}"
@@ -127,7 +128,7 @@ log "Service management:"
 log "  Status:   ssh ${SSH_USER}@${HOST} 'launchctl print gui/\$(id -u)/com.runnerrunner.agent'"
 log "  Logs:     ssh ${SSH_USER}@${HOST} 'tail -f /tmp/runnerrunner-agent.log'"
 log "  Stop:     ssh ${SSH_USER}@${HOST} 'launchctl bootout gui/\$(id -u)/com.runnerrunner.agent'"
-log "  Start:    ssh ${SSH_USER}@${HOST} 'launchctl bootstrap gui/\$(id -u) ${PLIST_DEST}'"
+log "  Start:    ssh ${SSH_USER}@${HOST} 'launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/${PLIST_NAME}'"
 log "  Restart:  ssh ${SSH_USER}@${HOST} 'launchctl kickstart -k gui/\$(id -u)/com.runnerrunner.agent'"
 log ""
 log "Re-deploy after code changes:"
