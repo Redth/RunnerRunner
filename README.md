@@ -198,19 +198,48 @@ docker run -d \
   ghcr.io/your-org/runnerrunner-agent:latest
 ```
 
-### macOS (Native Binary)
+### macOS (Native Binary via Deploy Script — Recommended)
 
-Since macOS agents need access to `tart` CLI and native processes:
+The deploy script publishes, copies, and installs the agent as a launchd service in one command:
 
 ```bash
-cd src/RunnerRunner.Agent
-dotnet publish -c Release -r osx-arm64 --self-contained -o ./publish
+# 1. Configure (one-time): copy and edit the env file
+cp deploy/macos/agent.env.example deploy/macos/agent.env
+# Edit deploy/macos/agent.env with your server URL, agent name, token
 
-./publish/RunnerRunner.Agent \
-  --RunnerRunner:ServerUrl=https://your-server:8080 \
-  --RunnerRunner:AgentName=mac-mini-01 \
-  --RunnerRunner:AgentToken=your-enrollment-token
+# 2. Deploy to your Mac
+./deploy/macos/deploy-agent.sh 192.168.2.134
+
+# Or with a different SSH user
+SSH_USER=admin ./deploy/macos/deploy-agent.sh 192.168.2.134
 ```
+
+This installs the agent to `/opt/runnerrunner/` and registers it as a launchd system service that:
+- Starts automatically on boot
+- Restarts automatically if it crashes
+- Logs to `/var/log/runnerrunner-agent.log`
+
+**Re-deploy after code changes** — just run the same command again:
+```bash
+./deploy/macos/deploy-agent.sh 192.168.2.134
+```
+
+**Service management on the Mac:**
+```bash
+# Check status
+ssh root@192.168.2.134 'launchctl print system/com.runnerrunner.agent'
+
+# View logs
+ssh root@192.168.2.134 'tail -f /var/log/runnerrunner-agent.log'
+
+# Restart
+ssh root@192.168.2.134 'launchctl kickstart -k system/com.runnerrunner.agent'
+
+# Stop
+ssh root@192.168.2.134 'launchctl bootout system/com.runnerrunner.agent'
+```
+
+> **Prerequisites on the Mac host:** SSH access, and optionally [tart](https://tart.run) (`brew install cirruslabs/cli/tart`) for macOS VM runners.
 
 ### Windows (Docker or Native)
 
