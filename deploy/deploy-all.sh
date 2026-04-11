@@ -9,12 +9,16 @@ set -euo pipefail
 #   2. macOS Agent → Native binary via SSH to macOS host
 #
 # Usage:
-#   ./deploy/deploy-all.sh
+#   ./deploy/deploy-all.sh            # deploy everything
+#   ./deploy/deploy-all.sh linux      # deploy Linux stack only
+#   ./deploy/deploy-all.sh macos      # deploy macOS agent only
 #
 # Configuration:
 #   Copy deploy/.env.example to deploy/.env and fill in passwords.
 #   Or set environment variables directly.
 # ============================================================
+
+DEPLOY_TARGET="${1:-all}"  # all, linux, macos
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -74,6 +78,8 @@ if [[ -n "${LINUX_PASSWORD}" || -n "${MACOS_PASSWORD}" ]]; then
     command -v sshpass >/dev/null || { echo "❌ sshpass not found (brew install hudochenkov/sshpass/sshpass)"; exit 1; }
 fi
 step "All tools available"
+
+if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "linux" ]]; then
 
 # ============================================================
 # PHASE 1: Build container images for Linux stack
@@ -170,6 +176,10 @@ remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
 
 success "Linux stack deployed: http://${LINUX_HOST}:${SERVER_PORT}"
 
+fi # end linux
+
+if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "macos" ]]; then
+
 # ============================================================
 # PHASE 4: Deploy native agent to macOS host
 # ============================================================
@@ -196,6 +206,8 @@ ENV_EOF
     "${MACOS_DEPLOY}" "${MACOS_HOST}"
     success "macOS agent deployed"
 fi
+
+fi # end macos
 
 # ============================================================
 # Summary
