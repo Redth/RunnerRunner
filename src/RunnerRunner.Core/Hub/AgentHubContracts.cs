@@ -11,6 +11,9 @@ public interface IAgentHubClient
     Task StopRunner(StopRunnerCommand command);
     Task SyncDesiredState(SyncDesiredStateCommand command);
     Task PullImage(PullImageCommand command);
+    Task ListImages(ListImagesCommand command);
+    Task DeleteImage(DeleteImageCommand command);
+    Task LoginRegistry(LoginRegistryCommand command);
 }
 
 /// <summary>
@@ -24,6 +27,10 @@ public interface IAgentHubServer
     Task RunnerStopped(RunnerStoppedEvent evt);
     Task RunnerHealthUpdate(RunnerHealthUpdateEvent evt);
     Task Heartbeat(HeartbeatEvent evt);
+    Task ImageListResponse(ImageListEvent evt);
+    Task ImagePullProgress(ImagePullProgressEvent evt);
+    Task ImagePullComplete(ImagePullCompleteEvent evt);
+    Task ImageDeleted(ImageDeletedEvent evt);
 }
 
 // --- Commands (Server → Agent) ---
@@ -64,6 +71,12 @@ public class DesiredRunnerAssignment
 
 public class PullImageCommand
 {
+    public ImageType ImageType { get; set; }
+    public required string ImageName { get; set; }
+    public string Tag { get; set; } = "latest";
+    public string? RegistryUrl { get; set; }
+    public string? Username { get; set; }
+    public string? Password { get; set; }
     public DockerImageConfig? DockerConfig { get; set; }
     public TartImageConfig? TartConfig { get; set; }
 }
@@ -118,4 +131,72 @@ public class HeartbeatEvent
     public double MemoryUsagePercent { get; set; }
     public double DiskUsagePercent { get; set; }
     public int RunningInstanceCount { get; set; }
+}
+
+// --- Image Management Commands (Server → Agent) ---
+
+public class ListImagesCommand
+{
+    public ImageType? FilterType { get; set; }
+}
+
+public class DeleteImageCommand
+{
+    public ImageType ImageType { get; set; }
+    public required string ImageId { get; set; }
+    public required string ImageName { get; set; }
+}
+
+public class LoginRegistryCommand
+{
+    public required string RegistryUrl { get; set; }
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+}
+
+// --- Image Management Events (Agent → Server) ---
+
+public class ImageListEvent
+{
+    public required string HostId { get; set; }
+    public List<AgentImageInfo> Images { get; set; } = [];
+}
+
+public class AgentImageInfo
+{
+    public ImageType ImageType { get; set; }
+    public required string Repository { get; set; }
+    public string Tag { get; set; } = "latest";
+    public string? ImageId { get; set; }
+    public long SizeBytes { get; set; }
+    public DateTime? CreatedAt { get; set; }
+}
+
+public class ImagePullProgressEvent
+{
+    public required string HostId { get; set; }
+    public ImageType ImageType { get; set; }
+    public required string ImageName { get; set; }
+    public double ProgressPercent { get; set; }
+    public long BytesDownloaded { get; set; }
+    public long BytesTotal { get; set; }
+    public string? Status { get; set; }
+}
+
+public class ImagePullCompleteEvent
+{
+    public required string HostId { get; set; }
+    public ImageType ImageType { get; set; }
+    public required string ImageName { get; set; }
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+}
+
+public class ImageDeletedEvent
+{
+    public required string HostId { get; set; }
+    public ImageType ImageType { get; set; }
+    public required string ImageId { get; set; }
+    public bool Success { get; set; }
+    public string? Error { get; set; }
 }

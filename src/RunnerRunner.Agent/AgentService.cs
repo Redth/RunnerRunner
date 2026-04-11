@@ -22,6 +22,7 @@ public class AgentService : BackgroundService
     private readonly IRunnerBackend _dockerBackend;
     private readonly IRunnerBackend _tartBackend;
     private readonly IRunnerBackend _nativeBackend;
+    private readonly ImageManager _imageManager;
 
     private string _agentId = "";
     private string _agentName = "";
@@ -32,6 +33,7 @@ public class AgentService : BackgroundService
         SignalRConnection signalR,
         RunnerLifecycleManager lifecycleManager,
         HealthReporter healthReporter,
+        ImageManager imageManager,
         ILoggerFactory loggerFactory)
     {
         _logger = logger;
@@ -39,6 +41,7 @@ public class AgentService : BackgroundService
         _signalR = signalR;
         _lifecycleManager = lifecycleManager;
         _healthReporter = healthReporter;
+        _imageManager = imageManager;
 
         _dockerBackend = new DockerBackend(loggerFactory.CreateLogger<DockerBackend>());
         _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>());
@@ -55,6 +58,10 @@ public class AgentService : BackgroundService
         // Wire up command handlers
         _signalR.OnDeployRunner += HandleDeployRunner;
         _signalR.OnStopRunner += HandleStopRunner;
+        _signalR.OnListImages += HandleListImages;
+        _signalR.OnPullImage += HandlePullImage;
+        _signalR.OnDeleteImage += HandleDeleteImage;
+        _signalR.OnLoginRegistry += HandleLoginRegistry;
 
         // Connect to server
         await _signalR.ConnectAsync(stoppingToken);
@@ -172,6 +179,130 @@ public class AgentService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to stop runner {InstanceId}", command.InstanceId);
+        }
+    }
+
+    private async Task HandleListImages(ListImagesCommand command)
+    {
+        _logger.LogInformation("Listing images (filter: {Filter})", command.FilterType);
+        var images = new List<AgentImageInfo>();
+
+        if (command.FilterType is null or ImageType.Docker)
+            images.AddRange(await _imageManager.ListDockerImagesAsync());
+
+        if (command.FilterType is null or ImageType.Tart)
+            images.AddRange(await _imageManager.ListTartImagesAsync());
+
+        await _signalR.SendImageList(new ImageListEvent
+        {
+            HostId = _agentId,
+            Images = images
+        });
+    }
+
+    private async Task HandlePullImage(PullImageCommand command)
+    {
+        _logger.LogInformation("Pulling image {Image}:{Tag} (type: {Type})",
+            command.ImageName, command.Tag, command.ImageType);
+
+        try
+        {
+            // Login to registry if credentials provided
+            if (!string.IsNullOrEmpty(command.Username))
+            {
+                await _imageManager.LoginDockerRegistryAsync(
+                    command.RegistryUrl ?? "", command.Username, command.Password);
+            }
+
+            var fullImage = string.IsNullOrEmpty(command.RegistryUrl)
+                ? $"{command.ImageName}:{command.Tag}"
+                : $"{command.RegistryUrl}/{command.ImageName}:{command.Tag}";
+
+            if (command.ImageType == ImageType.Docker)
+            {
+                await _imageManager.PullDockerImageAsync(command.ImageName, command.Tag,
+                    async progress =>
+                    {
+                        progress.HostId = _agentId;
+                        await _signalR.SendImagePullProgress(progress);
+                    });
+            }
+            else if (command.ImageType == ImageType.Tart)
+            {
+                await _imageManager.PullTartImageAsync(fullImage,
+                    async progress =>
+                    {
+                        progress.HostId = _agentId;
+                        await _signalR.SendImagePullProgress(progress);
+                    });
+            }
+
+            await _signalR.SendImagePullComplete(new ImagePullCompleteEvent
+            {
+                HostId = _agentId,
+                ImageType = command.ImageType,
+                ImageName = fullImage,
+                Success = true
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to pull image {Image}", command.ImageName);
+            await _signalR.SendImagePullComplete(new ImagePullCompleteEvent
+            {
+                HostId = _agentId,
+                ImageType = command.ImageType,
+                ImageName = command.ImageName,
+                Success = false,
+                Error = ex.Message
+            });
+        }
+    }
+
+    private async Task HandleDeleteImage(DeleteImageCommand command)
+    {
+        _logger.LogInformation("Deleting image {Image} (type: {Type})", command.ImageName, command.ImageType);
+
+        try
+        {
+            if (command.ImageType == ImageType.Docker)
+                await _imageManager.DeleteDockerImageAsync(command.ImageId);
+            else if (command.ImageType == ImageType.Tart)
+                await _imageManager.DeleteTartImageAsync(command.ImageName);
+
+            await _signalR.SendImageDeleted(new ImageDeletedEvent
+            {
+                HostId = _agentId,
+                ImageType = command.ImageType,
+                ImageId = command.ImageId,
+                Success = true
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete image {Image}", command.ImageName);
+            await _signalR.SendImageDeleted(new ImageDeletedEvent
+            {
+                HostId = _agentId,
+                ImageType = command.ImageType,
+                ImageId = command.ImageId,
+                Success = false,
+                Error = ex.Message
+            });
+        }
+    }
+
+    private async Task HandleLoginRegistry(LoginRegistryCommand command)
+    {
+        try
+        {
+            await _imageManager.LoginDockerRegistryAsync(
+                command.RegistryUrl, command.Username, command.Password);
+            _logger.LogInformation("Logged in to registry {Registry}", command.RegistryUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to login to registry {Registry}", command.RegistryUrl);
         }
     }
 

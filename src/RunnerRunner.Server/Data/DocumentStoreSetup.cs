@@ -23,6 +23,8 @@ public static class DocumentStoreSetup
             opts.MapTypeToTable<EnvironmentVariableSet>("env_var_sets");
             opts.MapTypeToTable<RunnerAgentVersion>("runner_agent_versions");
             opts.MapTypeToTable<ProviderCredential>("provider_credentials");
+            opts.MapTypeToTable<RegistryCredential>("registry_credentials");
+            opts.MapTypeToTable<AgentImage>("agent_images");
             opts.MapTypeToTable<AuditLogEntry>("audit_log");
         });
 

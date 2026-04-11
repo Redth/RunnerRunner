@@ -25,6 +25,8 @@ public static class DatabaseInitializer
         await store.Clear<EnvironmentVariableSet>();
         await store.Clear<RunnerAgentVersion>();
         await store.Clear<ProviderCredential>();
+        await store.Clear<RegistryCredential>();
+        await store.Clear<AgentImage>();
         await store.Clear<AuditLogEntry>();
     }
 }

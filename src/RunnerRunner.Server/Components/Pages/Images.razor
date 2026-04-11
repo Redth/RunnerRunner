@@ -1,0 +1,312 @@
+@page "/images"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@using RunnerRunner.Core.Hub
+@using RunnerRunner.Server.Hubs
+@using Microsoft.AspNetCore.SignalR
+@inject IDocumentStore Store
+@inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@implements IDisposable
+
+<PageTitle>Images - RunnerRunner</PageTitle>
+
+<h1><i class="bi bi-box-seam-fill me-2"></i>Images</h1>
+<p>Manage Docker and Tart images across your connected agents.</p>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <label class="form-label">Host</label>
+        <select class="form-select" @bind="selectedHostId" @bind:after="OnHostChanged">
+            <option value="">— Select a host —</option>
+            @foreach (var h in hosts)
+            {
+                <option value="@h.Id">@h.Name (@h.Platform)</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-3 d-flex align-items-end gap-2">
+        @if (!string.IsNullOrEmpty(selectedHostId))
+        {
+            <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+            <button class="btn btn-primary btn-sm" @onclick="() => showPullForm = true">
+                <i class="bi bi-cloud-arrow-down"></i> Pull Image
+            </button>
+        }
+    </div>
+</div>
+
+@* Pull progress indicator *@
+@if (pullInProgress)
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h6><i class="bi bi-cloud-arrow-down me-1"></i> Pulling @pullImageName</h6>
+            <div class="progress" style="height: 24px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                     role="progressbar" style="width: @pullProgress%"
+                     aria-valuenow="@pullProgress" aria-valuemin="0" aria-valuemax="100">
+                    @pullProgress.ToString("F0")%
+                </div>
+            </div>
+            <small class="text-muted mt-1 d-block">@pullStatus</small>
+        </div>
+    </div>
+}
+
+@* Pull form *@
+@if (showPullForm)
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>Pull Image</h5>
+            <div class="row">
+                <div class="col-md-2 mb-3">
+                    <label class="form-label">Type</label>
+                    <select class="form-select" @bind="pullType">
+                        <option value="@ImageType.Docker">Docker</option>
+                        <option value="@ImageType.Tart">Tart</option>
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Registry</label>
+                    <select class="form-select" @bind="pullRegistryId">
+                        <option value="">(default / no auth)</option>
+                        @foreach (var r in registries)
+                        {
+                            <option value="@r.Id">@r.Name (@r.RegistryUrl)</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Image</label>
+                    <input class="form-control" @bind="pullImage" placeholder="org/image-name" />
+                </div>
+                <div class="col-md-2 mb-3">
+                    <label class="form-label">Tag</label>
+                    <input class="form-control" @bind="pullTag" placeholder="latest" />
+                </div>
+                <div class="col-md-1 d-flex align-items-end mb-3">
+                    <button class="btn btn-success" @onclick="StartPull"><i class="bi bi-download"></i></button>
+                </div>
+            </div>
+            <button class="btn btn-secondary btn-sm" @onclick="() => showPullForm = false">Cancel</button>
+        </div>
+    </div>
+}
+
+@* Image list *@
+@if (!string.IsNullOrEmpty(selectedHostId))
+{
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "docker" ? "active" : "")" @onclick='() => activeTab = "docker"'>
+                <i class="bi bi-box-fill me-1"></i> Docker (@dockerImages.Count)
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(activeTab == "tart" ? "active" : "")" @onclick='() => activeTab = "tart"'>
+                <i class="bi bi-display me-1"></i> Tart (@tartImages.Count)
+            </button>
+        </li>
+    </ul>
+
+    var displayImages = activeTab == "docker" ? dockerImages : tartImages;
+
+    @if (!displayImages.Any())
+    {
+        <div class="alert alert-secondary">No @activeTab images on this host. Use Pull Image to download one.</div>
+    }
+    else
+    {
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Repository</th>
+                    <th>Tag</th>
+                    <th>Image ID</th>
+                    <th>Size</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var img in displayImages)
+                {
+                    <tr>
+                        <td>@img.Repository</td>
+                        <td><span class="badge bg-secondary">@img.Tag</span></td>
+                        <td><code>@(img.ImageId?[..Math.Min(12, img.ImageId?.Length ?? 0)])</code></td>
+                        <td>@FormatSize(img.SizeBytes)</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                <i class="bi bi-trash3"></i> Delete
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Host> hosts = [];
+    private List<RegistryCredential> registries = [];
+    private string selectedHostId = "";
+    private string activeTab = "docker";
+    private List<AgentImage> dockerImages = [];
+    private List<AgentImage> tartImages = [];
+
+    // Pull form
+    private bool showPullForm;
+    private ImageType pullType = ImageType.Docker;
+    private string pullRegistryId = "";
+    private string pullImage = "";
+    private string pullTag = "latest";
+
+    // Pull progress
+    private bool pullInProgress;
+    private string pullImageName = "";
+    private double pullProgress;
+    private string pullStatus = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        hosts = (await Store.Query<Host>().ToList()).ToList();
+        registries = (await Store.Query<RegistryCredential>().ToList()).ToList();
+
+        AgentHub.OnImagePullProgressReceived += HandlePullProgress;
+        AgentHub.OnImagePullCompleteReceived += HandlePullComplete;
+        AgentHub.OnImageDeletedReceived += HandleImageDeleted;
+    }
+
+    private async Task OnHostChanged()
+    {
+        if (string.IsNullOrEmpty(selectedHostId)) return;
+        await LoadImages();
+        await RequestImageRefresh();
+    }
+
+    private async Task LoadImages()
+    {
+        var all = (await Store.Query<AgentImage>().ToList())
+            .Where(i => i.HostId == selectedHostId).ToList();
+        dockerImages = all.Where(i => i.ImageType == ImageType.Docker).ToList();
+        tartImages = all.Where(i => i.ImageType == ImageType.Tart).ToList();
+    }
+
+    private async Task RefreshImages()
+    {
+        await RequestImageRefresh();
+        await Task.Delay(2000); // Give agent time to respond
+        await LoadImages();
+    }
+
+    private async Task RequestImageRefresh()
+    {
+        var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
+        if (host == null) return;
+
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+        if (agent == null) return;
+
+        await HubContext.Clients.Client(agent.ConnectionId)
+            .ListImages(new ListImagesCommand());
+    }
+
+    private async Task StartPull()
+    {
+        var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
+        if (host == null) return;
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+        if (agent == null) return;
+
+        var registry = registries.FirstOrDefault(r => r.Id == pullRegistryId);
+
+        pullInProgress = true;
+        pullImageName = $"{pullImage}:{pullTag}";
+        pullProgress = 0;
+        pullStatus = "Starting...";
+        showPullForm = false;
+
+        var command = new PullImageCommand
+        {
+            ImageType = pullType,
+            ImageName = pullImage,
+            Tag = pullTag,
+            RegistryUrl = registry?.RegistryUrl,
+            Username = registry?.Username,
+            Password = registry?.Password
+        };
+
+        await HubContext.Clients.Client(agent.ConnectionId).PullImage(command);
+    }
+
+    private async Task DeleteImage(AgentImage img)
+    {
+        var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
+        if (host == null) return;
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+        if (agent == null) return;
+
+        await HubContext.Clients.Client(agent.ConnectionId).DeleteImage(new DeleteImageCommand
+        {
+            ImageType = img.ImageType,
+            ImageId = img.ImageId ?? img.Repository,
+            ImageName = img.Repository
+        });
+
+        // Remove from local cache immediately for responsiveness
+        await Store.Remove<AgentImage>(img.Id);
+        await LoadImages();
+    }
+
+    private void HandlePullProgress(ImagePullProgressEvent evt)
+    {
+        pullProgress = evt.ProgressPercent;
+        pullStatus = evt.Status ?? $"{FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}";
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void HandlePullComplete(ImagePullCompleteEvent evt)
+    {
+        pullInProgress = false;
+        pullStatus = evt.Success ? "Complete!" : $"Failed: {evt.Error}";
+        InvokeAsync(async () =>
+        {
+            await Task.Delay(1000);
+            await LoadImages();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleImageDeleted(ImageDeletedEvent evt)
+    {
+        InvokeAsync(async () =>
+        {
+            await LoadImages();
+            StateHasChanged();
+        });
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes <= 0) return "—";
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    public void Dispose()
+    {
+        AgentHub.OnImagePullProgressReceived -= HandlePullProgress;
+        AgentHub.OnImagePullCompleteReceived -= HandlePullComplete;
+        AgentHub.OnImageDeletedReceived -= HandleImageDeleted;
+    }
+}

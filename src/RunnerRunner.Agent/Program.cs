@@ -9,6 +9,7 @@ builder.AddServiceDefaults();
 builder.Services.AddSingleton<SignalRConnection>();
 builder.Services.AddSingleton<RunnerLifecycleManager>();
 builder.Services.AddSingleton<HealthReporter>();
+builder.Services.AddSingleton<ImageManager>();
 
 builder.Services.AddHostedService<AgentService>();
 

@@ -18,6 +18,9 @@ public class SignalRConnection : IAsyncDisposable
     public event Func<StopRunnerCommand, Task>? OnStopRunner;
     public event Func<SyncDesiredStateCommand, Task>? OnSyncDesiredState;
     public event Func<PullImageCommand, Task>? OnPullImage;
+    public event Func<ListImagesCommand, Task>? OnListImages;
+    public event Func<DeleteImageCommand, Task>? OnDeleteImage;
+    public event Func<LoginRegistryCommand, Task>? OnLoginRegistry;
 
     public bool IsConnected => _connection?.State == HubConnectionState.Connected;
 
@@ -65,6 +68,21 @@ public class SignalRConnection : IAsyncDisposable
         _connection.On<PullImageCommand>("PullImage", async cmd =>
         {
             if (OnPullImage != null) await OnPullImage(cmd);
+        });
+
+        _connection.On<ListImagesCommand>("ListImages", async cmd =>
+        {
+            if (OnListImages != null) await OnListImages(cmd);
+        });
+
+        _connection.On<DeleteImageCommand>("DeleteImage", async cmd =>
+        {
+            if (OnDeleteImage != null) await OnDeleteImage(cmd);
+        });
+
+        _connection.On<LoginRegistryCommand>("LoginRegistry", async cmd =>
+        {
+            if (OnLoginRegistry != null) await OnLoginRegistry(cmd);
         });
 
         _connection.Reconnecting += error =>
@@ -129,6 +147,30 @@ public class SignalRConnection : IAsyncDisposable
     {
         if (_connection is not null)
             await _connection.InvokeAsync("RunnerHealthUpdate", evt);
+    }
+
+    public async Task SendImageList(ImageListEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("ImageListResponse", evt);
+    }
+
+    public async Task SendImagePullProgress(ImagePullProgressEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("ImagePullProgress", evt);
+    }
+
+    public async Task SendImagePullComplete(ImagePullCompleteEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("ImagePullComplete", evt);
+    }
+
+    public async Task SendImageDeleted(ImageDeletedEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("ImageDeleted", evt);
     }
 
     public async ValueTask DisposeAsync()

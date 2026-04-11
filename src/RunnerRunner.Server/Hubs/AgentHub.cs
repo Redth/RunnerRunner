@@ -152,7 +152,6 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             agent.LastHeartbeat = DateTime.UtcNow;
             agent.LastMetrics = evt;
 
-            // Update host heartbeat in DB
             var hosts = (await _store.Query<Host>().ToList()).Where(h => h.Name == agent.AgentInfo.Name).ToList();
             foreach (var host in hosts)
             {
@@ -161,6 +160,73 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             }
         }
     }
+
+    public async Task ImageListResponse(ImageListEvent evt)
+    {
+        _logger.LogInformation("Received image list from agent {HostId}: {Count} images", evt.HostId, evt.Images.Count);
+
+        // Find host by agent ID
+        var agent = ConnectedAgents.Values.FirstOrDefault(a => a.AgentInfo.AgentId == evt.HostId);
+        var hostName = agent?.AgentInfo.Name;
+        var host = hostName != null
+            ? (await _store.Query<Host>().ToList()).FirstOrDefault(h => h.Name == hostName)
+            : null;
+        var hostId = host?.Id ?? evt.HostId;
+
+        // Clear old cached images for this host and replace
+        var oldImages = (await _store.Query<AgentImage>().ToList()).Where(i => i.HostId == hostId).ToList();
+        foreach (var old in oldImages)
+            await _store.Remove<AgentImage>(old.Id);
+
+        foreach (var img in evt.Images)
+        {
+            await _store.Insert(new AgentImage
+            {
+                HostId = hostId,
+                ImageType = img.ImageType,
+                Repository = img.Repository,
+                Tag = img.Tag,
+                ImageId = img.ImageId,
+                SizeBytes = img.SizeBytes,
+                ImageCreatedAt = img.CreatedAt,
+                LastReportedAt = DateTime.UtcNow
+            });
+        }
+    }
+
+    public Task ImagePullProgress(ImagePullProgressEvent evt)
+    {
+        _logger.LogDebug("Pull progress {Image}: {Percent:F1}%", evt.ImageName, evt.ProgressPercent);
+        // Broadcast to all UI clients via a static event
+        OnImagePullProgressReceived?.Invoke(evt);
+        return Task.CompletedTask;
+    }
+
+    public async Task ImagePullComplete(ImagePullCompleteEvent evt)
+    {
+        _logger.LogInformation("Pull complete {Image}: {Success}", evt.ImageName, evt.Success);
+        OnImagePullCompleteReceived?.Invoke(evt);
+
+        // Refresh image list from the agent that just finished pulling
+        var agent = ConnectedAgents.Values.FirstOrDefault(a => a.AgentInfo.AgentId == evt.HostId);
+        if (agent != null)
+        {
+            // Ask agent to re-report its image list
+            // (handled via the hub context in the calling code)
+        }
+    }
+
+    public Task ImageDeleted(ImageDeletedEvent evt)
+    {
+        _logger.LogInformation("Image deleted {ImageId}: {Success}", evt.ImageId, evt.Success);
+        OnImageDeletedReceived?.Invoke(evt);
+        return Task.CompletedTask;
+    }
+
+    // Static events for UI components to subscribe to
+    public static event Action<ImagePullProgressEvent>? OnImagePullProgressReceived;
+    public static event Action<ImagePullCompleteEvent>? OnImagePullCompleteReceived;
+    public static event Action<ImageDeletedEvent>? OnImageDeletedReceived;
 
     // Static accessors for the orchestration engine
     public static IReadOnlyDictionary<string, ConnectedAgent> GetConnectedAgents() => ConnectedAgents;
