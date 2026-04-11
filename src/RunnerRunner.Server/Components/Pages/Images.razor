@@ -100,55 +100,114 @@
 @* Image list *@
 @if (!string.IsNullOrEmpty(selectedHostId))
 {
-    <ul class="nav nav-tabs mb-3">
+    <ul class="nav nav-tabs mb-0">
         <li class="nav-item">
-            <button class="nav-link @(activeTab == "docker" ? "active" : "")" @onclick='() => activeTab = "docker"'>
+            <button class="nav-link @(activeTab == "docker" ? "active" : "")" @onclick="SwitchToDocker">
                 <i class="bi bi-box-fill me-1"></i> Docker (@dockerImages.Count)
             </button>
         </li>
         <li class="nav-item">
-            <button class="nav-link @(activeTab == "tart" ? "active" : "")" @onclick='() => activeTab = "tart"'>
+            <button class="nav-link @(activeTab == "tart" ? "active" : "")" @onclick="SwitchToTart">
                 <i class="bi bi-display me-1"></i> Tart (@tartImages.Count)
             </button>
         </li>
     </ul>
 
-    var displayImages = activeTab == "docker" ? dockerImages : tartImages;
+    <div class="border border-top-0 rounded-bottom p-3 mb-3">
+        <div class="row mb-2">
+            <div class="col-md-4">
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" placeholder="Search images…" @bind="searchText" @bind:event="oninput" />
+                    @if (!string.IsNullOrEmpty(searchText))
+                    {
+                        <button class="btn btn-outline-secondary" @onclick="() => searchText = string.Empty">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
 
-    @if (!displayImages.Any())
-    {
-        <div class="alert alert-secondary">No @activeTab images on this host. Use Pull Image to download one.</div>
-    }
-    else
-    {
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>Repository</th>
-                    <th>Tag</th>
-                    <th>Image ID</th>
-                    <th>Size</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var img in displayImages)
+        @{ var displayImages = GetFilteredSortedImages(); }
+
+        @if (!displayImages.Any())
+        {
+            <div class="alert alert-secondary mb-0">
+                @if (!string.IsNullOrEmpty(searchText))
                 {
-                    <tr>
-                        <td>@img.Repository</td>
-                        <td><span class="badge bg-secondary">@img.Tag</span></td>
-                        <td><code>@(img.ImageId?[..Math.Min(12, img.ImageId?.Length ?? 0)])</code></td>
-                        <td>@FormatSize(img.SizeBytes)</td>
-                        <td>
-                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
-                                <i class="bi bi-trash3"></i> Delete
-                            </button>
-                        </td>
-                    </tr>
+                    <text>No @activeTab images matching "<strong>@searchText</strong>".</text>
                 }
-            </tbody>
-        </table>
-    }
+                else
+                {
+                    <text>No @activeTab images on this host. Use Pull Image to download one.</text>
+                }
+            </div>
+        }
+        else
+        {
+            @if (activeTab == "docker")
+            {
+                <table class="table table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th role="button" @onclick='() => ToggleSort("Repository")'>Repository @SortIndicator("Repository")</th>
+                            <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
+                            <th>Image ID</th>
+                            <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                            <th role="button" @onclick='() => ToggleSort("Created")'>Created @SortIndicator("Created")</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var img in displayImages)
+                        {
+                            <tr>
+                                <td>@img.Repository</td>
+                                <td><span class="badge bg-secondary">@img.Tag</span></td>
+                                <td><code>@(img.ImageId?[..Math.Min(12, img.ImageId?.Length ?? 0)])</code></td>
+                                <td>@FormatSize(img.SizeBytes)</td>
+                                <td>@FormatDate(img.ImageCreatedAt)</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                        <i class="bi bi-trash3"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <table class="table table-striped mb-0">
+                    <thead>
+                        <tr>
+                            <th role="button" @onclick='() => ToggleSort("Repository")'>Name @SortIndicator("Repository")</th>
+                            <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
+                            <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var img in displayImages)
+                        {
+                            <tr>
+                                <td>@img.Repository</td>
+                                <td><span class="badge bg-secondary">@img.Tag</span></td>
+                                <td>@FormatSize(img.SizeBytes)</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                        <i class="bi bi-trash3"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        }
+    </div>
 }
 
 @code {
@@ -158,6 +217,11 @@
     private string activeTab = "docker";
     private List<AgentImage> dockerImages = [];
     private List<AgentImage> tartImages = [];
+
+    // Search & sort
+    private string searchText = "";
+    private string sortColumn = "";
+    private bool sortAscending = true;
 
     // Pull form
     private bool showPullForm;
@@ -301,6 +365,69 @@
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
         if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
         return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    private static string FormatDate(DateTime? dt) =>
+        dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm") : "—";
+
+    private void SwitchToDocker() => SwitchTab("docker");
+    private void SwitchToTart() => SwitchTab("tart");
+
+    private void SwitchTab(string tab)
+    {
+        activeTab = tab;
+        searchText = "";
+        sortColumn = "";
+        sortAscending = true;
+    }
+
+    private void ToggleSort(string column)
+    {
+        if (sortColumn == column)
+            sortAscending = !sortAscending;
+        else
+        {
+            sortColumn = column;
+            sortAscending = true;
+        }
+    }
+
+    private MarkupString SortIndicator(string column) =>
+        sortColumn != column
+            ? new MarkupString("<span class=\"text-muted\" style=\"opacity:0.3\">▲</span>")
+            : new MarkupString(sortAscending ? "<span>▲</span>" : "<span>▼</span>");
+
+    private List<AgentImage> GetFilteredSortedImages()
+    {
+        var source = activeTab == "docker" ? dockerImages : tartImages;
+        IEnumerable<AgentImage> result = source;
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            var q = searchText.Trim();
+            result = result.Where(i =>
+                (i.Repository?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (i.Tag?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (i.ImageId?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        if (!string.IsNullOrEmpty(sortColumn))
+        {
+            result = (sortColumn, sortAscending) switch
+            {
+                ("Repository", true) => result.OrderBy(i => i.Repository, StringComparer.OrdinalIgnoreCase),
+                ("Repository", false) => result.OrderByDescending(i => i.Repository, StringComparer.OrdinalIgnoreCase),
+                ("Tag", true) => result.OrderBy(i => i.Tag, StringComparer.OrdinalIgnoreCase),
+                ("Tag", false) => result.OrderByDescending(i => i.Tag, StringComparer.OrdinalIgnoreCase),
+                ("Size", true) => result.OrderBy(i => i.SizeBytes),
+                ("Size", false) => result.OrderByDescending(i => i.SizeBytes),
+                ("Created", true) => result.OrderBy(i => i.ImageCreatedAt ?? DateTime.MinValue),
+                ("Created", false) => result.OrderByDescending(i => i.ImageCreatedAt ?? DateTime.MinValue),
+                _ => result
+            };
+        }
+
+        return result.ToList();
     }
 
     public void Dispose()

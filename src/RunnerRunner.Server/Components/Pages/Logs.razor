@@ -9,67 +9,144 @@
 @inject IDocumentStore Store
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
 
-<h1><i class="bi bi-terminal-fill me-2"></i>Logs</h1>
+<h1 class="mb-3"><i class="bi bi-terminal-fill me-2"></i>Logs</h1>
 
-<div class="row mb-3">
-    <div class="col-md-4">
-        <label class="form-label">Source</label>
-        <select class="form-select" @bind="selectedSource" @bind:after="OnSourceChanged">
-            <option value="server">Server (overview)</option>
-            @foreach (var h in hosts)
-            {
-                <option value="agent:@h.Name">Agent: @h.Label (@h.Platform)</option>
-            }
+<div class="d-flex" style="height: calc(100vh - 160px); gap: 1rem;">
+    @* Left sidebar *@
+    <div class="d-flex flex-column" style="width: 260px; min-width: 220px; overflow-y: auto;">
+        @* Server card *@
+        <div class="log-source-card @(selectedSource == "server" ? "active" : "")"
+             @onclick='() => SelectSource("server")'>
+            <div class="d-flex align-items-center">
+                <i class="bi bi-hdd-rack-fill me-2 text-primary"></i>
+                <strong>Server</strong>
+            </div>
+            <small class="text-muted">Overview &amp; status</small>
+        </div>
+
+        @* Agents section *@
+        <div class="sidebar-section-header mt-2">
+            <i class="bi bi-pc-display me-1"></i> Agents
+            <span class="badge bg-secondary ms-auto">@hosts.Count</span>
+        </div>
+        @foreach (var h in hosts)
+        {
+            var src = $"agent:{h.Name}";
+            <div class="log-source-card @(selectedSource == src ? "active" : "")"
+                 @onclick="() => SelectSource(src)">
+                <div class="d-flex align-items-center">
+                    <i class="bi @GetPlatformIcon(h.Platform) me-2"></i>
+                    <span class="text-truncate">@h.Label</span>
+                    <span class="badge ms-auto @GetAgentStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(h.DisplayName))
+                {
+                    <small class="text-muted text-truncate d-block" style="font-size: 0.7rem;">@h.Name</small>
+                }
+            </div>
+        }
+
+        @* Runners section *@
+        @if (runnerInstances.Any())
+        {
+            <div class="sidebar-section-header mt-2">
+                <i class="bi bi-lightning-charge me-1"></i> Runners
+                <span class="badge bg-secondary ms-auto">@runnerInstances.Count</span>
+            </div>
             @foreach (var inst in runnerInstances)
             {
-                <option value="runner:@inst.Id">Runner: @inst.RunnerName (@(hostNames.GetValueOrDefault(inst.HostId, "?")))</option>
+                var src = $"runner:{inst.Id}";
+                <div class="log-source-card @(selectedSource == src ? "active" : "")"
+                     @onclick="() => SelectSource(src)">
+                    <div class="d-flex align-items-center">
+                        <i class="bi bi-lightning-charge me-2"></i>
+                        <span class="text-truncate">@inst.RunnerName</span>
+                        <span class="badge ms-auto @GetRunnerStatusBadge(inst.Status)" style="font-size: 0.65rem;">@inst.Status</span>
+                    </div>
+                    <small class="text-muted text-truncate d-block" style="font-size: 0.7rem;">@(hostNames.GetValueOrDefault(inst.HostId, "?"))</small>
+                </div>
             }
-        </select>
-    </div>
-    <div class="col-md-2">
-        <label class="form-label">Lines</label>
-        <select class="form-select" @bind="tailLines">
-            <option value="50">50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
-            <option value="500">500</option>
-        </select>
-    </div>
-    <div class="col-md-2 d-flex align-items-end">
-        <button class="btn btn-primary" @onclick="FetchLogs">
-            <i class="bi bi-arrow-clockwise me-1"></i> Refresh
-        </button>
-    </div>
-    <div class="col-md-4 d-flex align-items-end justify-content-end">
-        @if (isLoading)
-        {
-            <span class="text-muted"><i class="bi bi-hourglass-split"></i> Loading...</span>
         }
+    </div>
+
+    @* Main content *@
+    <div class="flex-grow-1 d-flex flex-column" style="min-width: 0;">
+        @* Toolbar *@
+        <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+            <div class="input-group" style="max-width: 250px;">
+                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                <input type="text" class="form-control form-control-sm" placeholder="Search in logs..."
+                       @bind="searchQuery" @bind:event="oninput" @bind:after="DoSearch" />
+            </div>
+            <div class="d-flex align-items-center gap-1">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="SearchPrevious" title="Previous match" disabled="@string.IsNullOrEmpty(searchQuery)">
+                    <i class="bi bi-chevron-up"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="SearchNext" title="Next match" disabled="@string.IsNullOrEmpty(searchQuery)">
+                    <i class="bi bi-chevron-down"></i>
+                </button>
+            </div>
+            <select class="form-select form-select-sm" style="width: auto;" @bind="tailLines">
+                <option value="50">50 lines</option>
+                <option value="100">100 lines</option>
+                <option value="200">200 lines</option>
+                <option value="500">500 lines</option>
+            </select>
+            <button class="btn btn-sm btn-primary" @onclick="FetchLogs" disabled="@isLoading">
+                <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+            </button>
+            @if (isLoading)
+            {
+                <span class="spinner-border spinner-border-sm text-primary"></span>
+            }
+            <span class="ms-auto text-muted" style="font-size: 0.75rem;">
+                @if (!string.IsNullOrEmpty(lastFetchTime))
+                {
+                    <i class="bi bi-clock me-1"></i>@lastFetchTime
+                }
+            </span>
+        </div>
+
+        @* Terminal container *@
+        <div class="flex-grow-1 rounded overflow-hidden border" style="min-height: 300px;">
+            <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
+        </div>
     </div>
 </div>
 
-<div class="card">
-    <div class="card-body p-0">
-        <pre class="log-output" style="
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-            font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-            font-size: 0.8rem;
-            line-height: 1.5;
-            padding: 1rem;
-            margin: 0;
-            max-height: 70vh;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            border-radius: var(--radius-lg);
-        ">@(string.IsNullOrEmpty(logContent) ? "Select a source and click Refresh to view logs." : logContent)</pre>
-    </div>
-</div>
+<style>
+    .log-source-card {
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s;
+        border: 1px solid transparent;
+        margin-bottom: 2px;
+    }
+    .log-source-card:hover {
+        background: var(--bg-secondary, #f0f0f0);
+    }
+    .log-source-card.active {
+        background: var(--bg-tertiary, #e8e8e8);
+        border-color: var(--bs-primary);
+        box-shadow: inset 3px 0 0 var(--bs-primary);
+    }
+    .sidebar-section-header {
+        display: flex;
+        align-items: center;
+        padding: 0.35rem 0.75rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted, #6c757d);
+    }
+</style>
 
 @code {
     private List<Host> hosts = [];
@@ -79,6 +156,9 @@
     private int tailLines = 100;
     private string logContent = "";
     private bool isLoading;
+    private bool termInitialized;
+    private string searchQuery = "";
+    private string lastFetchTime = "";
     private TaskCompletionSource<string>? _runnerLogsTcs;
 
     protected override async Task OnInitializedAsync()
@@ -95,15 +175,46 @@
         var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
         var source = query["source"];
         if (!string.IsNullOrEmpty(source))
-        {
             selectedSource = source;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await InitTerminal();
             await FetchLogs();
         }
     }
 
-    private async Task OnSourceChanged()
+    private async Task InitTerminal()
     {
-        logContent = "";
+        try
+        {
+            var isDark = true; // default to dark for terminal
+            termInitialized = await JS.InvokeAsync<bool>("rrTerminal.init", "rr-terminal", new { darkMode = isDark });
+        }
+        catch { termInitialized = false; }
+    }
+
+    private async Task WriteToTerminal(string text)
+    {
+        if (!termInitialized) return;
+        try
+        {
+            await JS.InvokeVoidAsync("rrTerminal.clear", "rr-terminal");
+            // Write line by line for proper rendering
+            foreach (var line in text.Split('\n'))
+            {
+                await JS.InvokeVoidAsync("rrTerminal.writeln", "rr-terminal", line);
+            }
+        }
+        catch { /* JS interop may fail during disposal */ }
+    }
+
+    private async Task SelectSource(string source)
+    {
+        selectedSource = source;
         await FetchLogs();
     }
 
@@ -128,10 +239,14 @@
                 var instanceId = selectedSource["runner:".Length..];
                 logContent = await GetRunnerLogsAsync(instanceId);
             }
+
+            lastFetchTime = DateTime.Now.ToString("HH:mm:ss");
+            await WriteToTerminal(logContent);
         }
         catch (Exception ex)
         {
             logContent = $"Error fetching logs: {ex.Message}";
+            await WriteToTerminal(logContent);
         }
         finally
         {
@@ -140,36 +255,52 @@
         }
     }
 
+    private async Task DoSearch()
+    {
+        if (!termInitialized || string.IsNullOrEmpty(searchQuery)) return;
+        try { await JS.InvokeAsync<bool>("rrTerminal.search", "rr-terminal", searchQuery); }
+        catch { }
+    }
+
+    private async Task SearchNext()
+    {
+        if (!termInitialized || string.IsNullOrEmpty(searchQuery)) return;
+        try { await JS.InvokeAsync<bool>("rrTerminal.search", "rr-terminal", searchQuery); }
+        catch { }
+    }
+
+    private async Task SearchPrevious()
+    {
+        if (!termInitialized || string.IsNullOrEmpty(searchQuery)) return;
+        try { await JS.InvokeAsync<bool>("rrTerminal.searchPrevious", "rr-terminal", searchQuery); }
+        catch { }
+    }
+
     private async Task<string> GetRunnerLogsAsync(string instanceId)
     {
         var instance = runnerInstances.FirstOrDefault(i => i.Id == instanceId);
-        if (instance == null) return "Runner instance not found.";
+        if (instance == null) return "\x1b[31mRunner instance not found.\x1b[0m";
 
         var host = hosts.FirstOrDefault(h => h.Id == instance.HostId);
-        if (host == null) return "Host not found.";
+        if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
-        // Find connected agent for this host
         var agent = AgentHub.GetConnectedAgents().Values
             .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
 
         if (agent == null)
-            return $"Agent for host '{host.Name}' is not connected.";
+            return $"\x1b[33mAgent for host '{host.Label}' is not connected.\x1b[0m";
 
-        // Use ContainerId or RunnerName as the handle
         var handle = instance.ContainerId ?? instance.RunnerName;
-
-        // Set up a task to wait for the response
         _runnerLogsTcs = new TaskCompletionSource<string>();
         var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines };
 
         await HubContext.Clients.Client(agent.ConnectionId).GetRunnerLogs(command);
 
-        // Wait with timeout
         var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
         if (completedTask == _runnerLogsTcs.Task)
             return await _runnerLogsTcs.Task;
 
-        return $"Timeout waiting for logs from agent '{host.Name}' for runner '{instance.RunnerName}'.";
+        return $"\x1b[33mTimeout waiting for logs from agent.\x1b[0m";
     }
 
     private void OnRunnerLogsReceived(RunnerLogsEvent evt)
@@ -181,21 +312,26 @@
     private Task<string> GetServerLogsAsync()
     {
         var lines = new List<string>();
-        lines.Add($"=== RunnerRunner Server Logs (last activity) ===");
-        lines.Add($"Timestamp: {DateTime.UtcNow:u}");
+        lines.Add("\x1b[1;36m=== RunnerRunner Server Status ===\x1b[0m");
+        lines.Add($"\x1b[90mTimestamp: {DateTime.UtcNow:u}\x1b[0m");
         lines.Add("");
 
         var connectedAgents = AgentHub.GetConnectedAgents();
-        lines.Add($"Connected agents: {connectedAgents.Count}");
+        lines.Add($"\x1b[1mConnected agents:\x1b[0m {connectedAgents.Count}");
         foreach (var agent in connectedAgents.Values)
         {
             var lastHb = agent.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
             var runners = agent.LastMetrics?.RunningInstanceCount ?? 0;
-            lines.Add($"  {agent.AgentInfo.Name} ({agent.AgentInfo.Platform} {agent.AgentInfo.Architecture}) - heartbeat: {lastHb}, runners: {runners}");
+            var statusColor = runners > 0 ? "\x1b[32m" : "\x1b[90m";
+            lines.Add($"  {statusColor}●\x1b[0m {agent.AgentInfo.Name} \x1b[90m({agent.AgentInfo.Platform} {agent.AgentInfo.Architecture})\x1b[0m — heartbeat: {lastHb}, runners: \x1b[1m{runners}\x1b[0m");
         }
+
+        if (!connectedAgents.Any())
+            lines.Add("  \x1b[33mNo agents connected\x1b[0m");
+
         lines.Add("");
-        lines.Add("For full server container logs:");
-        lines.Add("  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs server --tail 100'");
+        lines.Add("\x1b[90mFor full server container logs:\x1b[0m");
+        lines.Add("\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs server --tail 100'\x1b[0m");
 
         return Task.FromResult(string.Join("\n", lines));
     }
@@ -203,19 +339,21 @@
     private async Task<string> GetAgentLogsAsync(string hostName)
     {
         var host = hosts.FirstOrDefault(h => h.Name == hostName);
-        if (host == null) return "Host not found.";
+        if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
         var agent = AgentHub.GetConnectedAgents().Values
             .FirstOrDefault(a => a.AgentInfo.Name == hostName);
 
         if (agent == null)
-            return $"Agent '{hostName}' is not connected.\n\nCheck the agent logs manually:\n  ssh <user>@<host> 'tail -{tailLines} /tmp/runnerrunner-agent.log'";
+            return $"\x1b[33mAgent '{host.Label}' is not connected.\x1b[0m\n\n\x1b[90mCheck logs manually:\n  ssh <user>@<host> 'tail -{tailLines} /tmp/runnerrunner-agent.log'\x1b[0m";
 
         var lines = new List<string>();
-        lines.Add($"=== Agent: {hostName} ({host.Platform} {host.Architecture}) ===");
-        lines.Add($"Status: {host.AgentStatus}");
+        lines.Add($"\x1b[1;36m=== Agent: {host.Label} ===\x1b[0m");
+        lines.Add($"\x1b[90mPlatform: {host.Platform} {host.Architecture}\x1b[0m");
+        lines.Add($"Status: \x1b[32m{host.AgentStatus}\x1b[0m");
         lines.Add($"Last heartbeat: {host.LastHeartbeat?.ToString("u") ?? "never"}");
-        lines.Add($"Capabilities: {string.Join(", ", host.Capabilities)}");
+        if (host.Capabilities.Any())
+            lines.Add($"Capabilities: \x1b[90m{string.Join(", ", host.Capabilities)}\x1b[0m");
         lines.Add("");
 
         var instances = (await Store.Query<RunnerInstance>().ToList())
@@ -223,31 +361,59 @@
 
         if (instances.Count > 0)
         {
-            lines.Add($"Runner instances: {instances.Count}");
+            lines.Add($"\x1b[1mRunner instances:\x1b[0m {instances.Count}");
             foreach (var inst in instances.OrderByDescending(i => i.StartedAt ?? i.CreatedAt))
             {
-                lines.Add($"  {inst.RunnerName} - {inst.Status} (started: {inst.StartedAt?.ToString("HH:mm:ss") ?? "—"}, container: {inst.ContainerId?[..Math.Min(12, inst.ContainerId?.Length ?? 0)] ?? "—"})");
+                var statusIcon = inst.Status == RunnerInstanceStatus.Running ? "\x1b[32m●\x1b[0m" :
+                                 inst.Status == RunnerInstanceStatus.Failed ? "\x1b[31m●\x1b[0m" : "\x1b[90m●\x1b[0m";
+                var cid = inst.ContainerId?[..Math.Min(12, inst.ContainerId?.Length ?? 0)] ?? "—";
+                lines.Add($"  {statusIcon} {inst.RunnerName} — \x1b[1m{inst.Status}\x1b[0m (started: {inst.StartedAt?.ToString("HH:mm:ss") ?? "—"}, container: \x1b[90m{cid}\x1b[0m)");
                 if (inst.ErrorMessage != null)
-                    lines.Add($"    Error: {inst.ErrorMessage}");
+                    lines.Add($"    \x1b[31mError: {inst.ErrorMessage}\x1b[0m");
             }
         }
         else
         {
-            lines.Add("No runner instances on this host.");
+            lines.Add("\x1b[90mNo runner instances on this host.\x1b[0m");
         }
 
         lines.Add("");
-        lines.Add("For full agent logs:");
+        lines.Add("\x1b[90mFor full agent logs:\x1b[0m");
         if (host.Platform == HostPlatform.Linux)
-            lines.Add("  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs agent --tail 100'");
+            lines.Add("\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs agent --tail 100'\x1b[0m");
         else
-            lines.Add($"  ssh <user>@{hostName} 'tail -{tailLines} /tmp/runnerrunner-agent.log'");
+            lines.Add($"\x1b[90m  ssh <user>@{hostName} 'tail -{tailLines} /tmp/runnerrunner-agent.log'\x1b[0m");
 
         return string.Join("\n", lines);
     }
 
+    private string GetPlatformIcon(HostPlatform platform) => platform switch
+    {
+        HostPlatform.Linux => "bi-ubuntu",
+        HostPlatform.MacOS => "bi-apple",
+        HostPlatform.Windows => "bi-windows",
+        _ => "bi-pc-display"
+    };
+
+    private string GetAgentStatusBadge(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => "bg-success",
+        AgentStatus.Connecting => "bg-warning",
+        _ => "bg-secondary"
+    };
+
+    private string GetRunnerStatusBadge(RunnerInstanceStatus status) => status switch
+    {
+        RunnerInstanceStatus.Running => "bg-success",
+        RunnerInstanceStatus.Starting => "bg-info",
+        RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed => "bg-danger",
+        _ => "bg-secondary"
+    };
+
     public void Dispose()
     {
         AgentHub.OnRunnerLogsReceived -= OnRunnerLogsReceived;
+        try { _ = JS.InvokeVoidAsync("rrTerminal.dispose", "rr-terminal"); }
+        catch { }
     }
 }

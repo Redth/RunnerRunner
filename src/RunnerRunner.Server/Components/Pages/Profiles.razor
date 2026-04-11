@@ -11,6 +11,39 @@
 
 <button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Profile</button>
 
+<div class="row g-2 mb-3 align-items-end">
+    <div class="col-md-4">
+        <input class="form-control form-control-sm" placeholder="Search profiles..." @bind="searchText" @bind:event="oninput" />
+    </div>
+    <div class="col-md-2">
+        <select class="form-select form-select-sm" @bind="filterProvider">
+            <option value="">All Providers</option>
+            @foreach (var p in Enum.GetValues<RunnerProvider>())
+            {
+                <option value="@p">@p</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select class="form-select form-select-sm" @bind="filterPlatform">
+            <option value="">All Platforms</option>
+            @foreach (var p in Enum.GetValues<HostPlatform>())
+            {
+                <option value="@p">@p</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select class="form-select form-select-sm" @bind="filterBackend">
+            <option value="">All Backends</option>
+            @foreach (var b in Enum.GetValues<ExecutionBackend>())
+            {
+                <option value="@b">@b</option>
+            }
+        </select>
+    </div>
+</div>
+
 @if (showForm)
 {
     <div class="card mb-4">
@@ -319,10 +352,10 @@
 <table class="table table-striped">
     <thead>
         <tr>
-            <th>Name</th>
-            <th>Provider</th>
-            <th>Platform</th>
-            <th>Backend</th>
+            <th role="button" @onclick='() => SetSort("Name")' style="cursor:pointer; user-select:none;">Name @SortIndicator("Name")</th>
+            <th role="button" @onclick='() => SetSort("Provider")' style="cursor:pointer; user-select:none;">Provider @SortIndicator("Provider")</th>
+            <th role="button" @onclick='() => SetSort("Platform")' style="cursor:pointer; user-select:none;">Platform @SortIndicator("Platform")</th>
+            <th role="button" @onclick='() => SetSort("Backend")' style="cursor:pointer; user-select:none;">Backend @SortIndicator("Backend")</th>
             <th>Labels</th>
             <th>Env Sets</th>
             <th>Max Parallel</th>
@@ -330,7 +363,7 @@
         </tr>
     </thead>
     <tbody>
-        @foreach (var profile in profiles)
+        @foreach (var profile in FilteredProfiles)
         {
             <tr>
                 <td>@profile.Name</td>
@@ -356,6 +389,66 @@
     private RunnerProfile editProfile = new() { Name = "" };
     private bool showForm;
     private bool isEditing;
+
+    // Filter & sort state
+    private string searchText = "";
+    private string filterProvider = "";
+    private string filterPlatform = "";
+    private string filterBackend = "";
+    private string sortColumn = "Name";
+    private bool sortAscending = true;
+
+    private IEnumerable<RunnerProfile> FilteredProfiles
+    {
+        get
+        {
+            var query = profiles.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(searchText))
+            {
+                var term = searchText.Trim();
+                query = query.Where(p =>
+                    (p.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (p.Description?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    p.Provider.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    p.RequiredHostPlatform.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    p.ExecutionBackend.ToString().Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (!string.IsNullOrEmpty(filterProvider) && Enum.TryParse<RunnerProvider>(filterProvider, out var prov))
+                query = query.Where(p => p.Provider == prov);
+
+            if (!string.IsNullOrEmpty(filterPlatform) && Enum.TryParse<HostPlatform>(filterPlatform, out var plat))
+                query = query.Where(p => p.RequiredHostPlatform == plat);
+
+            if (!string.IsNullOrEmpty(filterBackend) && Enum.TryParse<ExecutionBackend>(filterBackend, out var back))
+                query = query.Where(p => p.ExecutionBackend == back);
+
+            query = sortColumn switch
+            {
+                "Provider" => sortAscending ? query.OrderBy(p => p.Provider) : query.OrderByDescending(p => p.Provider),
+                "Platform" => sortAscending ? query.OrderBy(p => p.RequiredHostPlatform) : query.OrderByDescending(p => p.RequiredHostPlatform),
+                "Backend" => sortAscending ? query.OrderBy(p => p.ExecutionBackend) : query.OrderByDescending(p => p.ExecutionBackend),
+                _ => sortAscending ? query.OrderBy(p => p.Name) : query.OrderByDescending(p => p.Name),
+            };
+
+            return query;
+        }
+    }
+
+    private void SetSort(string column)
+    {
+        if (sortColumn == column)
+            sortAscending = !sortAscending;
+        else
+        {
+            sortColumn = column;
+            sortAscending = true;
+        }
+    }
+
+    private string SortIndicator(string column)
+        => sortColumn == column ? (sortAscending ? "▲" : "▼") : "";
 
     // Labels as chip list
     private List<string> editLabels = [];

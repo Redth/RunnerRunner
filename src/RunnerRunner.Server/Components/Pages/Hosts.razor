@@ -22,21 +22,55 @@
     }
 </div>
 
+<div class="row g-2 mb-3 align-items-end">
+    <div class="col-auto flex-grow-1">
+        <input type="text" class="form-control form-control-sm" placeholder="Search by name, platform, architecture, capabilities…"
+               @bind="searchText" @bind:event="oninput" />
+    </div>
+    <div class="col-auto">
+        <select class="form-select form-select-sm" @bind="filterPlatform">
+            <option value="">All Platforms</option>
+            @foreach (var p in Enum.GetValues<HostPlatform>())
+            {
+                <option value="@p">@p</option>
+            }
+        </select>
+    </div>
+    <div class="col-auto">
+        <select class="form-select form-select-sm" @bind="filterStatus">
+            <option value="">All Statuses</option>
+            @foreach (var s in Enum.GetValues<AgentStatus>())
+            {
+                <option value="@s">@s</option>
+            }
+        </select>
+    </div>
+    <div class="col-auto">
+        <select class="form-select form-select-sm" @bind="filterArch">
+            <option value="">All Architectures</option>
+            @foreach (var a in hosts.Select(h => h.Architecture).Where(a => !string.IsNullOrEmpty(a)).Distinct().OrderBy(a => a))
+            {
+                <option value="@a">@a</option>
+            }
+        </select>
+    </div>
+</div>
+
 <table class="table table-striped">
     <thead>
         <tr>
-            <th>Name</th>
-            <th>Platform</th>
-            <th>Status</th>
-            <th>Architecture</th>
+            <th role="button" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
+            <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
+            <th role="button" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
+            <th role="button" @onclick='() => ToggleSort("Architecture")'>Architecture @SortIndicator("Architecture")</th>
             <th>Capabilities</th>
             <th>Assignments</th>
-            <th>Last Heartbeat</th>
+            <th role="button" @onclick='() => ToggleSort("LastHeartbeat")'>Last Heartbeat @SortIndicator("LastHeartbeat")</th>
             <th>Actions</th>
         </tr>
     </thead>
     <tbody>
-        @foreach (var host in hosts)
+        @foreach (var host in FilteredHosts)
         {
             var hostAssignments = assignments.Where(a => a.HostId == host.Id).ToList();
             <tr>
@@ -144,6 +178,71 @@
     private List<RunnerProfile> allProfiles = [];
     private Dictionary<string, string> profileNames = new();
     private string? newToken;
+
+    // Filter & sort state
+    private string searchText = "";
+    private string filterPlatform = "";
+    private string filterStatus = "";
+    private string filterArch = "";
+    private string sortColumn = "Name";
+    private bool sortAscending = true;
+
+    private IEnumerable<Host> FilteredHosts
+    {
+        get
+        {
+            var q = hosts.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(searchText))
+            {
+                var term = searchText.Trim();
+                q = q.Where(h =>
+                    (h.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (h.DisplayName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    h.Platform.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                    (h.Architecture?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    h.Capabilities.Any(c => c.Contains(term, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            if (!string.IsNullOrEmpty(filterPlatform) && Enum.TryParse<HostPlatform>(filterPlatform, out var plat))
+                q = q.Where(h => h.Platform == plat);
+
+            if (!string.IsNullOrEmpty(filterStatus) && Enum.TryParse<AgentStatus>(filterStatus, out var stat))
+                q = q.Where(h => h.AgentStatus == stat);
+
+            if (!string.IsNullOrEmpty(filterArch))
+                q = q.Where(h => string.Equals(h.Architecture, filterArch, StringComparison.OrdinalIgnoreCase));
+
+            q = sortColumn switch
+            {
+                "Name" => sortAscending ? q.OrderBy(h => h.Label) : q.OrderByDescending(h => h.Label),
+                "Platform" => sortAscending ? q.OrderBy(h => h.Platform) : q.OrderByDescending(h => h.Platform),
+                "Status" => sortAscending ? q.OrderBy(h => h.AgentStatus) : q.OrderByDescending(h => h.AgentStatus),
+                "Architecture" => sortAscending ? q.OrderBy(h => h.Architecture) : q.OrderByDescending(h => h.Architecture),
+                "LastHeartbeat" => sortAscending ? q.OrderBy(h => h.LastHeartbeat) : q.OrderByDescending(h => h.LastHeartbeat),
+                _ => q
+            };
+
+            return q;
+        }
+    }
+
+    private void ToggleSort(string column)
+    {
+        if (sortColumn == column)
+            sortAscending = !sortAscending;
+        else
+        {
+            sortColumn = column;
+            sortAscending = true;
+        }
+    }
+
+    private MarkupString SortIndicator(string column)
+    {
+        if (sortColumn != column) return new MarkupString("");
+        return new MarkupString(sortAscending ? " ▲" : " ▼");
+    }
 
     // Assignment form
     private bool showAssign;
