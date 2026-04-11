@@ -1,3 +1,0 @@
-[     159ms] [INFO] [2026-04-11T17:07:07.757Z] Information: Normalizing '_blazor' to 'https://localhost:63901/_blazor'. @ https://localhost:63901/framework/blazor.web.js:0
-[     166ms] [INFO] [2026-04-11T17:07:07.765Z] Information: WebSocket connected to wss://localhost:63901/_blazor?id=0kC_0flJCZQRfFTVBhnDgg. @ https://localhost:63901/framework/blazor.web.js:0
-[     296ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "new-password"): (More info: https://goo.gl/9p2vKq) %o @ https://localhost:63901/login?returnUrl=%2F:0

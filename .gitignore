@@ -22,3 +22,8 @@ Thumbs.db
 publish/
 out/
 .db/
+
+## Playwright
+.playwright-mcp/
+*.png
+!src/**/wwwroot/*.png

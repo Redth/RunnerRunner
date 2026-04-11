@@ -1,2 +1,0 @@
-[      83ms] [INFO] [2026-04-11T17:11:05.090Z] Information: Normalizing '_blazor' to 'https://localhost:17025/_blazor'. @ https://localhost:17025/framework/blazor.web.js:0
-[      88ms] [INFO] [2026-04-11T17:11:05.095Z] Information: WebSocket connected to wss://localhost:17025/_blazor?id=13idapJKK_CYZyyq9ctFFA. @ https://localhost:17025/framework/blazor.web.js:0
