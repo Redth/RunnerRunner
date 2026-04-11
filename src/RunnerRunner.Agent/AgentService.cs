@@ -50,8 +50,12 @@ public class AgentService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _agentId = _configuration["RunnerRunner:AgentId"] ?? Guid.NewGuid().ToString("N")[..12];
-        _agentName = _configuration["RunnerRunner:AgentName"] ?? Environment.MachineName;
+        _agentId = string.IsNullOrEmpty(_configuration["RunnerRunner:AgentId"])
+            ? Guid.NewGuid().ToString("N")[..12]
+            : _configuration["RunnerRunner:AgentId"]!;
+        _agentName = string.IsNullOrEmpty(_configuration["RunnerRunner:AgentName"])
+            ? Environment.MachineName
+            : _configuration["RunnerRunner:AgentName"]!;
 
         _logger.LogInformation("RunnerRunner Agent starting: {AgentName} ({AgentId})", _agentName, _agentId);
 
