@@ -63,23 +63,13 @@ public class AgentService : BackgroundService
         _signalR.OnDeleteImage += HandleDeleteImage;
         _signalR.OnLoginRegistry += HandleLoginRegistry;
         _signalR.OnGetHostEnvironment += HandleGetHostEnvironment;
+        _signalR.OnReconnected += RegisterWithServer;
 
         // Connect to server
         await _signalR.ConnectAsync(stoppingToken);
 
         // Register with server
-        await _signalR.SendAgentConnected(new AgentInfo
-        {
-            AgentId = _agentId,
-            Name = _agentName,
-            Platform = GetCurrentPlatform(),
-            OsVersion = RuntimeInformation.OSDescription,
-            Architecture = RuntimeInformation.OSArchitecture.ToString(),
-            AgentVersion = typeof(AgentService).Assembly.GetName().Version?.ToString() ?? "0.0.0",
-            Capabilities = DetectCapabilities()
-        });
-
-        _logger.LogInformation("Agent registered with server");
+        await RegisterWithServer();
 
         // Heartbeat loop
         while (!stoppingToken.IsCancellationRequested)
@@ -323,6 +313,21 @@ public class AgentService : BackgroundService
             HostId = _agentId,
             EnvironmentVariables = envVars
         });
+    }
+
+    private async Task RegisterWithServer()
+    {
+        await _signalR.SendAgentConnected(new AgentInfo
+        {
+            AgentId = _agentId,
+            Name = _agentName,
+            Platform = GetCurrentPlatform(),
+            OsVersion = RuntimeInformation.OSDescription,
+            Architecture = RuntimeInformation.OSArchitecture.ToString(),
+            AgentVersion = typeof(AgentService).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+            Capabilities = DetectCapabilities()
+        });
+        _logger.LogInformation("Agent registered with server");
     }
 
     private static HostPlatform GetCurrentPlatform()

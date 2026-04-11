@@ -22,6 +22,7 @@ public class SignalRConnection : IAsyncDisposable
     public event Func<DeleteImageCommand, Task>? OnDeleteImage;
     public event Func<LoginRegistryCommand, Task>? OnLoginRegistry;
     public event Func<Task>? OnGetHostEnvironment;
+    public event Func<Task>? OnReconnected;
 
     public bool IsConnected => _connection?.State == HubConnectionState.Connected;
 
@@ -122,10 +123,10 @@ public class SignalRConnection : IAsyncDisposable
             return Task.CompletedTask;
         };
 
-        connection.Reconnected += connectionId =>
+        connection.Reconnected += async connectionId =>
         {
             _logger.LogInformation("Reconnected with connection ID: {ConnectionId}", connectionId);
-            return Task.CompletedTask;
+            if (OnReconnected != null) await OnReconnected();
         };
 
         connection.Closed += error =>
