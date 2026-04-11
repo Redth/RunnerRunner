@@ -12,22 +12,52 @@ set -euo pipefail
 #   ./deploy/deploy-all.sh
 #
 # Configuration:
-#   Edit the variables below or set them as environment variables.
+#   Copy deploy/.env.example to deploy/.env and fill in passwords.
+#   Or set environment variables directly.
 # ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# --- Load config from .env if it exists ---
+if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+    set -a
+    source "${SCRIPT_DIR}/.env"
+    set +a
+fi
 
 # --- Configuration (override with env vars) ---
 LINUX_HOST="${LINUX_HOST:-192.168.2.2}"
 LINUX_USER="${LINUX_USER:-root}"
+LINUX_PASSWORD="${LINUX_PASSWORD:-}"
 LINUX_DEPLOY_DIR="${LINUX_DEPLOY_DIR:-/opt/runnerrunner}"
 
 MACOS_HOST="${MACOS_HOST:-192.168.2.134}"
 MACOS_USER="${MACOS_USER:-root}"
+MACOS_PASSWORD="${MACOS_PASSWORD:-}"
 
 REGISTRY_URL="${REGISTRY_URL:-ghcr.io}"
 REGISTRY_REPO="${REGISTRY_REPO:-redth/runnerrunner}"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# --- SSH wrapper: uses sshpass if password is set ---
+remote_ssh() {
+    local user="$1" host="$2" password="$3"
+    shift 3
+    if [[ -n "${password}" ]]; then
+        sshpass -p "${password}" ssh -o StrictHostKeyChecking=no "${user}@${host}" "$@"
+    else
+        ssh "${user}@${host}" "$@"
+    fi
+}
+
+remote_scp() {
+    local user="$1" host="$2" password="$3" src="$4" dest="$5"
+    if [[ -n "${password}" ]]; then
+        sshpass -p "${password}" scp -o StrictHostKeyChecking=no -r "${src}" "${user}@${host}:${dest}"
+    else
+        scp -r "${src}" "${user}@${host}:${dest}"
+    fi
+}
 
 # --- Helpers ---
 log()     { echo ""; echo "━━━ $* ━━━"; }
@@ -39,6 +69,9 @@ log "Pre-flight checks"
 command -v dotnet >/dev/null || { echo "❌ dotnet SDK not found"; exit 1; }
 command -v docker >/dev/null || { echo "❌ docker not found"; exit 1; }
 command -v ssh    >/dev/null || { echo "❌ ssh not found"; exit 1; }
+if [[ -n "${LINUX_PASSWORD}" || -n "${MACOS_PASSWORD}" ]]; then
+    command -v sshpass >/dev/null || { echo "❌ sshpass not found (brew install hudochenkov/sshpass/sshpass)"; exit 1; }
+fi
 step "All tools available"
 
 # ============================================================
@@ -80,10 +113,12 @@ success "Images pushed to registry"
 log "Phase 3: Deploying to Linux host (${LINUX_USER}@${LINUX_HOST})"
 
 step "Creating deploy directory on remote host..."
-ssh "${LINUX_USER}@${LINUX_HOST}" "mkdir -p ${LINUX_DEPLOY_DIR}"
+remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
+    "mkdir -p ${LINUX_DEPLOY_DIR}"
 
 step "Generating docker-compose.yml..."
-cat > /tmp/rr-compose.yml <<COMPOSE_EOF
+COMPOSE_FILE=$(mktemp)
+cat > "${COMPOSE_FILE}" <<COMPOSE_EOF
 services:
   server:
     image: ${SERVER_IMAGE}
@@ -113,15 +148,16 @@ volumes:
 COMPOSE_EOF
 
 step "Copying docker-compose.yml to ${LINUX_HOST}..."
-scp /tmp/rr-compose.yml "${LINUX_USER}@${LINUX_HOST}:${LINUX_DEPLOY_DIR}/docker-compose.yml"
-rm /tmp/rr-compose.yml
+remote_scp "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
+    "${COMPOSE_FILE}" "${LINUX_DEPLOY_DIR}/docker-compose.yml"
+rm "${COMPOSE_FILE}"
 
 step "Pulling images on remote host..."
-ssh "${LINUX_USER}@${LINUX_HOST}" \
+remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
     "cd ${LINUX_DEPLOY_DIR} && docker compose pull --quiet"
 
 step "Starting services..."
-ssh "${LINUX_USER}@${LINUX_HOST}" \
+remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
     "cd ${LINUX_DEPLOY_DIR} && docker compose up -d --remove-orphans"
 
 success "Linux stack deployed: http://${LINUX_HOST}:8080"
@@ -131,7 +167,6 @@ success "Linux stack deployed: http://${LINUX_HOST}:8080"
 # ============================================================
 log "Phase 4: Deploying native agent to macOS (${MACOS_USER}@${MACOS_HOST})"
 
-# Check if the macos deploy script exists and agent.env is configured
 MACOS_DEPLOY="${SCRIPT_DIR}/macos/deploy-agent.sh"
 if [[ ! -x "${MACOS_DEPLOY}" ]]; then
     echo "  ⚠️  macOS deploy script not found at ${MACOS_DEPLOY}"
@@ -149,7 +184,10 @@ RUNNERRUNNER_AGENT_ID=
 ENV_EOF
     fi
 
-    SSH_USER="${MACOS_USER}" "${MACOS_DEPLOY}" "${MACOS_HOST}"
+    # Pass password through to the macOS deploy script
+    export SSH_USER="${MACOS_USER}"
+    export SSHPASS="${MACOS_PASSWORD}"
+    "${MACOS_DEPLOY}" "${MACOS_HOST}"
     success "macOS agent deployed"
 fi
 
@@ -158,11 +196,11 @@ fi
 # ============================================================
 log "Deploy complete!"
 echo ""
-echo "  🖥  Server:       http://${LINUX_HOST}:8080"
-echo "  🐧 Linux Agent:  running as Docker container on ${LINUX_HOST}"
-echo "  🍎 macOS Agent:  running as launchd service on ${MACOS_HOST}"
+echo "  Server:       http://${LINUX_HOST}:8080"
+echo "  Linux Agent:  Docker container on ${LINUX_HOST}"
+echo "  macOS Agent:  launchd service on ${MACOS_HOST}"
 echo ""
-echo "  To redeploy after changes:  ./deploy/deploy-all.sh"
+echo "  Redeploy:     ./deploy/deploy-all.sh"
 echo "  Linux logs:   ssh ${LINUX_USER}@${LINUX_HOST} 'cd ${LINUX_DEPLOY_DIR} && docker compose logs -f'"
 echo "  macOS logs:   ssh ${MACOS_USER}@${MACOS_HOST} 'tail -f /var/log/runnerrunner-agent.log'"
 echo ""
