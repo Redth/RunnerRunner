@@ -40,6 +40,14 @@ _ssh() {
         ssh -t "${SSH_USER}@${HOST}" "$@"
     fi
 }
+# SSH without TTY (for nohup — TTY sends SIGHUP on disconnect)
+_ssh_notty() {
+    if [[ -n "${SSHPASS}" ]]; then
+        sshpass -p "${SSHPASS}" ssh -o StrictHostKeyChecking=no "${SSH_USER}@${HOST}" "$@"
+    else
+        ssh "${SSH_USER}@${HOST}" "$@"
+    fi
+}
 _scp() {
     if [[ -n "${SSHPASS}" ]]; then
         sshpass -p "${SSHPASS}" scp -o StrictHostKeyChecking=no -r "$1" "${SSH_USER}@${HOST}:$2"
@@ -96,7 +104,7 @@ _ssh "mkdir -p ${INSTALL_DIR}"
 
 # --- Step 4: Stop existing agent ---
 log "Stopping existing agent..."
-_ssh "pkill -f 'RunnerRunner.Agent' 2>/dev/null; launchctl remove com.runnerrunner.agent 2>/dev/null; launchctl bootout gui/\$(id -u)/com.runnerrunner.agent 2>/dev/null; true"
+_ssh_notty "pkill -f 'RunnerRunner.Agent' 2>/dev/null; launchctl remove com.runnerrunner.agent 2>/dev/null; launchctl bootout gui/\$(id -u)/com.runnerrunner.agent 2>/dev/null; true"
 
 # Clean up old plists from previous install locations
 _ssh "sudo rm -f ${OLD_PLIST_DEST} ${OLD_AGENT_PLIST} ~/Library/LaunchAgents/${PLIST_NAME} 2>/dev/null; true"
@@ -116,12 +124,12 @@ _ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/*
 # Note: launchd has macOS socket restrictions that prevent .NET from connecting.
 # Starting via nohup from an SSH session inherits the interactive network stack.
 log "Starting agent..."
-_ssh "cd ${INSTALL_DIR} && truncate -s 0 /tmp/runnerrunner-agent.log 2>/dev/null; nohup ${INSTALL_DIR}/start-agent.sh > /dev/null 2>&1 & echo \"PID: \$!\""
+_ssh_notty "cd ${INSTALL_DIR} && truncate -s 0 /tmp/runnerrunner-agent.log 2>/dev/null; nohup ${INSTALL_DIR}/start-agent.sh > /dev/null 2>&1 & echo \"PID: \$!\""
 
-sleep 5
+sleep 8
 
 # Verify it connected
-_ssh "grep -c 'Connected to' /tmp/runnerrunner-agent.log 2>/dev/null | xargs -I{} echo 'Connected: {} time(s)'"
+_ssh_notty "grep -c 'Connected to' /tmp/runnerrunner-agent.log 2>/dev/null | xargs -I{} echo 'Connected: {} time(s)'"
 
 log ""
 log "✅ RunnerRunner Agent deployed to ${HOST}"
