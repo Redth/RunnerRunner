@@ -1,9 +1,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY src/RunnerRunner.Core/RunnerRunner.Core.csproj RunnerRunner.Core/
+COPY src/RunnerRunner.ServiceDefaults/RunnerRunner.ServiceDefaults.csproj RunnerRunner.ServiceDefaults/
 COPY src/RunnerRunner.Agent/RunnerRunner.Agent.csproj RunnerRunner.Agent/
 RUN dotnet restore RunnerRunner.Agent/RunnerRunner.Agent.csproj
 COPY src/RunnerRunner.Core/ RunnerRunner.Core/
+COPY src/RunnerRunner.ServiceDefaults/ RunnerRunner.ServiceDefaults/
 COPY src/RunnerRunner.Agent/ RunnerRunner.Agent/
 RUN dotnet publish RunnerRunner.Agent/RunnerRunner.Agent.csproj -c Release -o /app/publish
 
