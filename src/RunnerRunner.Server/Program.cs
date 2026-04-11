@@ -19,6 +19,11 @@ builder.Services.AddHttpClient();
 
 // Runner providers
 builder.Services.AddSingleton<IRunnerProviderPlugin, GitHubActionsProvider>();
+builder.Services.AddSingleton<IRunnerProviderPlugin, GiteaActionsProvider>();
+builder.Services.AddSingleton<IRunnerProviderPlugin, AzDoAgentProvider>();
+
+// Services
+builder.Services.AddSingleton<AuditService>();
 
 // Background services
 builder.Services.AddHostedService<OrchestrationEngine>();

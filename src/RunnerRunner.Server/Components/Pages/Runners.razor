@@ -2,12 +2,20 @@
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
+@using Microsoft.AspNetCore.SignalR
+@using RunnerRunner.Server.Hubs
+@using RunnerRunner.Core.Hub
 @inject IDocumentStore Store
+@inject IHubContext<AgentHub, IAgentHubClient> HubContext
 
 <PageTitle>Runner Instances - RunnerRunner</PageTitle>
 
 <h1>Runner Instances</h1>
-<p>View all runner instances across connected hosts.</p>
+<p>View and manage all runner instances across connected hosts.</p>
+
+<div class="mb-3">
+    <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh">🔄 Refresh</button>
+</div>
 
 <table class="table table-striped">
     <thead>
@@ -26,7 +34,7 @@
         {
             <tr><td colspan="7" class="text-center text-muted">No runner instances. Assign profiles to hosts to get started.</td></tr>
         }
-        @foreach (var inst in instances)
+        @foreach (var inst in instances.OrderByDescending(i => i.StartedAt ?? i.CreatedAt))
         {
             <tr>
                 <td>@inst.RunnerName</td>
@@ -36,9 +44,13 @@
                 <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
                 <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
                 <td>
-                    @if (inst.Status == RunnerInstanceStatus.Running)
+                    @if (inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
                     {
-                        <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst.Id)">Stop</button>
+                        <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)">Stop</button>
+                    }
+                    @if (inst.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)
+                    {
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveInstance(inst.Id)">Remove</button>
                     }
                 </td>
             </tr>
@@ -51,7 +63,9 @@
     private Dictionary<string, string> hostNames = new();
     private Dictionary<string, string> profileNames = new();
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await Refresh();
+
+    private async Task Refresh()
     {
         instances = (await Store.Query<RunnerInstance>().ToList()).ToList();
         var hosts = (await Store.Query<Host>().ToList()).ToList();
@@ -60,10 +74,32 @@
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
     }
 
-    private Task StopInstance(string id)
+    private async Task StopInstance(RunnerInstance inst)
     {
-        // TODO: Send stop command via orchestration engine
-        return Task.CompletedTask;
+        // Find the connected agent for this host
+        var agents = AgentHub.GetConnectedAgents();
+        var hostName = hostNames.GetValueOrDefault(inst.HostId);
+        var agent = agents.Values.FirstOrDefault(a => a.AgentInfo.Name == hostName);
+
+        if (agent != null)
+        {
+            await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+            {
+                InstanceId = inst.Id,
+                InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
+            });
+
+            inst.Status = RunnerInstanceStatus.Stopping;
+            await Store.Update(inst);
+        }
+
+        await Refresh();
+    }
+
+    private async Task RemoveInstance(string id)
+    {
+        await Store.Remove<RunnerInstance>(id);
+        await Refresh();
     }
 
     private string GetStatusBadge(RunnerInstanceStatus status) => status switch

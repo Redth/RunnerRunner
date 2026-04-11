@@ -142,8 +142,9 @@ public class OrchestrationEngine : BackgroundService
         ConnectedAgent agent,
         CancellationToken ct)
     {
-        // Compose environment variables
-        var envVars = await ComposeEnvironmentVariablesAsync(store, profile);
+        // Compose environment variables (profile sets + profile overrides + host overrides)
+        var host = await store.Get<Host>(assignment.HostId);
+        var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host);
 
         // Get registration token from provider
         string? registrationToken = null;
@@ -228,7 +229,7 @@ public class OrchestrationEngine : BackgroundService
     }
 
     private async Task<Dictionary<string, string>> ComposeEnvironmentVariablesAsync(
-        IDocumentStore store, RunnerProfile profile)
+        IDocumentStore store, RunnerProfile profile, Host? host = null)
     {
         var result = new Dictionary<string, string>();
 
@@ -248,6 +249,13 @@ public class OrchestrationEngine : BackgroundService
         // Layer 2: Profile-level overrides
         foreach (var kvp in profile.EnvironmentOverrides)
             result[kvp.Key] = kvp.Value;
+
+        // Layer 3: Host-level overrides
+        if (host?.EnvironmentOverrides != null)
+        {
+            foreach (var kvp in host.EnvironmentOverrides)
+                result[kvp.Key] = kvp.Value;
+        }
 
         return result;
     }
