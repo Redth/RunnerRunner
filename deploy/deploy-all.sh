@@ -82,14 +82,15 @@ log "Phase 1: Building Docker images"
 
 SERVER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/server:latest"
 AGENT_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/agent:latest"
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
-step "Building server image..."
-docker build -t "${SERVER_IMAGE}" \
+step "Building server image (${DOCKER_PLATFORM})..."
+docker build --platform "${DOCKER_PLATFORM}" -t "${SERVER_IMAGE}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.Server/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
-step "Building agent image..."
-docker build -t "${AGENT_IMAGE}" \
+step "Building agent image (${DOCKER_PLATFORM})..."
+docker build --platform "${DOCKER_PLATFORM}" -t "${AGENT_IMAGE}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.Agent/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
