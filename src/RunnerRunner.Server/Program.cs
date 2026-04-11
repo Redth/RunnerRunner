@@ -11,7 +11,19 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 // Document store (Shiny DocumentDB with SQLite)
-var dbPath = builder.Configuration.GetValue<string>("Database:Path") ?? "runnerrunner.db";
+var dbPath = builder.Configuration.GetValue<string>("Database:Path");
+if (string.IsNullOrEmpty(dbPath))
+{
+    var dataDir = Path.Combine(builder.Environment.ContentRootPath, ".db");
+    Directory.CreateDirectory(dataDir);
+    dbPath = Path.Combine(dataDir, "runnerrunner.db");
+}
+else
+{
+    var dir = Path.GetDirectoryName(dbPath);
+    if (!string.IsNullOrEmpty(dir))
+        Directory.CreateDirectory(dir);
+}
 builder.Services.AddRunnerRunnerDocumentStore($"Data Source={dbPath}");
 
 // SignalR for agent communication
@@ -37,6 +49,9 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
+
+// Ensure all document store tables exist before serving requests
+await DatabaseInitializer.EnsureTablesCreatedAsync(app.Services);
 
 if (!app.Environment.IsDevelopment())
 {
