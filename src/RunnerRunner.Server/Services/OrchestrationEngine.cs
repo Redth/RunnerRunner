@@ -65,8 +65,8 @@ public class OrchestrationEngine : BackgroundService
         if (assignments.Count == 0)
             return;
 
-        _logger.LogDebug("Reconciling: {Assignments} assignments, {Agents} connected agents",
-            assignments.Count, connectedAgents.Count);
+        _logger.LogInformation("Reconciling: {Assignments} assignments, {Agents} connected agents, {Hosts} hosts",
+            assignments.Count, connectedAgents.Count, hosts.Count);
 
         foreach (var assignment in assignments)
         {
@@ -88,7 +88,9 @@ public class OrchestrationEngine : BackgroundService
             var agent = connectedAgents.Values.FirstOrDefault(a => a.AgentInfo.Name == host.Name);
             if (agent == null)
             {
-                _logger.LogDebug("Host {HostName} agent not connected, skipping assignment", host.Name);
+                _logger.LogInformation("Host {HostName} (id:{HostId}) agent not connected, skipping. Connected agents: [{Agents}]",
+                    host.Name, host.Id,
+                    string.Join(", ", connectedAgents.Values.Select(a => a.AgentInfo.Name)));
                 continue;
             }
 
