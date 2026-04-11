@@ -100,14 +100,14 @@ fi
 
 # --- Step 3: Create install dir on remote host ---
 log "Connecting to ${SSH_USER}@${HOST}..."
-_ssh "mkdir -p ${INSTALL_DIR}"
+_ssh_notty "mkdir -p ${INSTALL_DIR}"
 
 # --- Step 4: Stop existing agent ---
 log "Stopping existing agent..."
-_ssh_notty "pkill -f 'RunnerRunner.Agent' 2>/dev/null; launchctl remove com.runnerrunner.agent 2>/dev/null; launchctl bootout gui/\$(id -u)/com.runnerrunner.agent 2>/dev/null; true"
+_ssh_notty "pgrep -f RunnerRunner.Agent | xargs kill 2>/dev/null; launchctl remove com.runnerrunner.agent 2>/dev/null; true"
 
-# Clean up old plists from previous install locations
-_ssh "sudo rm -f ${OLD_PLIST_DEST} ${OLD_AGENT_PLIST} ~/Library/LaunchAgents/${PLIST_NAME} 2>/dev/null; true"
+# Clean up old plists (non-sudo locations only)
+_ssh_notty "rm -f ~/Library/LaunchAgents/${PLIST_NAME} 2>/dev/null; true"
 
 # --- Step 5: Copy files to remote host ---
 log "Copying agent binary and config to ${HOST}:${INSTALL_DIR}..."
@@ -118,7 +118,7 @@ _scp "${SCRIPT_DIR}/start-agent.sh" "${INSTALL_DIR}/start-agent.sh"
 
 # --- Step 6: Set permissions and sign binary ---
 log "Setting up agent binary..."
-_ssh "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent ${INSTALL_DIR}/start-agent.sh && codesign --force -s - ${INSTALL_DIR}/RunnerRunner.Agent"
+_ssh_notty "if [ -d ${INSTALL_DIR}/macos-agent ]; then mv ${INSTALL_DIR}/macos-agent/* ${INSTALL_DIR}/ && rmdir ${INSTALL_DIR}/macos-agent; fi && chmod +x ${INSTALL_DIR}/RunnerRunner.Agent ${INSTALL_DIR}/start-agent.sh && codesign --force -s - ${INSTALL_DIR}/RunnerRunner.Agent"
 
 # --- Step 7: Start the agent via nohup (survives SSH disconnect) ---
 # Note: launchd has macOS socket restrictions that prevent .NET from connecting.
