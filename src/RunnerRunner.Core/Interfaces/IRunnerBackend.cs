@@ -35,6 +35,7 @@ public class RunnerStartRequest
 {
     public string InstanceId { get; set; } = "";
     public required string RunnerName { get; set; }
+    public RunnerProvider Provider { get; set; }
     public Dictionary<string, string> EnvironmentVariables { get; set; } = new();
     public string? RunnerAgentVersion { get; set; }
     public DockerImageConfig? DockerConfig { get; set; }
@@ -44,6 +45,8 @@ public class RunnerStartRequest
     public bool Ephemeral { get; set; }
     public string? RegistrationToken { get; set; }
     public string? RunnerUrl { get; set; }
+    public string? RunnerBasePath { get; set; }
+    public string? WorkDirectory { get; set; }
 }
 
 public class RunnerInstanceInfo

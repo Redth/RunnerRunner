@@ -15,6 +15,18 @@ public class Host
     public string? EnrollmentToken { get; set; }
     public bool IsApproved { get; set; }
 
+    /// <summary>
+    /// Base directory for runner agent binaries, instance dirs, and work.
+    /// Default: ~/.runnerrunner/
+    /// </summary>
+    public string? RunnerBasePath { get; set; }
+
+    /// <summary>
+    /// Override for runner work directory (where job files go).
+    /// Default: {RunnerBasePath}/work/
+    /// </summary>
+    public string? WorkDirectory { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

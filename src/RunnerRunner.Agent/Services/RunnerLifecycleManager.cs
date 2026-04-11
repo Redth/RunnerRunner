@@ -32,6 +32,7 @@ public class RunnerLifecycleManager
         {
             InstanceId = command.InstanceId,
             RunnerName = command.RunnerName,
+            Provider = command.Provider,
             EnvironmentVariables = command.EnvironmentVariables,
             RunnerAgentVersion = command.RunnerAgentVersion,
             DockerConfig = command.DockerConfig,
@@ -40,7 +41,9 @@ public class RunnerLifecycleManager
             RunnerGroup = command.RunnerGroup,
             Ephemeral = command.Ephemeral,
             RegistrationToken = command.RegistrationToken,
-            RunnerUrl = command.RunnerUrl
+            RunnerUrl = command.RunnerUrl,
+            RunnerBasePath = command.RunnerBasePath,
+            WorkDirectory = command.WorkDirectory
         };
 
         var info = await backend.StartRunnerAsync(request, ct);

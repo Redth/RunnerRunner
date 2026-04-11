@@ -200,6 +200,7 @@ public class OrchestrationEngine : BackgroundService
             ProfileId = profile.Id,
             RunnerName = runnerName,
             Backend = profile.ExecutionBackend,
+            Provider = profile.Provider,
             EnvironmentVariables = envVars,
             RunnerAgentVersion = profile.RunnerAgentVersion,
             DockerConfig = profile.DockerConfig,
@@ -208,7 +209,9 @@ public class OrchestrationEngine : BackgroundService
             RunnerGroup = profile.RunnerGroup,
             Ephemeral = profile.Ephemeral,
             RegistrationToken = registrationToken,
-            RunnerUrl = runnerUrl
+            RunnerUrl = runnerUrl,
+            RunnerBasePath = host?.RunnerBasePath,
+            WorkDirectory = host?.WorkDirectory
         };
 
         await _hubContext.Clients.Client(agent.ConnectionId).DeployRunner(command);
