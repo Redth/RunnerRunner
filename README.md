@@ -61,6 +61,32 @@ This starts:
 - **Agent** auto-connected to the server
 - **Aspire Dashboard** with real-time logs, traces, and metrics for all services
 
+### Option 2: Deploy Everything (One Command)
+
+Deploy the full stack to your Linux host + macOS agent in one shot:
+
+```bash
+./deploy/deploy-all.sh
+```
+
+This will:
+1. Build Docker images for Server + Linux Agent
+2. Push to your container registry (default: `ghcr.io/redth/runnerrunner`)
+3. SSH into the Linux host, deploy via `docker compose up`
+4. Publish a native `osx-arm64` binary, SSH into the Mac, install as a launchd service
+
+**Configure hosts** via environment variables:
+
+```bash
+LINUX_HOST=192.168.2.2 \
+MACOS_HOST=192.168.2.134 \
+./deploy/deploy-all.sh
+```
+
+All defaults are in the script — edit `deploy/deploy-all.sh` or override with env vars.
+
+**Prerequisites:** `docker login ghcr.io` locally, Docker on the Linux host, SSH access to both hosts.
+
 ### Option 2: Deploy to Remote Linux Host (via SSH)
 
 Deploy the full stack to a remote Docker host with a single command:
