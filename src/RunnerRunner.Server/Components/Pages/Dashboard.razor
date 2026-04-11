@@ -1,0 +1,97 @@
+@page "/"
+@using RunnerRunner.Server.Hubs
+@using Shiny.DocumentDb
+@rendermode InteractiveServer
+
+<PageTitle>Dashboard - RunnerRunner</PageTitle>
+
+<h1>🏃 RunnerRunner Dashboard</h1>
+
+<div class="row mt-4">
+    <div class="col-md-3">
+        <div class="card text-bg-primary mb-3">
+            <div class="card-body">
+                <h5 class="card-title">Connected Hosts</h5>
+                <p class="card-text display-4">@connectedHostCount</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-success mb-3">
+            <div class="card-body">
+                <h5 class="card-title">Running Instances</h5>
+                <p class="card-text display-4">@runningInstanceCount</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-info mb-3">
+            <div class="card-body">
+                <h5 class="card-title">Profiles</h5>
+                <p class="card-text display-4">@profileCount</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-warning mb-3">
+            <div class="card-body">
+                <h5 class="card-title">Env Var Sets</h5>
+                <p class="card-text display-4">@envVarSetCount</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h3 class="mt-4">Connected Agents</h3>
+@if (!connectedAgents.Any())
+{
+    <div class="alert alert-secondary">No agents connected. Deploy an agent on your host machines to get started.</div>
+}
+else
+{
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Platform</th>
+                <th>Architecture</th>
+                <th>Capabilities</th>
+                <th>Runners</th>
+                <th>Last Heartbeat</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var agent in connectedAgents)
+            {
+                <tr>
+                    <td>@agent.Value.AgentInfo.Name</td>
+                    <td>@agent.Value.AgentInfo.Platform</td>
+                    <td>@agent.Value.AgentInfo.Architecture</td>
+                    <td>@string.Join(", ", agent.Value.AgentInfo.Capabilities)</td>
+                    <td>@(agent.Value.LastMetrics?.RunningInstanceCount ?? 0)</td>
+                    <td>@(agent.Value.LastHeartbeat?.ToString("HH:mm:ss") ?? "—")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private int connectedHostCount;
+    private int runningInstanceCount;
+    private int profileCount;
+    private int envVarSetCount;
+    private IReadOnlyDictionary<string, ConnectedAgent> connectedAgents = new Dictionary<string, ConnectedAgent>();
+
+    [Inject] IDocumentStore Store { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        connectedAgents = AgentHub.GetConnectedAgents();
+        connectedHostCount = connectedAgents.Count;
+        runningInstanceCount = connectedAgents.Values
+            .Sum(a => a.LastMetrics?.RunningInstanceCount ?? 0);
+        profileCount = (await Store.Query<RunnerRunner.Core.Models.RunnerProfile>().ToList()).Count;
+        envVarSetCount = (await Store.Query<RunnerRunner.Core.Models.EnvironmentVariableSet>().ToList()).Count;
+    }
+}

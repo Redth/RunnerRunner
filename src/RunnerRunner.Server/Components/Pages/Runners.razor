@@ -1,0 +1,80 @@
+@page "/runners"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+
+<PageTitle>Runner Instances - RunnerRunner</PageTitle>
+
+<h1>Runner Instances</h1>
+<p>View all runner instances across connected hosts.</p>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Runner Name</th>
+            <th>Host</th>
+            <th>Profile</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Last Health Check</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (!instances.Any())
+        {
+            <tr><td colspan="7" class="text-center text-muted">No runner instances. Assign profiles to hosts to get started.</td></tr>
+        }
+        @foreach (var inst in instances)
+        {
+            <tr>
+                <td>@inst.RunnerName</td>
+                <td>@(hostNames.GetValueOrDefault(inst.HostId, inst.HostId))</td>
+                <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
+                <td><span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span></td>
+                <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
+                <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
+                <td>
+                    @if (inst.Status == RunnerInstanceStatus.Running)
+                    {
+                        <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst.Id)">Stop</button>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<RunnerInstance> instances = [];
+    private Dictionary<string, string> hostNames = new();
+    private Dictionary<string, string> profileNames = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        instances = (await Store.Query<RunnerInstance>().ToList()).ToList();
+        var hosts = (await Store.Query<Host>().ToList()).ToList();
+        var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        hostNames = hosts.ToDictionary(h => h.Id, h => h.Name);
+        profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
+    }
+
+    private Task StopInstance(string id)
+    {
+        // TODO: Send stop command via orchestration engine
+        return Task.CompletedTask;
+    }
+
+    private string GetStatusBadge(RunnerInstanceStatus status) => status switch
+    {
+        RunnerInstanceStatus.Running => "bg-success",
+        RunnerInstanceStatus.Starting => "bg-info",
+        RunnerInstanceStatus.Pending => "bg-secondary",
+        RunnerInstanceStatus.Stopping => "bg-warning",
+        RunnerInstanceStatus.Stopped => "bg-dark",
+        RunnerInstanceStatus.Failed => "bg-danger",
+        RunnerInstanceStatus.Crashed => "bg-danger",
+        _ => "bg-secondary"
+    };
+}

@@ -1,0 +1,171 @@
+@page "/envvarsets"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+
+<PageTitle>Environment Variable Sets - RunnerRunner</PageTitle>
+
+<h1>Environment Variable Sets</h1>
+<p>Create reusable sets of environment variables that can be composed into runner profiles.</p>
+
+<button class="btn btn-primary mb-3" @onclick="ShowCreateForm">+ New Set</button>
+
+@if (showForm)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">@(isEditing ? "Edit" : "Create") Environment Variable Set</h5>
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="editSet.Name" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Description</label>
+                    <input class="form-control" @bind="editSet.Description" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Priority (higher wins in composition)</label>
+                    <input type="number" class="form-control" @bind="editSet.Priority" />
+                </div>
+            </div>
+
+            <h6>Variables</h6>
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var kvp in editVariables)
+                    {
+                        <tr>
+                            <td><input class="form-control form-control-sm" value="@kvp.Key" @onchange="e => RenameKey(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td><input class="form-control form-control-sm" value="@kvp.Value" @onchange="e => UpdateValue(kvp.Key, e.Value?.ToString()!)" /></td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVariable(kvp.Key)">✕</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="row mb-3">
+                <div class="col-md-5">
+                    <input class="form-control form-control-sm" placeholder="KEY" @bind="newKey" />
+                </div>
+                <div class="col-md-5">
+                    <input class="form-control form-control-sm" placeholder="Value" @bind="newValue" />
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-sm btn-outline-success" @onclick="AddVariable">Add</button>
+                </div>
+            </div>
+
+            <button class="btn btn-success me-2" @onclick="SaveSet">Save</button>
+            <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
+        </div>
+    </div>
+}
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Priority</th>
+            <th>Variables</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var set in envVarSets)
+        {
+            <tr>
+                <td>@set.Name</td>
+                <td>@set.Description</td>
+                <td>@set.Priority</td>
+                <td>@set.Variables.Count variable(s)</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditSet(set)">Edit</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteSet(set.Id)">Delete</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<EnvironmentVariableSet> envVarSets = [];
+    private EnvironmentVariableSet editSet = new() { Name = "" };
+    private Dictionary<string, string> editVariables = new();
+    private bool showForm;
+    private bool isEditing;
+    private string newKey = "";
+    private string newValue = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        envVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+    }
+
+    private void ShowCreateForm()
+    {
+        editSet = new EnvironmentVariableSet { Name = "" };
+        editVariables = new();
+        isEditing = false;
+        showForm = true;
+    }
+
+    private void EditSet(EnvironmentVariableSet set)
+    {
+        editSet = set;
+        editVariables = new Dictionary<string, string>(set.Variables);
+        isEditing = true;
+        showForm = true;
+    }
+
+    private void AddVariable()
+    {
+        if (!string.IsNullOrWhiteSpace(newKey))
+        {
+            editVariables[newKey] = newValue;
+            newKey = "";
+            newValue = "";
+        }
+    }
+
+    private void RemoveVariable(string key) => editVariables.Remove(key);
+
+    private void RenameKey(string oldKey, string newKeyName)
+    {
+        if (editVariables.TryGetValue(oldKey, out var val))
+        {
+            editVariables.Remove(oldKey);
+            editVariables[newKeyName] = val;
+        }
+    }
+
+    private void UpdateValue(string key, string value) => editVariables[key] = value;
+
+    private async Task SaveSet()
+    {
+        editSet.Variables = new Dictionary<string, string>(editVariables);
+        editSet.UpdatedAt = DateTime.UtcNow;
+
+        if (isEditing)
+            await Store.Update(editSet);
+        else
+            await Store.Insert(editSet);
+
+        envVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+        showForm = false;
+    }
+
+    private async Task DeleteSet(string id)
+    {
+        await Store.Remove<EnvironmentVariableSet>(id);
+        envVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+    }
+}

@@ -1,0 +1,31 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Server/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - server-data:/app/data
+    environment:
+      - Database__Path=/app/data/runnerrunner.db
+      - ASPNETCORE_URLS=http://+:8080
+    restart: unless-stopped
+
+  # Example: local agent running on the same Docker host
+  agent-local:
+    build:
+      context: .
+      dockerfile: src/RunnerRunner.Agent/Dockerfile
+    environment:
+      - RunnerRunner__ServerUrl=http://server:8080
+      - RunnerRunner__AgentName=local-docker-host
+      - RunnerRunner__AgentToken=changeme
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  server-data:

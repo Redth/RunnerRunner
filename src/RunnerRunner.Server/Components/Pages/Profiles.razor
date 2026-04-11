@@ -1,0 +1,164 @@
+@page "/profiles"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+
+<PageTitle>Runner Profiles - RunnerRunner</PageTitle>
+
+<h1>Runner Profiles</h1>
+<p>Define runner configurations that can be deployed across hosts.</p>
+
+<button class="btn btn-primary mb-3" @onclick="ShowCreateForm">+ New Profile</button>
+
+@if (showForm)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">@(isEditing ? "Edit" : "Create") Profile</h5>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="editProfile.Name" />
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Description</label>
+                    <input class="form-control" @bind="editProfile.Description" />
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Provider</label>
+                    <select class="form-select" @bind="editProfile.Provider">
+                        @foreach (var p in Enum.GetValues<RunnerProvider>())
+                        {
+                            <option value="@p">@p</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Host Platform</label>
+                    <select class="form-select" @bind="editProfile.RequiredHostPlatform">
+                        @foreach (var p in Enum.GetValues<HostPlatform>())
+                        {
+                            <option value="@p">@p</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Execution Backend</label>
+                    <select class="form-select" @bind="editProfile.ExecutionBackend">
+                        @foreach (var b in Enum.GetValues<ExecutionBackend>())
+                        {
+                            <option value="@b">@b</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Max Parallel Per Host</label>
+                    <input type="number" class="form-control" @bind="editProfile.MaxParallelPerHost" min="1" />
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Labels (comma-separated)</label>
+                    <input class="form-control" @bind="labelsInput" />
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Runner Group</label>
+                    <input class="form-control" @bind="editProfile.RunnerGroup" />
+                </div>
+                <div class="col-md-3 mb-3 d-flex align-items-end">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" @bind="editProfile.Ephemeral" id="ephemeralCheck" />
+                        <label class="form-check-label" for="ephemeralCheck">Ephemeral (single-use)</label>
+                    </div>
+                </div>
+            </div>
+            <button class="btn btn-success me-2" @onclick="SaveProfile">Save</button>
+            <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
+        </div>
+    </div>
+}
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Provider</th>
+            <th>Platform</th>
+            <th>Backend</th>
+            <th>Labels</th>
+            <th>Max Parallel</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var profile in profiles)
+        {
+            <tr>
+                <td>@profile.Name</td>
+                <td>@profile.Provider</td>
+                <td>@profile.RequiredHostPlatform</td>
+                <td>@profile.ExecutionBackend</td>
+                <td>@string.Join(", ", profile.Labels)</td>
+                <td>@profile.MaxParallelPerHost</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)">Edit</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteProfile(profile.Id)">Delete</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<RunnerProfile> profiles = [];
+    private RunnerProfile editProfile = new() { Name = "" };
+    private bool showForm;
+    private bool isEditing;
+    private string labelsInput = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+    }
+
+    private void ShowCreateForm()
+    {
+        editProfile = new RunnerProfile { Name = "" };
+        labelsInput = "";
+        isEditing = false;
+        showForm = true;
+    }
+
+    private void EditProfile(RunnerProfile profile)
+    {
+        editProfile = profile;
+        labelsInput = string.Join(", ", profile.Labels);
+        isEditing = true;
+        showForm = true;
+    }
+
+    private async Task SaveProfile()
+    {
+        editProfile.Labels = labelsInput
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        editProfile.UpdatedAt = DateTime.UtcNow;
+
+        if (isEditing)
+            await Store.Update(editProfile);
+        else
+            await Store.Insert(editProfile);
+
+        profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        showForm = false;
+    }
+
+    private async Task DeleteProfile(string id)
+    {
+        await Store.Remove<RunnerProfile>(id);
+        profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+    }
+}

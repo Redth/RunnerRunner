@@ -1,0 +1,11 @@
+﻿@page "/home"
+
+<PageTitle>RunnerRunner</PageTitle>
+
+<p>Redirecting to dashboard...</p>
+
+@code {
+    [Inject] NavigationManager Nav { get; set; } = default!;
+
+    protected override void OnInitialized() => Nav.NavigateTo("/", forceLoad: false);
+}

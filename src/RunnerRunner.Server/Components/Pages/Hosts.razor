@@ -1,0 +1,92 @@
+@page "/hosts"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+
+<PageTitle>Hosts - RunnerRunner</PageTitle>
+
+<h1>Hosts</h1>
+<p>Manage host machines running RunnerRunner agents.</p>
+
+<div class="mb-3">
+    <button class="btn btn-primary" @onclick="GenerateEnrollmentToken">
+        Generate Enrollment Token
+    </button>
+    @if (!string.IsNullOrEmpty(newToken))
+    {
+        <div class="alert alert-success mt-2">
+            <strong>Enrollment Token:</strong> <code>@newToken</code>
+            <br /><small>Use this token when starting a new agent to register it with this server.</small>
+        </div>
+    }
+</div>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Platform</th>
+            <th>Status</th>
+            <th>Architecture</th>
+            <th>Capabilities</th>
+            <th>Last Heartbeat</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var host in hosts)
+        {
+            <tr>
+                <td>@host.Name</td>
+                <td>@host.Platform</td>
+                <td>
+                    <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
+                </td>
+                <td>@host.Architecture</td>
+                <td>@string.Join(", ", host.Capabilities)</td>
+                <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
+                <td>
+                    <button class="btn btn-sm btn-danger" @onclick="() => RemoveHost(host.Id)">Remove</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<Host> hosts = [];
+    private string? newToken;
+
+    protected override async Task OnInitializedAsync()
+    {
+        hosts = (await Store.Query<Host>().ToList()).ToList();
+    }
+
+    private async Task GenerateEnrollmentToken()
+    {
+        newToken = Guid.NewGuid().ToString("N")[..16];
+        var host = new Host
+        {
+            Name = $"pending-{newToken[..8]}",
+            EnrollmentToken = newToken,
+            IsApproved = false
+        };
+        await Store.Insert(host);
+        hosts = (await Store.Query<Host>().ToList()).ToList();
+    }
+
+    private async Task RemoveHost(string id)
+    {
+        await Store.Remove<Host>(id);
+        hosts = (await Store.Query<Host>().ToList()).ToList();
+    }
+
+    private string GetStatusBadge(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => "bg-success",
+        AgentStatus.Connecting => "bg-warning",
+        AgentStatus.Offline => "bg-secondary",
+        _ => "bg-secondary"
+    };
+}

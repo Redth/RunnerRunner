@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RunnerRunner.Agent/RunnerRunner.Agent.csproj" />
+    <Project Path="src/RunnerRunner.Core/RunnerRunner.Core.csproj" />
+    <Project Path="src/RunnerRunner.Server/RunnerRunner.Server.csproj" />
+  </Folder>
+</Solution>

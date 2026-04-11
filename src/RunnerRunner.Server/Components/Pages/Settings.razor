@@ -1,0 +1,171 @@
+@page "/settings"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+
+<PageTitle>Settings - RunnerRunner</PageTitle>
+
+<h1>Settings</h1>
+
+<h3 class="mt-4">Provider Credentials</h3>
+<p>Configure CI/CD provider credentials for runner registration.</p>
+
+<button class="btn btn-primary mb-3" @onclick="ShowCreateForm">+ Add Credential</button>
+
+@if (showForm)
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">@(isEditing ? "Edit" : "Add") Provider Credential</h5>
+            <div class="row mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">Name</label>
+                    <input class="form-control" @bind="editCred.Name" />
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Provider</label>
+                    <select class="form-select" @bind="editCred.Provider">
+                        @foreach (var p in Enum.GetValues<RunnerProvider>())
+                        {
+                            <option value="@p">@p</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            @if (editCred.Provider == RunnerProvider.GitHubActions)
+            {
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">GitHub Org</label>
+                        <input class="form-control" @bind="editCred.GitHubOrg" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">GitHub Repo (optional)</label>
+                        <input class="form-control" @bind="editCred.GitHubRepo" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">GitHub Token (PAT)</label>
+                        <input type="password" class="form-control" @bind="editCred.GitHubToken" />
+                    </div>
+                </div>
+            }
+            else if (editCred.Provider == RunnerProvider.GiteaActions)
+            {
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Gitea Instance URL</label>
+                        <input class="form-control" @bind="editCred.GiteaInstanceUrl" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Gitea Runner Token</label>
+                        <input type="password" class="form-control" @bind="editCred.GiteaRunnerToken" />
+                    </div>
+                </div>
+            }
+            else if (editCred.Provider == RunnerProvider.AzureDevOps)
+            {
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label">AzDO Org URL</label>
+                        <input class="form-control" @bind="editCred.AzDoOrgUrl" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Project Name</label>
+                        <input class="form-control" @bind="editCred.AzDoProjectName" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Pool Name</label>
+                        <input class="form-control" @bind="editCred.AzDoPoolName" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">PAT</label>
+                        <input type="password" class="form-control" @bind="editCred.AzDoPat" />
+                    </div>
+                </div>
+            }
+
+            <button class="btn btn-success me-2" @onclick="SaveCredential">Save</button>
+            <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
+        </div>
+    </div>
+}
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Provider</th>
+            <th>Details</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var cred in credentials)
+        {
+            <tr>
+                <td>@cred.Name</td>
+                <td>@cred.Provider</td>
+                <td>@GetCredentialSummary(cred)</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditCredential(cred)">Edit</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteCredential(cred.Id)">Delete</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<ProviderCredential> credentials = [];
+    private ProviderCredential editCred = new() { Name = "" };
+    private bool showForm;
+    private bool isEditing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
+    }
+
+    private void ShowCreateForm()
+    {
+        editCred = new ProviderCredential { Name = "" };
+        isEditing = false;
+        showForm = true;
+    }
+
+    private void EditCredential(ProviderCredential cred)
+    {
+        editCred = cred;
+        isEditing = true;
+        showForm = true;
+    }
+
+    private async Task SaveCredential()
+    {
+        editCred.UpdatedAt = DateTime.UtcNow;
+
+        if (isEditing)
+            await Store.Update(editCred);
+        else
+            await Store.Insert(editCred);
+
+        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
+        showForm = false;
+    }
+
+    private async Task DeleteCredential(string id)
+    {
+        await Store.Remove<ProviderCredential>(id);
+        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
+    }
+
+    private string GetCredentialSummary(ProviderCredential cred) => cred.Provider switch
+    {
+        RunnerProvider.GitHubActions => $"{cred.GitHubOrg}/{cred.GitHubRepo ?? "*"}",
+        RunnerProvider.GiteaActions => cred.GiteaInstanceUrl ?? "",
+        RunnerProvider.AzureDevOps => $"{cred.AzDoOrgUrl} / {cred.AzDoProjectName}",
+        _ => ""
+    };
+}
