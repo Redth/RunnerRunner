@@ -13,6 +13,10 @@
     <key>WorkingDirectory</key>
     <string>/opt/runnerrunner</string>
 
+    <!-- Run as the deploy user so tart/docker see the user's images -->
+    <key>UserName</key>
+    <string>redth</string>
+
     <!-- Start on boot -->
     <key>RunAtLoad</key>
     <true/>
