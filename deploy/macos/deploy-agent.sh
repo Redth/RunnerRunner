@@ -96,16 +96,16 @@ _ssh "mkdir -p ${INSTALL_DIR}"
 
 # --- Step 4: Stop existing service if running ---
 log "Stopping existing agent service (if any)..."
-_ssh "launchctl bootout system/${PLIST_NAME%.plist} 2>/dev/null || true"
+_ssh "sudo launchctl bootout system/${PLIST_NAME%.plist} 2>/dev/null || true"
 
 # --- Step 5: Copy files to remote host ---
 log "Copying agent binary and config to ${HOST}:${INSTALL_DIR}..."
 _scp "${PUBLISH_DIR}" "${INSTALL_DIR}"
 
 log "Copying launchd plist..."
-_scp "${SCRIPT_DIR}/${PLIST_NAME}" "${PLIST_DEST}"
+_scp "${SCRIPT_DIR}/${PLIST_NAME}" "/tmp/${PLIST_NAME}"
 
-# --- Step 6: Set permissions ---
+# --- Step 6: Set permissions and install plist ---
 _ssh bash <<REMOTE_EOF
 # Move files from nested directory to install dir if needed
 if [[ -d "${INSTALL_DIR}/macos-agent" ]]; then
@@ -113,13 +113,16 @@ if [[ -d "${INSTALL_DIR}/macos-agent" ]]; then
     rmdir ${INSTALL_DIR}/macos-agent
 fi
 chmod +x ${INSTALL_DIR}/RunnerRunner.Agent
-chown root:wheel /Library/LaunchDaemons/com.runnerrunner.agent.plist
-chmod 644 /Library/LaunchDaemons/com.runnerrunner.agent.plist
+
+# Install plist (needs sudo for /Library/LaunchDaemons)
+sudo mv /tmp/${PLIST_NAME} ${PLIST_DEST}
+sudo chown root:wheel ${PLIST_DEST}
+sudo chmod 644 ${PLIST_DEST}
 REMOTE_EOF
 
 # --- Step 7: Load and start the service ---
 log "Loading launchd service..."
-_ssh "launchctl bootstrap system ${PLIST_DEST}"
+_ssh "sudo launchctl bootstrap system ${PLIST_DEST}"
 
 log ""
 log "✅ RunnerRunner Agent deployed to ${HOST}"
