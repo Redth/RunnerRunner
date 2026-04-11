@@ -71,7 +71,7 @@
         instances = (await Store.Query<RunnerInstance>().ToList()).ToList();
         var hosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
-        hostNames = hosts.ToDictionary(h => h.Id, h => h.Name);
+        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
     }
 

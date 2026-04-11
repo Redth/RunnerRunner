@@ -40,7 +40,25 @@
         {
             var hostAssignments = assignments.Where(a => a.HostId == host.Id).ToList();
             <tr>
-                <td>@host.Name</td>
+                <td>
+                    @if (renamingHostId == host.Id)
+                    {
+                        <div class="d-flex gap-1">
+                            <input class="form-control form-control-sm" style="width: 140px" @bind="renameValue" @onkeydown="e => OnRenameKeyDown(e, host)" />
+                            <button class="btn btn-sm btn-success" @onclick="() => SaveRename(host)" title="Save"><i class="bi bi-check-lg"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="CancelRename" title="Cancel"><i class="bi bi-x-lg"></i></button>
+                        </div>
+                    }
+                    else
+                    {
+                        <span>@host.Label</span>
+                        @if (!string.IsNullOrWhiteSpace(host.DisplayName))
+                        {
+                            <br/><small class="text-muted">@host.Name</small>
+                        }
+                        <button class="btn btn-sm btn-link p-0 ms-1" @onclick="() => StartRename(host)" title="Rename"><i class="bi bi-pencil"></i></button>
+                    }
+                </td>
                 <td>@host.Platform</td>
                 <td>
                     <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
@@ -133,6 +151,32 @@
     private string assignProfileId = "";
     private int assignCount = 1;
     private List<RunnerProfile> compatibleProfiles = [];
+
+    // Rename
+    private string? renamingHostId;
+    private string renameValue = "";
+
+    private void StartRename(Host host)
+    {
+        renamingHostId = host.Id;
+        renameValue = host.DisplayName ?? "";
+    }
+
+    private void CancelRename() => renamingHostId = null;
+
+    private async Task SaveRename(Host host)
+    {
+        host.DisplayName = string.IsNullOrWhiteSpace(renameValue) ? null : renameValue.Trim();
+        host.UpdatedAt = DateTime.UtcNow;
+        await Store.Update(host);
+        renamingHostId = null;
+    }
+
+    private async Task OnRenameKeyDown(KeyboardEventArgs e, Host host)
+    {
+        if (e.Key == "Enter") await SaveRename(host);
+        if (e.Key == "Escape") CancelRename();
+    }
 
     protected override async Task OnInitializedAsync()
     {

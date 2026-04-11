@@ -4,6 +4,14 @@ public class Host
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public required string Name { get; set; }
+
+    /// <summary>
+    /// Optional friendly name / alias. Shown in UI when set, falls back to Name.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
+    /// <summary>Returns DisplayName if set, otherwise Name.</summary>
+    public string Label => string.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName;
     public HostPlatform Platform { get; set; }
     public AgentStatus AgentStatus { get; set; } = AgentStatus.Offline;
     public DateTime? LastHeartbeat { get; set; }

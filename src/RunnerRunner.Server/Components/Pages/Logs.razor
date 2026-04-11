@@ -22,7 +22,7 @@
             <option value="server">Server (overview)</option>
             @foreach (var h in hosts)
             {
-                <option value="agent:@h.Name">Agent: @h.Name (@h.Platform)</option>
+                <option value="agent:@h.Name">Agent: @h.Label (@h.Platform)</option>
             }
             @foreach (var inst in runnerInstances)
             {
@@ -87,7 +87,7 @@
         runnerInstances = (await Store.Query<RunnerInstance>().ToList())
             .Where(i => i.Status == RunnerInstanceStatus.Running || i.Status == RunnerInstanceStatus.Starting)
             .ToList();
-        hostNames = hosts.ToDictionary(h => h.Id, h => h.Name);
+        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
         AgentHub.OnRunnerLogsReceived += OnRunnerLogsReceived;
 
         // Check for query string parameter
