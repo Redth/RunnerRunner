@@ -7,14 +7,17 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>-l</string>
-        <string>-c</string>
-        <string>exec /opt/runnerrunner/RunnerRunner.Agent</string>
+        <string>/opt/runnerrunner/RunnerRunner.Agent</string>
     </array>
 
     <key>WorkingDirectory</key>
     <string>/opt/runnerrunner</string>
+
+    <!-- Ensure full user session with network access -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>SessionCreate</key>
+    <true/>
 
     <!-- Start on login -->
     <key>RunAtLoad</key>

@@ -37,7 +37,31 @@ public class SignalRConnection : IAsyncDisposable
 
         var hubUrl = $"{serverUrl.TrimEnd('/')}/hubs/agent";
 
-        _connection = new HubConnectionBuilder()
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                // Recreate connection for each attempt to avoid stale state
+                _connection = BuildConnection(hubUrl);
+                await _connection.StartAsync(ct);
+                _logger.LogInformation("Connected to RunnerRunner server at {Url}", hubUrl);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to connect to server, retrying in 5 seconds... {Error}", ex.Message);
+                try { await Task.Delay(5000, ct); } catch (OperationCanceledException) { return; }
+            }
+        }
+    }
+
+    private HubConnection BuildConnection(string hubUrl)
+    {
+        var connection = new HubConnectionBuilder()
             .WithUrl(hubUrl, options =>
             {
                 var token = _configuration["RunnerRunner:AgentToken"];
@@ -47,80 +71,65 @@ public class SignalRConnection : IAsyncDisposable
                 }
 
                 // Use ServerSentEvents transport — WebSockets fail under macOS launchd
-                // due to socket-level "No route to host" errors that don't affect HTTP
                 options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.ServerSentEvents;
             })
             .WithAutomaticReconnect(new RetryPolicy())
             .Build();
 
-        // Register server → agent handlers
-        _connection.On<DeployRunnerCommand>("DeployRunner", async cmd =>
+        connection.On<DeployRunnerCommand>("DeployRunner", async cmd =>
         {
             if (OnDeployRunner != null) await OnDeployRunner(cmd);
         });
 
-        _connection.On<StopRunnerCommand>("StopRunner", async cmd =>
+        connection.On<StopRunnerCommand>("StopRunner", async cmd =>
         {
             if (OnStopRunner != null) await OnStopRunner(cmd);
         });
 
-        _connection.On<SyncDesiredStateCommand>("SyncDesiredState", async cmd =>
+        connection.On<SyncDesiredStateCommand>("SyncDesiredState", async cmd =>
         {
             if (OnSyncDesiredState != null) await OnSyncDesiredState(cmd);
         });
 
-        _connection.On<PullImageCommand>("PullImage", async cmd =>
+        connection.On<PullImageCommand>("PullImage", async cmd =>
         {
             if (OnPullImage != null) await OnPullImage(cmd);
         });
 
-        _connection.On<ListImagesCommand>("ListImages", async cmd =>
+        connection.On<ListImagesCommand>("ListImages", async cmd =>
         {
             if (OnListImages != null) await OnListImages(cmd);
         });
 
-        _connection.On<DeleteImageCommand>("DeleteImage", async cmd =>
+        connection.On<DeleteImageCommand>("DeleteImage", async cmd =>
         {
             if (OnDeleteImage != null) await OnDeleteImage(cmd);
         });
 
-        _connection.On<LoginRegistryCommand>("LoginRegistry", async cmd =>
+        connection.On<LoginRegistryCommand>("LoginRegistry", async cmd =>
         {
             if (OnLoginRegistry != null) await OnLoginRegistry(cmd);
         });
 
-        _connection.Reconnecting += error =>
+        connection.Reconnecting += error =>
         {
             _logger.LogWarning(error, "Connection lost, reconnecting...");
             return Task.CompletedTask;
         };
 
-        _connection.Reconnected += connectionId =>
+        connection.Reconnected += connectionId =>
         {
             _logger.LogInformation("Reconnected with connection ID: {ConnectionId}", connectionId);
             return Task.CompletedTask;
         };
 
-        _connection.Closed += error =>
+        connection.Closed += error =>
         {
             _logger.LogWarning(error, "Connection closed");
             return Task.CompletedTask;
         };
 
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await _connection.StartAsync(ct);
-                _logger.LogInformation("Connected to RunnerRunner server at {Url}", hubUrl);
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to connect to server, retrying in 5 seconds...");
-                await Task.Delay(5000, ct);
-            }
-        }
+        return connection;
     }
 
     public async Task SendAgentConnected(AgentInfo info)
