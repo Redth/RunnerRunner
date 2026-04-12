@@ -68,6 +68,7 @@ public class AgentService : BackgroundService
         _signalR.OnLoginRegistry += HandleLoginRegistry;
         _signalR.OnGetHostEnvironment += HandleGetHostEnvironment;
         _signalR.OnGetRunnerLogs += HandleGetRunnerLogs;
+        _signalR.OnCleanupOrphan += HandleCleanupOrphan;
         _signalR.OnReconnected += RegisterWithServer;
 
         // Connect to server
@@ -93,6 +94,16 @@ public class AgentService : BackgroundService
                         Status = RunnerInstanceStatus.Running,
                         CheckedAt = DateTime.UtcNow
                     });
+                }
+                // Reconciliation: report actual state to server
+                try
+                {
+                    var report = await CollectReconciliationReport();
+                    await _signalR.SendReconciliation(report);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to send reconciliation report");
                 }
             }
             catch (Exception ex)
@@ -455,6 +466,108 @@ public class AgentService : BackgroundService
         var allLines = await File.ReadAllLinesAsync(filePath);
         var tail = allLines.Skip(Math.Max(0, allLines.Length - lineCount));
         return string.Join("\n", tail);
+    }
+
+    private async Task<ReconciliationReport> CollectReconciliationReport()
+    {
+        var runners = new List<DiscoveredRunnerInfo>();
+
+        // Docker
+        if (_dockerBackend is Backends.DockerBackend docker)
+        {
+            try
+            {
+                var discovered = await docker.DiscoverManagedContainersAsync();
+                runners.AddRange(discovered.Select(d => new DiscoveredRunnerInfo
+                {
+                    InstanceId = d.InstanceId,
+                    RunnerName = d.RunnerName,
+                    ContainerId = d.ContainerId,
+                    Backend = d.Backend,
+                    IsRunning = d.IsRunning,
+                    Status = d.Status
+                }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Docker discovery failed during reconciliation");
+            }
+        }
+
+        // Tart
+        if (_tartBackend is Backends.TartBackend tart)
+        {
+            try
+            {
+                var discovered = await tart.DiscoverManagedVmsAsync();
+                runners.AddRange(discovered.Select(d => new DiscoveredRunnerInfo
+                {
+                    InstanceId = d.InstanceId,
+                    RunnerName = d.RunnerName,
+                    VmName = d.VmName,
+                    Backend = d.Backend,
+                    IsRunning = d.IsRunning,
+                    Status = d.Status
+                }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Tart discovery failed during reconciliation");
+            }
+        }
+
+        // Native
+        if (_nativeBackend is Backends.NativeBackend native)
+        {
+            try
+            {
+                var discovered = await native.DiscoverManagedProcessesAsync();
+                runners.AddRange(discovered.Select(d => new DiscoveredRunnerInfo
+                {
+                    InstanceId = d.InstanceId,
+                    RunnerName = d.RunnerName,
+                    ProcessId = d.ProcessId,
+                    Backend = d.Backend,
+                    IsRunning = d.IsRunning,
+                    Status = d.Status
+                }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Native discovery failed during reconciliation");
+            }
+        }
+
+        return new ReconciliationReport
+        {
+            HostId = _agentId,
+            Runners = runners
+        };
+    }
+
+    private async Task HandleCleanupOrphan(CleanupOrphanCommand command)
+    {
+        _logger.LogInformation("Cleaning up orphaned {Backend} resource: container={Container}, vm={Vm}, pid={Pid}",
+            command.Backend, command.ContainerId, command.VmName, command.ProcessId);
+        try
+        {
+            switch (command.Backend)
+            {
+                case ExecutionBackend.Docker when _dockerBackend is Backends.DockerBackend docker && command.ContainerId != null:
+                    await docker.CleanupOrphanContainerAsync(command.ContainerId);
+                    break;
+                case ExecutionBackend.Tart when _tartBackend is Backends.TartBackend tart && command.VmName != null:
+                    await tart.StopRunnerAsync(command.VmName);
+                    break;
+                case ExecutionBackend.Native when _nativeBackend is Backends.NativeBackend native && command.ProcessId.HasValue:
+                    await native.CleanupOrphanProcessAsync(command.ProcessId.Value, command.InstanceDir);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to cleanup orphaned resource");
+        }
     }
 
     private async Task RegisterWithServer()
