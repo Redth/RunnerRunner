@@ -52,7 +52,7 @@
         </div>
     </div>
     <div class="col-md-3">
-        <div class="card text-bg-dark mb-3">
+        <div class="card text-bg-info mb-3">
             <div class="card-body">
                 <h5 class="card-title"><i class="bi bi-broadcast-pin me-1"></i> Webhook Events (1h)</h5>
                 <p class="card-text display-4">@recentWebhookEventCount</p>
@@ -152,8 +152,6 @@ else
     {
         connectedAgents = AgentHub.GetConnectedAgents();
         connectedHostCount = connectedAgents.Count;
-        runningInstanceCount = connectedAgents.Values
-            .Sum(a => a.LastMetrics?.RunningInstanceCount ?? 0);
 
         var profiles = (await Store.Query<RunnerRunner.Core.Models.RunnerProfile>().ToList()).ToList();
         profileCount = profiles.Count;
@@ -163,6 +161,11 @@ else
         assignments = (await Store.Query<RunnerRunner.Core.Models.RunnerAssignment>().ToList()).ToList();
 
         var allInstances = (await Store.Query<RunnerRunner.Core.Models.RunnerInstance>().ToList()).ToList();
+
+        runningInstanceCount = allInstances.Count(i =>
+            i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Running
+            || i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Starting);
+
         dynamicRunnerCount = allInstances.Count(i =>
             i.ProvisioningMode == "dynamic"
             && (i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Running
