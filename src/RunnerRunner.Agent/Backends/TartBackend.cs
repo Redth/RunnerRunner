@@ -190,7 +190,7 @@ public class TartBackend : IRunnerBackend
             .Select(kv => $"export {kv.Key}='{EscapeShell(kv.Value)}'"));
 
         // Determine runner version and download URL
-        var version = request.RunnerAgentVersion ?? "2.321.0";
+        var version = request.RunnerAgentVersion ?? "2.333.1";
         var arch = "arm64"; // Tart VMs are always Apple Silicon
         var runnerTar = $"actions-runner-osx-{arch}-{version}.tar.gz";
         var downloadUrl = request.Provider switch
@@ -244,28 +244,10 @@ public class TartBackend : IRunnerBackend
                 $"nohup ./run.sh --jitconfig \"$JIT_CONFIG\" > /tmp/runner.log 2>&1 &";
             await SshExec(sshUser, vmIp, sshPassword, jitScript, ct);
 
-            // Verify it started
-            await Task.Delay(3000, ct);
-            var checkResult = await RunCommandAsync(
-                string.IsNullOrEmpty(sshPassword) ? "ssh" : "sshpass",
-                string.IsNullOrEmpty(sshPassword)
-                    ? $"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} pgrep -f Runner.Listener"
-                    : $"-p {EscapeShell(sshPassword)} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} pgrep -f Runner.Listener",
-                ct);
-
-            if (checkResult.ExitCode == 0)
-                _logger.LogInformation("Runner process confirmed running in VM (PID: {Pid})", checkResult.Output.Trim());
-            else
-            {
-                // Log what went wrong
-                var logResult = await RunCommandAsync(
-                    string.IsNullOrEmpty(sshPassword) ? "ssh" : "sshpass",
-                    string.IsNullOrEmpty(sshPassword)
-                        ? $"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} cat /tmp/runner.log"
-                        : $"-p {EscapeShell(sshPassword)} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} cat /tmp/runner.log",
-                    ct);
-                _logger.LogError("Runner failed to start in VM. runner.log: {Log}", logResult.Output);
-            }
+            // Wait a moment, then check the log for confirmation
+            await Task.Delay(5000, ct);
+            await SshExec(sshUser, vmIp, sshPassword,
+                "echo '--- Runner process check ---' && pgrep -f Runner.Listener && echo 'Runner is running' || echo 'Runner process not found' && echo '--- runner.log tail ---' && tail -5 /tmp/runner.log 2>/dev/null || echo 'No runner.log'", ct);
         }
         else
         {
@@ -287,7 +269,7 @@ public class TartBackend : IRunnerBackend
             await SshExec(sshUser, vmIp, sshPassword, runScript, ct);
         }
 
-        _logger.LogInformation("Runner started in Tart VM {VM}", $"rr-{request.RunnerName}");
+        _logger.LogInformation("Runner started in Tart VM for {RunnerName}", request.RunnerName);
     }
 
     private async Task SetupGiteaRunnerViaSsh(
