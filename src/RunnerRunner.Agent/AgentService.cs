@@ -357,17 +357,10 @@ public class AgentService : BackgroundService
                 catch { /* Not a Docker container */ }
             }
 
-            // If no Docker logs, try native backend log file
+            // If no Docker logs, try native backend log files
             if (string.IsNullOrEmpty(logs) && _nativeBackend is Backends.NativeBackend native)
             {
-                var logFile = native.GetLogFilePath(command.InstanceHandle);
-                if (logFile != null && File.Exists(logFile))
-                {
-                    var allLines = await File.ReadAllLinesAsync(logFile);
-                    var tailCount = command.TailLines > 0 ? command.TailLines : 100;
-                    var tail = allLines.Skip(Math.Max(0, allLines.Length - tailCount));
-                    logs = string.Join("\n", tail);
-                }
+                logs = await GetNativeRunnerLogs(native, command.InstanceHandle, command.TailLines);
             }
 
             if (string.IsNullOrEmpty(logs))
@@ -390,6 +383,78 @@ public class AgentService : BackgroundService
                 Logs = $"Error fetching logs: {ex.Message}"
             });
         }
+    }
+
+    private async Task<string> GetNativeRunnerLogs(Backends.NativeBackend native, string instanceHandle, int tailLines)
+    {
+        var tailCount = tailLines > 0 ? tailLines : 100;
+        var logLines = new List<string>();
+
+        // 1. Try direct lookup by PID handle (works if same agent session)
+        var logFile = native.GetLogFilePath(instanceHandle);
+        if (logFile != null && File.Exists(logFile))
+            return await ReadTailLines(logFile, tailCount);
+
+        // 2. Search instance directories by runner name (handle may be runner name)
+        var basePath = _configuration["Runner:BasePath"]
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
+        var instancesDir = Path.Combine(basePath, "instances");
+
+        if (!Directory.Exists(instancesDir))
+            return "";
+
+        // Find instance dir matching the handle (could be runner name like "ailoha-macos-056ee04b")
+        var matchingDir = Directory.GetDirectories(instancesDir)
+            .FirstOrDefault(d => Path.GetFileName(d).Equals(instanceHandle, StringComparison.OrdinalIgnoreCase)
+                              || Path.GetFileName(d).Contains(instanceHandle, StringComparison.OrdinalIgnoreCase));
+
+        // If no match by name, search all instance dirs for any
+        if (matchingDir == null)
+        {
+            // Try matching by iterating — the handle might be a partial name
+            foreach (var dir in Directory.GetDirectories(instancesDir))
+            {
+                if (File.Exists(Path.Combine(dir, "runner.log")) ||
+                    Directory.Exists(Path.Combine(dir, "_diag")))
+                {
+                    matchingDir = dir;
+                    break;
+                }
+            }
+        }
+
+        if (matchingDir == null)
+            return "";
+
+        // 3. Check runner.log (our piped output)
+        var runnerLog = Path.Combine(matchingDir, "runner.log");
+        if (File.Exists(runnerLog))
+            logLines.AddRange((await ReadTailLines(runnerLog, tailCount)).Split('\n'));
+
+        // 4. Check _diag/ directory (runner's own diagnostic logs)
+        var diagDir = Path.Combine(matchingDir, "_diag");
+        if (Directory.Exists(diagDir))
+        {
+            var diagFiles = Directory.GetFiles(diagDir, "*.log")
+                .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+                .Take(2); // Latest runner + worker logs
+
+            foreach (var diagFile in diagFiles)
+            {
+                var fileName = Path.GetFileName(diagFile);
+                logLines.Add($"\n--- {fileName} ---");
+                logLines.Add(await ReadTailLines(diagFile, tailCount / 2));
+            }
+        }
+
+        return logLines.Count > 0 ? string.Join("\n", logLines) : "";
+    }
+
+    private static async Task<string> ReadTailLines(string filePath, int lineCount)
+    {
+        var allLines = await File.ReadAllLinesAsync(filePath);
+        var tail = allLines.Skip(Math.Max(0, allLines.Length - lineCount));
+        return string.Join("\n", tail);
     }
 
     private async Task RegisterWithServer()
