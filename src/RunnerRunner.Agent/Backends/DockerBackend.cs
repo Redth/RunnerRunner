@@ -98,6 +98,10 @@ public class DockerBackend : IRunnerBackend
             var imageInspect = await _client.Images.InspectImageAsync(imageName, ct);
             var originalEntrypoint = imageInspect.Config?.Entrypoint;
             var originalCmd = imageInspect.Config?.Cmd;
+            var imageShell = imageInspect.Config?.Shell;
+
+            // Detect which shell the image uses
+            var shell = DetectShell(originalEntrypoint, originalCmd, imageShell);
 
             // Build the exec chain to call after JIT setup
             var execParts = new List<string>();
@@ -108,7 +112,7 @@ public class DockerBackend : IRunnerBackend
 
             var execChain = execParts.Count > 0
                 ? "exec " + string.Join(" ", execParts.Select(p => $"\"{p}\""))
-                : "exec /bin/sh -c 'echo No original entrypoint found; sleep infinity'";
+                : $"exec {shell} -c 'echo No original entrypoint found; sleep infinity'";
 
             // The wrapper script:
             // 1. Finds run.sh in common locations
@@ -123,12 +127,11 @@ public class DockerBackend : IRunnerBackend
                 $"  echo \"[RunnerRunner] Falling back to original entrypoint\"; {execChain}; " +
                 "fi";
 
-            createParams.Entrypoint = new List<string> { "/bin/sh", "-c", wrapperScript };
-            // Clear Cmd so it doesn't append to our entrypoint
+            createParams.Entrypoint = new List<string> { shell, "-c", wrapperScript };
             createParams.Cmd = new List<string>();
 
-            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} (original: {Original})",
-                imageName, string.Join(" ", execParts));
+            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} (shell: {Shell}, original: {Original})",
+                imageName, shell, string.Join(" ", execParts));
         }
 
         var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
@@ -234,5 +237,27 @@ public class DockerBackend : IRunnerBackend
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Detect the shell available in the image by inspecting its SHELL config,
+    /// entrypoint, and cmd. Prefers /bin/bash if the image uses it, falls back to /bin/sh.
+    /// </summary>
+    private static string DetectShell(IList<string>? entrypoint, IList<string>? cmd, IList<string>? shell)
+    {
+        // 1. Check SHELL instruction from Dockerfile (most authoritative)
+        if (shell?.Count > 0 && shell[0].Contains("sh"))
+            return shell[0];
+
+        // 2. Check if entrypoint/cmd reference bash
+        var allParts = new List<string>();
+        if (entrypoint != null) allParts.AddRange(entrypoint);
+        if (cmd != null) allParts.AddRange(cmd);
+
+        if (allParts.Any(p => p.Contains("/bash") || p == "bash"))
+            return "/bin/bash";
+
+        // 3. Default to /bin/sh (POSIX, most portable)
+        return "/bin/sh";
     }
 }
