@@ -139,7 +139,7 @@ services:
       - Database__Path=/app/data/runnerrunner.db
       - ASPNETCORE_URLS=http://+:${SERVER_PORT}
     labels:
-      - "npm.proxy.domain=runnerrunner.jjagd.net"
+      - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=${SERVER_PORT}"
       - "npm.proxy.ssl.force=true"
     restart: unless-stopped
@@ -215,7 +215,7 @@ fi # end macos
 log "Deploy complete!"
 echo ""
 echo "  Server:       http://${LINUX_HOST}:${SERVER_PORT}"
-echo "  Server:       https://runnerrunner.jjagd.net (via NPM)"
+echo "  Server:       https://r2.jjagd.net (via NPM)"
 echo "  Linux Agent:  Docker container on ${LINUX_HOST}"
 echo "  macOS Agent:  launchd service on ${MACOS_HOST}"
 echo ""
