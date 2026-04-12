@@ -10,205 +10,259 @@
 @implements IDisposable
 
 <PageTitle>Images - RunnerRunner</PageTitle>
-
-<h1><i class="bi bi-box-seam-fill me-2"></i>Images</h1>
-<p>Manage Docker and Tart images across your connected agents.</p>
-
-<div class="row mb-3">
-    <div class="col-md-4">
-        <label class="form-label">Host</label>
-        <select class="form-select" @bind="selectedHostId" @bind:after="OnHostChanged">
-            <option value="">— Select a host —</option>
-            @foreach (var h in hosts)
-            {
-                <option value="@h.Id">@h.Label (@h.Platform)</option>
-            }
-        </select>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-box-seam-fill"></i> Images</h1>
+        <span class="page-desc">Manage Docker and Tart images across agents.</span>
     </div>
-    <div class="col-md-3 d-flex align-items-end gap-2">
-        @if (!string.IsNullOrEmpty(selectedHostId))
+</SectionContent>
+
+<div class="d-flex" style="height: calc(100vh - 120px); gap: 1rem;">
+    @* Left sidebar *@
+    <div class="d-flex flex-column" style="width: 260px; min-width: 220px; overflow-y: auto;">
+        <div class="sidebar-section-header">
+            <i class="bi bi-pc-display me-1"></i> Hosts
+            <span class="badge bg-secondary ms-auto">@hosts.Count</span>
+        </div>
+        @foreach (var h in hosts)
         {
-            <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
-            </button>
-            <button class="btn btn-primary btn-sm" @onclick="() => showPullForm = true">
-                <i class="bi bi-cloud-arrow-down"></i> Pull Image
-            </button>
+            <div class="image-host-card @(selectedHostId == h.Id ? "active" : "")"
+                 @onclick="() => SelectHost(h.Id)">
+                <div class="d-flex align-items-center">
+                    <i class="bi @GetPlatformIcon(h.Platform) me-2"></i>
+                    <span class="text-truncate">@h.Label</span>
+                    <span class="badge ms-auto @GetAgentStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(h.DisplayName))
+                {
+                    <small class="text-muted text-truncate d-block" style="font-size: 0.7rem;">@h.Name</small>
+                }
+            </div>
         }
     </div>
-</div>
 
-@* Pull progress indicator *@
-@if (pullInProgress)
-{
-    <div class="card mb-3">
-        <div class="card-body">
-            <h6><i class="bi bi-cloud-arrow-down me-1"></i> Pulling @pullImageName</h6>
-            <div class="progress" style="height: 24px;">
-                <div class="progress-bar progress-bar-striped progress-bar-animated"
-                     role="progressbar" style="width: @pullProgress%"
-                     aria-valuenow="@pullProgress" aria-valuemin="0" aria-valuemax="100">
-                    @pullProgress.ToString("F0")%
-                </div>
-            </div>
-            <small class="text-muted mt-1 d-block">@pullStatus</small>
-        </div>
-    </div>
-}
-
-@* Pull form *@
-@if (showPullForm)
-{
-    <div class="card mb-3">
-        <div class="card-body">
-            <h5>Pull Image</h5>
-            <div class="row">
-                <div class="col-md-2 mb-3">
-                    <label class="form-label">Type</label>
-                    <select class="form-select" @bind="pullType">
-                        <option value="@ImageType.Docker">Docker</option>
-                        <option value="@ImageType.Tart">Tart</option>
-                    </select>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <label class="form-label">Registry</label>
-                    <select class="form-select" @bind="pullRegistryId">
-                        <option value="">(default / no auth)</option>
-                        @foreach (var r in registries)
-                        {
-                            <option value="@r.Id">@r.Name (@r.RegistryUrl)</option>
-                        }
-                    </select>
-                </div>
-                <div class="col-md-4 mb-3">
-                    <label class="form-label">Image</label>
-                    <input class="form-control" @bind="pullImage" placeholder="org/image-name" />
-                </div>
-                <div class="col-md-2 mb-3">
-                    <label class="form-label">Tag</label>
-                    <input class="form-control" @bind="pullTag" placeholder="latest" />
-                </div>
-                <div class="col-md-1 d-flex align-items-end mb-3">
-                    <button class="btn btn-success" @onclick="StartPull"><i class="bi bi-download"></i></button>
-                </div>
-            </div>
-            <button class="btn btn-secondary btn-sm" @onclick="() => showPullForm = false">Cancel</button>
-        </div>
-    </div>
-}
-
-@* Image list *@
-@if (!string.IsNullOrEmpty(selectedHostId))
-{
-    <ul class="nav nav-tabs mb-0">
-        <li class="nav-item">
-            <button class="nav-link @(activeTab == "docker" ? "active" : "")" @onclick="SwitchToDocker">
-                <i class="bi bi-box-fill me-1"></i> Docker (@dockerImages.Count)
-            </button>
-        </li>
-        <li class="nav-item">
-            <button class="nav-link @(activeTab == "tart" ? "active" : "")" @onclick="SwitchToTart">
-                <i class="bi bi-display me-1"></i> Tart (@tartImages.Count)
-            </button>
-        </li>
-    </ul>
-
-    <div class="border border-top-0 rounded-bottom p-3 mb-3">
-        <div class="row mb-2">
-            <div class="col-md-4">
-                <div class="input-group input-group-sm">
-                    <span class="input-group-text"><i class="bi bi-search"></i></span>
-                    <input type="text" class="form-control" placeholder="Search images…" @bind="searchText" @bind:event="oninput" />
-                    @if (!string.IsNullOrEmpty(searchText))
-                    {
-                        <button class="btn btn-outline-secondary" @onclick="() => searchText = string.Empty">
-                            <i class="bi bi-x-lg"></i>
-                        </button>
-                    }
-                </div>
-            </div>
-        </div>
-
-        @{ var displayImages = GetFilteredSortedImages(); }
-
-        @if (!displayImages.Any())
+    @* Right pane *@
+    <div class="flex-grow-1 d-flex flex-column" style="min-width: 0; overflow-y: auto;">
+        @if (string.IsNullOrEmpty(selectedHostId))
         {
-            <div class="alert alert-secondary mb-0">
-                @if (!string.IsNullOrEmpty(searchText))
-                {
-                    <text>No @activeTab images matching "<strong>@searchText</strong>".</text>
-                }
-                else
-                {
-                    <text>No @activeTab images on this host. Use Pull Image to download one.</text>
-                }
+            <div class="d-flex flex-column align-items-center justify-content-center flex-grow-1 text-muted">
+                <i class="bi bi-arrow-left-circle" style="font-size: 3rem;"></i>
+                <h5 class="mt-3">Select a host</h5>
+                <p>Choose a host from the sidebar to manage its images.</p>
             </div>
         }
         else
         {
-            @if (activeTab == "docker")
+            @* Toolbar *@
+            <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+                <button class="btn btn-primary btn-sm" @onclick="() => showPullForm = true">
+                    <i class="bi bi-cloud-arrow-down"></i> Pull Image
+                </button>
+            </div>
+
+            @* Pull progress indicator *@
+            @if (pullInProgress)
             {
-                <table class="table table-striped mb-0">
-                    <thead>
-                        <tr>
-                            <th role="button" @onclick='() => ToggleSort("Repository")'>Repository @SortIndicator("Repository")</th>
-                            <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
-                            <th>Image ID</th>
-                            <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
-                            <th role="button" @onclick='() => ToggleSort("Created")'>Created @SortIndicator("Created")</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var img in displayImages)
-                        {
-                            <tr>
-                                <td>@img.Repository</td>
-                                <td><span class="badge bg-secondary">@img.Tag</span></td>
-                                <td><code>@(img.ImageId?[..Math.Min(12, img.ImageId?.Length ?? 0)])</code></td>
-                                <td>@FormatSize(img.SizeBytes)</td>
-                                <td>@FormatDate(img.ImageCreatedAt)</td>
-                                <td>
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
-                                        <i class="bi bi-trash3"></i> Delete
-                                    </button>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h6><i class="bi bi-cloud-arrow-down me-1"></i> Pulling @pullImageName</h6>
+                        <div class="progress" style="height: 24px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                 role="progressbar" style="width: @pullProgress%"
+                                 aria-valuenow="@pullProgress" aria-valuemin="0" aria-valuemax="100">
+                                @pullProgress.ToString("F0")%
+                            </div>
+                        </div>
+                        <small class="text-muted mt-1 d-block">@pullStatus</small>
+                    </div>
+                </div>
             }
-            else
+
+            @* Pull form *@
+            @if (showPullForm)
             {
-                <table class="table table-striped mb-0">
-                    <thead>
-                        <tr>
-                            <th role="button" @onclick='() => ToggleSort("Repository")'>Name @SortIndicator("Repository")</th>
-                            <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
-                            <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var img in displayImages)
-                        {
-                            <tr>
-                                <td>@img.Repository</td>
-                                <td><span class="badge bg-secondary">@img.Tag</span></td>
-                                <td>@FormatSize(img.SizeBytes)</td>
-                                <td>
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
-                                        <i class="bi bi-trash3"></i> Delete
-                                    </button>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <h5>Pull Image</h5>
+                        <div class="row">
+                            <div class="col-md-2 mb-3">
+                                <label class="form-label">Type</label>
+                                <select class="form-select" @bind="pullType">
+                                    <option value="@ImageType.Docker">Docker</option>
+                                    <option value="@ImageType.Tart">Tart</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3 mb-3">
+                                <label class="form-label">Registry</label>
+                                <select class="form-select" @bind="pullRegistryId">
+                                    <option value="">(default / no auth)</option>
+                                    @foreach (var r in registries)
+                                    {
+                                        <option value="@r.Id">@r.Name (@r.RegistryUrl)</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label">Image</label>
+                                <input class="form-control" @bind="pullImage" placeholder="org/image-name" />
+                            </div>
+                            <div class="col-md-2 mb-3">
+                                <label class="form-label">Tag</label>
+                                <input class="form-control" @bind="pullTag" placeholder="latest" />
+                            </div>
+                            <div class="col-md-1 d-flex align-items-end mb-3">
+                                <button class="btn btn-success" @onclick="StartPull"><i class="bi bi-download"></i></button>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" @onclick="() => showPullForm = false">Cancel</button>
+                    </div>
+                </div>
             }
+
+            @* Tabs *@
+            <ul class="nav nav-tabs mb-0">
+                <li class="nav-item">
+                    <button class="nav-link @(activeTab == "docker" ? "active" : "")" @onclick="SwitchToDocker">
+                        <i class="bi bi-box-fill me-1"></i> Docker (@dockerImages.Count)
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link @(activeTab == "tart" ? "active" : "")" @onclick="SwitchToTart">
+                        <i class="bi bi-display me-1"></i> Tart (@tartImages.Count)
+                    </button>
+                </li>
+            </ul>
+
+            <div class="border border-top-0 rounded-bottom p-3 mb-3">
+                <div class="row mb-2">
+                    <div class="col-md-4">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" placeholder="Search images…" @bind="searchText" @bind:event="oninput" />
+                            @if (!string.IsNullOrEmpty(searchText))
+                            {
+                                <button class="btn btn-outline-secondary" @onclick="() => searchText = string.Empty">
+                                    <i class="bi bi-x-lg"></i>
+                                </button>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                @{ var displayImages = GetFilteredSortedImages(); }
+
+                @if (!displayImages.Any())
+                {
+                    <div class="alert alert-secondary mb-0">
+                        @if (!string.IsNullOrEmpty(searchText))
+                        {
+                            <text>No @activeTab images matching "<strong>@searchText</strong>".</text>
+                        }
+                        else
+                        {
+                            <text>No @activeTab images on this host. Use Pull Image to download one.</text>
+                        }
+                    </div>
+                }
+                else
+                {
+                    @if (activeTab == "docker")
+                    {
+                        <table class="table table-striped mb-0">
+                            <thead>
+                                <tr>
+                                    <th role="button" @onclick='() => ToggleSort("Repository")'>Repository @SortIndicator("Repository")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
+                                    <th>Image ID</th>
+                                    <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Created")'>Created @SortIndicator("Created")</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var img in displayImages)
+                                {
+                                    <tr>
+                                        <td>@img.Repository</td>
+                                        <td><span class="badge bg-secondary">@img.Tag</span></td>
+                                        <td><code>@(img.ImageId?[..Math.Min(12, img.ImageId?.Length ?? 0)])</code></td>
+                                        <td>@FormatSize(img.SizeBytes)</td>
+                                        <td>@FormatDate(img.ImageCreatedAt)</td>
+                                        <td>
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                                <i class="bi bi-trash3"></i> Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <table class="table table-striped mb-0">
+                            <thead>
+                                <tr>
+                                    <th role="button" @onclick='() => ToggleSort("Repository")'>Name @SortIndicator("Repository")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var img in displayImages)
+                                {
+                                    <tr>
+                                        <td>@img.Repository</td>
+                                        <td><span class="badge bg-secondary">@img.Tag</span></td>
+                                        <td>@FormatSize(img.SizeBytes)</td>
+                                        <td>
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                                <i class="bi bi-trash3"></i> Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                }
+            </div>
         }
     </div>
-}
+</div>
+
+<style>
+    .image-host-card {
+        padding: 0.5rem 0.75rem;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.15s;
+        border: 1px solid transparent;
+        margin-bottom: 2px;
+    }
+    .image-host-card:hover {
+        background: var(--bg-secondary, #f0f0f0);
+    }
+    .image-host-card.active {
+        background: var(--bg-tertiary, #e8e8e8);
+        border-color: var(--bs-primary);
+        box-shadow: inset 3px 0 0 var(--bs-primary);
+    }
+    .sidebar-section-header {
+        display: flex;
+        align-items: center;
+        padding: 0.35rem 0.75rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted, #6c757d);
+    }
+</style>
 
 @code {
     private List<Host> hosts = [];
@@ -246,8 +300,9 @@
         AgentHub.OnImageDeletedReceived += HandleImageDeleted;
     }
 
-    private async Task OnHostChanged()
+    private async Task SelectHost(string hostId)
     {
+        selectedHostId = hostId;
         if (string.IsNullOrEmpty(selectedHostId)) return;
         await LoadImages();
         await RequestImageRefresh();
@@ -429,6 +484,21 @@
 
         return result.ToList();
     }
+
+    private string GetPlatformIcon(HostPlatform platform) => platform switch
+    {
+        HostPlatform.Linux => "bi-ubuntu",
+        HostPlatform.MacOS => "bi-apple",
+        HostPlatform.Windows => "bi-windows",
+        _ => "bi-pc-display"
+    };
+
+    private string GetAgentStatusBadge(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => "bg-success",
+        AgentStatus.Connecting => "bg-warning",
+        _ => "bg-secondary"
+    };
 
     public void Dispose()
     {

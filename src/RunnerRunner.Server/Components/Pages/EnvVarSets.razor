@@ -5,9 +5,12 @@
 @inject IDocumentStore Store
 
 <PageTitle>Environment Variable Sets - RunnerRunner</PageTitle>
-
-<h1><i class="bi bi-braces me-2"></i>Environment Variable Sets</h1>
-<p>Create reusable sets of environment variables that can be composed into runner profiles.</p>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-braces"></i> Env Variable Sets</h1>
+        <span class="page-desc">Reusable env var sets for runner profiles.</span>
+    </div>
+</SectionContent>
 
 <button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Set</button>
 

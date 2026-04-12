@@ -1,13 +1,19 @@
 ﻿@inherits LayoutComponentBase
 
-<div class="page">
+<div class="page" id="page-root">
     <aside class="sidebar">
         <NavMenu />
+        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+            <i class="bi bi-chevron-bar-left collapse-icon-expanded"></i>
+            <i class="bi bi-chevron-bar-right collapse-icon-collapsed"></i>
+        </button>
     </aside>
 
     <main>
         <header class="top-bar">
-            <div class="top-bar-left"></div>
+            <div class="top-bar-left">
+                <SectionOutlet SectionName="page-header" />
+            </div>
             <div class="top-bar-right">
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
                     <span class="theme-icon-light"><i class="bi bi-sun-fill"></i></span>

@@ -5,9 +5,12 @@
 @inject IDocumentStore Store
 
 <PageTitle>Runner Profiles - RunnerRunner</PageTitle>
-
-<h1><i class="bi bi-clipboard2-check-fill me-2"></i>Runner Profiles</h1>
-<p>Define runner configurations that can be deployed across hosts.</p>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-clipboard2-check-fill"></i> Runner Profiles</h1>
+        <span class="page-desc">Define runner configurations to deploy across hosts.</span>
+    </div>
+</SectionContent>
 
 <button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Profile</button>
 

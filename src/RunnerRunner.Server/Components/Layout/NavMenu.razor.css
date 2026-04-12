@@ -87,3 +87,42 @@
 ::deep a.nav-item:hover .bi {
     opacity: 0.9;
 }
+
+/* Collapsed sidebar styles */
+:global(.page.sidebar-collapsed) .brand-text,
+:global([data-sidebar-collapsed="true"]) .brand-text {
+    display: none;
+}
+
+:global(.page.sidebar-collapsed) .nav-section-label,
+:global([data-sidebar-collapsed="true"]) .nav-section-label {
+    display: none;
+}
+
+:global(.page.sidebar-collapsed) ::deep .nav-label,
+:global([data-sidebar-collapsed="true"]) ::deep .nav-label {
+    display: none;
+}
+
+:global(.page.sidebar-collapsed) .nav-brand,
+:global([data-sidebar-collapsed="true"]) .nav-brand {
+    justify-content: center;
+    padding: 1.25rem 0.5rem 1.5rem;
+}
+
+:global(.page.sidebar-collapsed) ::deep a.nav-item,
+:global([data-sidebar-collapsed="true"]) ::deep a.nav-item {
+    justify-content: center;
+    padding: 0.55rem;
+    margin: 1px 0.4rem;
+}
+
+:global(.page.sidebar-collapsed) .nav-menu,
+:global([data-sidebar-collapsed="true"]) .nav-menu {
+    padding: 0.75rem 0;
+}
+
+:global(.page.sidebar-collapsed) .nav-section,
+:global([data-sidebar-collapsed="true"]) .nav-section {
+    align-items: center;
+}

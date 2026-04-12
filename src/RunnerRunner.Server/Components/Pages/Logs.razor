@@ -13,10 +13,13 @@
 @implements IDisposable
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-terminal-fill"></i> Logs</h1>
+    </div>
+</SectionContent>
 
-<h1 class="mb-3"><i class="bi bi-terminal-fill me-2"></i>Logs</h1>
-
-<div class="d-flex" style="height: calc(100vh - 160px); gap: 1rem;">
+<div class="d-flex" style="height: calc(100vh - 120px); gap: 1rem;">
     @* Left sidebar *@
     <div class="d-flex flex-column" style="width: 260px; min-width: 220px; overflow-y: auto;">
         @* Server card *@

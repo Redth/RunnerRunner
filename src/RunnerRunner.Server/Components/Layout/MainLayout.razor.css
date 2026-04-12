@@ -19,13 +19,16 @@ main {
     position: sticky;
     top: 0;
     overflow-y: auto;
+    transition: width 0.2s ease;
+    display: flex;
+    flex-direction: column;
 }
 
 .top-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.75rem 2rem;
+    padding: 0.5rem 2rem;
     background: var(--bg-primary);
     border-bottom: 1px solid var(--border-color);
     position: sticky;
@@ -34,8 +37,42 @@ main {
     min-height: 3.25rem;
 }
 
-.top-bar-left { display: flex; align-items: center; gap: 1rem; }
-.top-bar-right { display: flex; align-items: center; gap: 0.75rem; }
+.top-bar-left {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    min-width: 0;
+    flex: 1;
+}
+.top-bar-right { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
+
+/* Page header in top bar */
+::deep .page-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    min-width: 0;
+}
+::deep .page-header h1 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+::deep .page-header h1 .bi {
+    font-size: 1rem;
+    opacity: 0.7;
+}
+::deep .page-header .page-desc {
+    font-size: 0.8rem;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
 .page-context {
     font-size: 1rem;
@@ -83,6 +120,47 @@ main {
         padding: 0.75rem 1rem;
     }
 }
+
+/* Sidebar toggle button */
+.sidebar-toggle {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem;
+    border: none;
+    background: transparent;
+    color: var(--text-sidebar);
+    cursor: pointer;
+    border-top: 1px solid var(--bg-sidebar-border);
+    transition: background 0.15s, color 0.15s;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+.sidebar-toggle:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-sidebar-active);
+}
+
+/* Collapse icon visibility */
+.collapse-icon-collapsed { display: none; }
+.collapse-icon-expanded { display: inline; }
+.page.sidebar-collapsed .collapse-icon-collapsed { display: inline; }
+.page.sidebar-collapsed .collapse-icon-expanded { display: none; }
+
+/* Collapsed sidebar */
+.page.sidebar-collapsed .sidebar {
+    width: 60px;
+    overflow-x: hidden;
+}
+
+/* Also apply collapsed state before Blazor hydrates, via data attribute on <html> */
+:global([data-sidebar-collapsed="true"]) .sidebar {
+    width: 60px;
+    overflow-x: hidden;
+}
+:global([data-sidebar-collapsed="true"]) .collapse-icon-collapsed { display: inline; }
+:global([data-sidebar-collapsed="true"]) .collapse-icon-expanded { display: none; }
 
 #blazor-error-ui {
     background: var(--warning-soft);

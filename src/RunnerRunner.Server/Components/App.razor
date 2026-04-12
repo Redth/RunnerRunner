@@ -12,6 +12,12 @@
             var theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
             document.documentElement.setAttribute('data-theme', theme);
         })();
+        // Sidebar: persist collapsed state before first paint to prevent flash
+        (function() {
+            if (localStorage.getItem('rr-sidebar-collapsed') === 'true') {
+                document.documentElement.setAttribute('data-sidebar-collapsed', 'true');
+            }
+        })();
     </script>
     <ResourcePreloader />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -38,6 +44,12 @@
     <script src="js/terminal.js"></script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
     <script>
+        window.toggleSidebar = function() {
+            var page = document.querySelector('.page');
+            if (!page) return;
+            var collapsed = page.classList.toggle('sidebar-collapsed');
+            localStorage.setItem('rr-sidebar-collapsed', collapsed);
+        };
         window.toggleTheme = function() {
             var html = document.documentElement;
             var current = html.getAttribute('data-theme');
@@ -49,6 +61,13 @@
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
             if (!localStorage.getItem('rr-theme')) {
                 document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+            }
+        });
+        // Apply sidebar collapsed class after DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            if (localStorage.getItem('rr-sidebar-collapsed') === 'true') {
+                var page = document.getElementById('page-root');
+                if (page) page.classList.add('sidebar-collapsed');
             }
         });
     </script>
