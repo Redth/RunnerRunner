@@ -58,6 +58,12 @@ public class DeployRunnerCommand
     public string? RunnerUrl { get; set; }
     public string? RunnerBasePath { get; set; }
     public string? WorkDirectory { get; set; }
+
+    /// <summary>Base64-encoded JIT runner config (GitHub). When set, skip config.sh and use --jitconfig.</summary>
+    public string? JitConfig { get; set; }
+
+    /// <summary>"static" or "dynamic" — determines lifecycle behavior.</summary>
+    public string ProvisioningMode { get; set; } = "static";
 }
 
 public class StopRunnerCommand
