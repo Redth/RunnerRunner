@@ -120,7 +120,7 @@
 
         @* Terminal container *@
         <div class="flex-grow-1 rounded overflow-hidden border" style="min-height: 300px;">
-            <div id="rr-terminal" style="width: 100%; height: 100%; padding: 0.75rem;"></div>
+            <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
         </div>
     </div>
 </div>
@@ -164,6 +164,13 @@
     .split-resize-handle:hover, .split-resize-handle:active {
         background: var(--bs-primary);
         opacity: 0.4;
+    }
+    /* Terminal internal padding */
+    #rr-terminal .xterm-screen {
+        padding: 0.75rem;
+    }
+    #rr-terminal {
+        background: #1a1b26;
     }
 </style>
 
