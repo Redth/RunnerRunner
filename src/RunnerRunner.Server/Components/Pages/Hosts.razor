@@ -104,11 +104,16 @@
                         {
                             <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@host.Architecture</span>
                         }
-                        @foreach (var cap in host.Capabilities)
-                        {
-                            <span class="host-chip cap-chip">@cap</span>
-                        }
                     </div>
+                    @if (host.Capabilities.Any())
+                    {
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                            @foreach (var cap in host.Capabilities)
+                            {
+                                <span class="host-chip cap-chip">@cap</span>
+                            }
+                        </div>
+                    }
                 </td>
                 <td>
                     @if (hostAssignments.Any())
