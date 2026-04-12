@@ -49,6 +49,8 @@ public class DynamicProvisioningService : IHostedService
     {
         try
         {
+            _logger.LogInformation("HandleJobQueued fired: repo={Repo}, jobId={JobId}, profileId={ProfileId}",
+                evt.Repository, evt.JobId, profileId);
             await HandleJobQueuedAsync(evt, profileId);
         }
         catch (Exception ex)
@@ -142,6 +144,9 @@ public class DynamicProvisioningService : IHostedService
         // Generate unique runner name
         var shortGuid = Guid.NewGuid().ToString("N")[..8];
         var runnerName = $"{profile.Name}-jit-{shortGuid}";
+
+        _logger.LogInformation("Selected host {Host} (agent: {Agent}) for dynamic runner {RunnerName}",
+            selectedHost.Label, selectedAgent.AgentInfo.Name, runnerName);
 
         // JIT config generation
         JitConfigResult? jitResult = null;

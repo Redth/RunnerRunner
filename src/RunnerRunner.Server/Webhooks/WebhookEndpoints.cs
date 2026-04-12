@@ -151,10 +151,10 @@ public static class WebhookEndpoints
                 Repository = repo,
                 WorkflowName = workflowName,
                 Labels = labels,
-                Status = "matched"
+                Status = "ignored"
             });
 
-            return Results.Ok(new { message = $"Action '{action}' acknowledged" });
+            return Results.Ok(new { message = $"Action '{action}' ignored (not queued)" });
         }
 
         // Rate limiting: count active dynamic instances for this binding

@@ -33,6 +33,7 @@ else
         <thead>
             <tr>
                 <th>Time</th>
+                <th>Action</th>
                 <th>Repository</th>
                 <th>Workflow</th>
                 <th>Labels</th>
@@ -46,6 +47,7 @@ else
             {
                 <tr>
                     <td>@evt.ReceivedAt.ToString("g")</td>
+                    <td><span class="badge @(evt.Action == "queued" ? "bg-primary" : "bg-secondary")">@evt.Action</span></td>
                     <td>@evt.Repository</td>
                     <td>@evt.WorkflowName</td>
                     <td>
@@ -57,7 +59,13 @@ else
                         </div>
                     </td>
                     <td>@(evt.MatchedProfileName ?? "—")</td>
-                    <td><span class="badge @GetStatusBadge(evt.Status)">@evt.Status</span></td>
+                    <td>
+                        <span class="badge @GetStatusBadge(evt.Status)">@evt.Status</span>
+                        @if (!string.IsNullOrEmpty(evt.Error))
+                        {
+                            <br/><small class="text-danger">@evt.Error</small>
+                        }
+                    </td>
                     <td>
                         @if (!string.IsNullOrEmpty(evt.InstanceId))
                         {
@@ -119,6 +127,7 @@ else
         "matched" => "bg-warning text-dark",
         "error" or "rejected" => "bg-danger",
         "no_match" or "rate_limited" => "bg-secondary",
+        "ignored" => "bg-light text-muted",
         _ => "bg-secondary"
     };
 }
