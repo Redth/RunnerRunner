@@ -3,6 +3,7 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @inject IDocumentStore Store
+@inject IJSRuntime JS
 
 <PageTitle>Runner Profiles - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -418,7 +419,7 @@
                 <td>@profile.MaxParallelPerHost</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)"><i class="bi bi-pencil-square"></i> Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteProfile(profile.Id)"><i class="bi bi-trash3"></i> Delete</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteProfile(profile)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }
@@ -643,6 +644,12 @@
 
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         showForm = false;
+    }
+
+    private async Task ConfirmAndDeleteProfile(RunnerProfile profile)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete profile '{profile.Name}'?");
+        if (confirmed) await DeleteProfile(profile.Id);
     }
 
     private async Task DeleteProfile(string id)

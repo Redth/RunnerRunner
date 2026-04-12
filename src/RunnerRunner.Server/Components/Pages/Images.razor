@@ -197,7 +197,7 @@
                                         <td>@FormatSize(img.SizeBytes)</td>
                                         <td>@FormatDate(img.ImageCreatedAt)</td>
                                         <td>
-                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndDeleteImage(img)">
                                                 <i class="bi bi-trash3"></i> Delete
                                             </button>
                                         </td>
@@ -227,7 +227,7 @@
                                         <td><span class="badge bg-secondary">@img.Tag</span></td>
                                         <td>@FormatSize(img.SizeBytes)</td>
                                         <td>
-                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteImage(img)">
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndDeleteImage(img)">
                                                 <i class="bi bi-trash3"></i> Delete
                                             </button>
                                         </td>
@@ -390,6 +390,12 @@
         };
 
         await HubContext.Clients.Client(agent.ConnectionId).PullImage(command);
+    }
+
+    private async Task ConfirmAndDeleteImage(AgentImage img)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete image '{img.Repository}'?");
+        if (confirmed) await DeleteImage(img);
     }
 
     private async Task DeleteImage(AgentImage img)

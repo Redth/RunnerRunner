@@ -7,6 +7,7 @@
 @using RunnerRunner.Core.Hub
 @inject IDocumentStore Store
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject IJSRuntime JS
 
 <PageTitle>Runner Instances - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -122,7 +123,7 @@ else
                                 }
                                 @if (inst.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)
                                 {
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveInstance(inst.Id)">Remove</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndRemoveInstance(inst)">Remove</button>
                                 }
                             </td>
                         </tr>
@@ -149,6 +150,7 @@ else
 @code {
     private List<RunnerInstance> instances = [];
     private Dictionary<string, string> hostNames = new();
+    private Dictionary<string, string> hostAgentNames = new();
     private Dictionary<string, string> profileNames = new();
 
     private string searchText = "";
@@ -170,6 +172,7 @@ else
         var hosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
+        hostAgentNames = hosts.ToDictionary(h => h.Id, h => h.Name);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
 
         // Auto-expand all hosts that have instances
@@ -248,8 +251,8 @@ else
     private async Task StopInstance(RunnerInstance inst)
     {
         var agents = AgentHub.GetConnectedAgents();
-        var hostName = hostNames.GetValueOrDefault(inst.HostId);
-        var agent = agents.Values.FirstOrDefault(a => a.AgentInfo.Name == hostName);
+        var agentName = hostAgentNames.GetValueOrDefault(inst.HostId);
+        var agent = agents.Values.FirstOrDefault(a => a.AgentInfo.Name == agentName);
 
         if (agent != null)
         {
@@ -264,6 +267,12 @@ else
         }
 
         await Refresh();
+    }
+
+    private async Task ConfirmAndRemoveInstance(RunnerInstance inst)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Remove runner instance '{inst.RunnerName}'?");
+        if (confirmed) await RemoveInstance(inst.Id);
     }
 
     private async Task RemoveInstance(string id)

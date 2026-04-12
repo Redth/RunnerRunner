@@ -3,6 +3,7 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @inject IDocumentStore Store
+@inject IJSRuntime JS
 
 <PageTitle>Environment Variable Sets - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -180,7 +181,7 @@
                 </td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditSet(set)"><i class="bi bi-pencil-square"></i> Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteSet(set.Id)"><i class="bi bi-trash3"></i> Delete</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteSet(set)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }
@@ -286,6 +287,12 @@
 
         envVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
         showForm = false;
+    }
+
+    private async Task ConfirmAndDeleteSet(EnvironmentVariableSet set)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete environment variable set '{set.Name}'?");
+        if (confirmed) await DeleteSet(set.Id);
     }
 
     private async Task DeleteSet(string id)

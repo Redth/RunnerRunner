@@ -4,6 +4,7 @@
 @using RunnerRunner.Core.Models
 @inject IDocumentStore Store
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 
 <PageTitle>Webhook Bindings - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -238,7 +239,7 @@
                 </td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditBinding(binding)"><i class="bi bi-pencil-square"></i> Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteBinding(binding.Id)"><i class="bi bi-trash3"></i> Delete</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteBinding(binding)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }
@@ -316,6 +317,12 @@
 
         bindings = (await Store.Query<WebhookBinding>().ToList()).ToList();
         showForm = false;
+    }
+
+    private async Task ConfirmAndDeleteBinding(WebhookBinding binding)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete webhook binding '{binding.Name}'?");
+        if (confirmed) await DeleteBinding(binding.Id);
     }
 
     private async Task DeleteBinding(string id)

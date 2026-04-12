@@ -2,7 +2,12 @@
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
+@using RunnerRunner.Core.Hub
+@using RunnerRunner.Server.Hubs
+@using Microsoft.AspNetCore.SignalR
 @inject IDocumentStore Store
+@inject IJSRuntime JS
+@inject IHubContext<AgentHub, IAgentHubClient> HubContext
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -134,7 +139,7 @@
                 <td>
                     <a href="/logs?source=agent:@host.Name" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">  <i class="bi bi-link-45deg"></i> Assign</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => RemoveHost(host.Id)">  <i class="bi bi-trash3"></i> Remove</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndRemoveHost(host)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
             </tr>
         }
@@ -181,7 +186,7 @@
                                 <input type="number" class="form-control form-control-sm" style="width:80px"
                                        value="@a.DesiredCount" @onchange="e => UpdateAssignmentCount(a, int.Parse(e.Value?.ToString()!))" min="0" />
                             </td>
-                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveAssignment(a.Id)">✕</button></td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndRemoveAssignment(a)">✕</button></td>
                         </tr>
                     }
                 </tbody>
@@ -321,13 +326,35 @@
         await ReloadData();
     }
 
+    private async Task ConfirmAndRemoveHost(Host host)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Remove host '{host.Label}'? This will stop all runners on this host.");
+        if (confirmed) await RemoveHost(host.Id);
+    }
+
+    private async Task ConfirmAndRemoveAssignment(RunnerAssignment assignment)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", "Remove assignment? Runners for this profile will be stopped.");
+        if (confirmed) await RemoveAssignment(assignment.Id);
+    }
+
     private async Task RemoveHost(string id)
     {
-        await Store.Remove<Host>(id);
+        // Stop all running instances on this host
+        await StopRunnersForHost(id);
+
+        // Remove all instances for this host
+        var hostInstances = (await Store.Query<RunnerInstance>().ToList())
+            .Where(i => i.HostId == id).ToList();
+        foreach (var inst in hostInstances)
+            await Store.Remove<RunnerInstance>(inst.Id);
+
         // Remove all assignments for this host
         var hostAssignments = assignments.Where(a => a.HostId == id).ToList();
         foreach (var a in hostAssignments)
             await Store.Remove<RunnerAssignment>(a.Id);
+
+        await Store.Remove<Host>(id);
         await ReloadData();
     }
 
@@ -387,8 +414,58 @@
 
     private async Task RemoveAssignment(string id)
     {
+        var assignment = assignments.FirstOrDefault(a => a.Id == id);
+        if (assignment != null)
+        {
+            await StopRunnersForHostProfile(assignment.HostId, assignment.ProfileId);
+
+            var instances = (await Store.Query<RunnerInstance>().ToList())
+                .Where(i => i.HostId == assignment.HostId && i.ProfileId == assignment.ProfileId
+                         && i.ProvisioningMode == "static").ToList();
+            foreach (var inst in instances)
+                await Store.Remove<RunnerInstance>(inst.Id);
+        }
+
         await Store.Remove<RunnerAssignment>(id);
         await ReloadData();
+    }
+
+    private async Task StopRunnersForHost(string hostId)
+    {
+        var host = hosts.FirstOrDefault(h => h.Id == hostId);
+        if (host == null) return;
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+        if (agent == null) return;
+
+        var running = (await Store.Query<RunnerInstance>().ToList())
+            .Where(i => i.HostId == hostId &&
+                        i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting).ToList();
+        foreach (var inst in running)
+            await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+            {
+                InstanceId = inst.Id,
+                InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
+            });
+    }
+
+    private async Task StopRunnersForHostProfile(string hostId, string profileId)
+    {
+        var host = hosts.FirstOrDefault(h => h.Id == hostId);
+        if (host == null) return;
+        var agent = AgentHub.GetConnectedAgents().Values
+            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+        if (agent == null) return;
+
+        var running = (await Store.Query<RunnerInstance>().ToList())
+            .Where(i => i.HostId == hostId && i.ProfileId == profileId &&
+                        i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting).ToList();
+        foreach (var inst in running)
+            await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+            {
+                InstanceId = inst.Id,
+                InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
+            });
     }
 
     private string GetStatusBadge(AgentStatus status) => status switch

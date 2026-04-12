@@ -3,6 +3,7 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @inject IDocumentStore Store
+@inject IJSRuntime JS
 
 <PageTitle>Settings - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -114,7 +115,7 @@
                 <td>@GetCredentialSummary(cred)</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditCredential(cred)">Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteCredential(cred.Id)">Delete</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteCredential(cred)">Delete</button>
                 </td>
             </tr>
         }
@@ -189,7 +190,7 @@
                 <td>@(reg.IsDefault ? "✓" : "")</td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditRegistry(reg)"><i class="bi bi-pencil-square"></i> Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteRegistry(reg.Id)"><i class="bi bi-trash3"></i> Delete</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteRegistry(reg)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }
@@ -241,6 +242,12 @@
         showForm = false;
     }
 
+    private async Task ConfirmAndDeleteCredential(ProviderCredential cred)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete provider credential '{cred.Name}'?");
+        if (confirmed) await DeleteCredential(cred.Id);
+    }
+
     private async Task DeleteCredential(string id)
     {
         await Store.Remove<ProviderCredential>(id);
@@ -280,6 +287,12 @@
             await Store.Insert(editRegistry);
         registryCreds = (await Store.Query<RegistryCredential>().ToList()).ToList();
         showRegistryForm = false;
+    }
+
+    private async Task ConfirmAndDeleteRegistry(RegistryCredential reg)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete registry credential '{reg.Name}'?");
+        if (confirmed) await DeleteRegistry(reg.Id);
     }
 
     private async Task DeleteRegistry(string id)
