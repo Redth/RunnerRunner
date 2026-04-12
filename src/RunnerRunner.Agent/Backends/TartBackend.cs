@@ -326,20 +326,43 @@ public class TartBackend : IRunnerBackend
 
         var sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15";
 
-        (int ExitCode, string Output) result;
+        // Build the full SSH command and run via bash -c to handle quoting correctly
+        string fullCommand;
         if (!string.IsNullOrEmpty(sshPassword))
-        {
-            result = await RunCommandAsync("sshpass",
-                $"-p {EscapeShell(sshPassword)} ssh {sshOpts} {sshUser}@{vmIp} {EscapeShell(script)}", ct);
-        }
+            fullCommand = $"sshpass -p '{EscapeShell(sshPassword)}' ssh {sshOpts} {sshUser}@{vmIp} bash -s";
         else
-        {
-            result = await RunCommandAsync("ssh",
-                $"{sshOpts} {sshUser}@{vmIp} {EscapeShell(script)}", ct);
-        }
+            fullCommand = $"ssh {sshOpts} {sshUser}@{vmIp} bash -s";
 
-        if (result.ExitCode != 0)
-            _logger.LogWarning("SSH command returned {Code}: {Output}", result.ExitCode, result.Output);
+        // Use bash -s to read script from stdin — avoids all quoting issues
+        var psi = new ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            Arguments = $"-c \"{fullCommand.Replace("\"", "\\\"")}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = true
+        };
+
+        // Add homebrew to PATH
+        var path = psi.Environment.TryGetValue("PATH", out var existingPath) ? existingPath ?? "" : "";
+        if (!path.Contains("/opt/homebrew"))
+            psi.Environment["PATH"] = $"/opt/homebrew/bin:/opt/homebrew/sbin:{path}";
+
+        var process = Process.Start(psi)!;
+
+        // Send script via stdin — no quoting issues at all
+        await process.StandardInput.WriteAsync(script);
+        process.StandardInput.Close();
+
+        var stdout = await process.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await process.StandardError.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+
+        var output = string.IsNullOrEmpty(stderr) ? stdout : $"{stdout}\n{stderr}";
+
+        if (process.ExitCode != 0)
+            _logger.LogWarning("SSH command returned {Code}: {Output}", process.ExitCode, output.Trim());
     }
 
     private static string EscapeShell(string value) =>

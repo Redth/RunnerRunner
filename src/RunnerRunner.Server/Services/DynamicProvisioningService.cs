@@ -396,6 +396,9 @@ public class DynamicProvisioningService : IHostedService
                 await store.Update(instance);
 
                 _logger.LogInformation("Dynamic runner {RunnerName} cleaned up", instance.RunnerName);
+
+                // Remove dynamic runner records after cleanup (they're ephemeral)
+                await store.Remove<RunnerInstance>(instance.Id);
             }
         }
         catch (Exception ex)
