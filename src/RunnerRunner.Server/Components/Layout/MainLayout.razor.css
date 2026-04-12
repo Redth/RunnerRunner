@@ -108,11 +108,25 @@ main {
     flex: 1;
 }
 
+/* Mobile hamburger button (hidden on desktop, shown via app.css media query) */
+.mobile-hamburger {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+}
+.mobile-hamburger:hover {
+    color: var(--text-primary);
+}
+
 /* Mobile */
 @media (max-width: 768px) {
-    .sidebar {
-        display: none;
-    }
     .content-area {
         padding: 1rem;
     }

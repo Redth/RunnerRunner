@@ -18,9 +18,9 @@
     </div>
 </SectionContent>
 
-<div class="d-flex" style="height: calc(100vh - 120px);">
+<div class="split-pane-container d-flex" style="height: calc(100vh - 120px);">
     @* Left sidebar *@
-    <div id="images-sidebar" class="d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
+    <div id="images-sidebar" class="split-pane-sidebar d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
         <div class="sidebar-section-header">
             <i class="bi bi-pc-display me-1"></i> Hosts
             <span class="badge bg-secondary ms-auto">@hosts.Count</span>
@@ -46,7 +46,7 @@
     <div id="images-resize-handle" class="split-resize-handle"></div>
 
     @* Right pane *@
-    <div class="flex-grow-1 d-flex flex-column" style="min-width: 0; overflow-y: auto;">
+    <div class="split-pane-main flex-grow-1 d-flex flex-column" style="min-width: 0; overflow-y: auto;">
         @if (string.IsNullOrEmpty(selectedHostId))
         {
             <div class="border rounded d-flex flex-column align-items-center justify-content-center flex-grow-1 text-muted" style="background: var(--bg-card, #fff);">
@@ -175,6 +175,7 @@
                 {
                     @if (activeTab == "docker")
                     {
+                        <div class="table-responsive">
                         <table class="table table-striped resizable-table mb-0">
                             <thead>
                                 <tr>
@@ -204,9 +205,11 @@
                                 }
                             </tbody>
                         </table>
+                        </div>
                     }
                     else
                     {
+                        <div class="table-responsive">
                         <table class="table table-striped resizable-table mb-0">
                             <thead>
                                 <tr>
@@ -232,6 +235,7 @@
                                 }
                             </tbody>
                         </table>
+                        </div>
                     }
                 }
             </div>

@@ -396,6 +396,110 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     outline: none;
 }
 
+/* === Mobile Responsive === */
+@media (max-width: 768px) {
+    /* Top bar compact */
+    .top-bar {
+        padding: 0.4rem 0.75rem !important;
+        min-height: 2.75rem !important;
+    }
+
+    /* Page header smaller */
+    .page-header h1 {
+        font-size: 0.95rem !important;
+    }
+    .page-header .page-desc {
+        display: none !important;
+    }
+
+    /* Content area tighter padding */
+    .content-area {
+        padding: 0.75rem !important;
+    }
+
+    /* Filter bars: wrap and stack */
+    .row.g-2.mb-3 {
+        gap: 0.35rem !important;
+    }
+    .row.g-2.mb-3 .col-auto {
+        flex: 1 1 auto;
+        min-width: 120px;
+    }
+    .row.g-2.mb-3 .col-auto.flex-grow-1 {
+        flex: 1 1 100%;
+    }
+
+    /* Filter bars that use d-flex */
+    .mb-3.d-flex.flex-wrap {
+        gap: 0.35rem !important;
+    }
+
+    /* Smaller form controls on mobile */
+    .form-control-sm, .form-select-sm {
+        font-size: 0.75rem !important;
+        padding: 0.25rem 0.5rem !important;
+    }
+
+    /* Chips slightly smaller */
+    .host-chip {
+        font-size: 0.65rem !important;
+        padding: 0.1rem 0.4rem !important;
+    }
+    .cap-chip {
+        font-size: 0.6rem !important;
+    }
+
+    /* Badge smaller */
+    .badge {
+        font-size: 0.65rem;
+        padding: 0.2rem 0.4rem;
+    }
+
+    /* Buttons more compact */
+    .btn-sm {
+        font-size: 0.7rem !important;
+        padding: 0.2rem 0.5rem !important;
+    }
+
+    /* Cards compact */
+    .card-body {
+        padding: 0.75rem !important;
+    }
+
+    /* Dashboard stat cards: 2 per row */
+    .row .col-md-3, .row .col-md-2 {
+        flex: 0 0 50%;
+        max-width: 50%;
+    }
+
+    /* Section headers smaller */
+    h3 {
+        font-size: 1.1rem;
+    }
+
+    /* Log/Image sidebar cards compact */
+    .log-source-card, .image-host-card {
+        padding: 0.35rem 0.5rem !important;
+        font-size: 0.8rem;
+    }
+    .sidebar-section-header {
+        font-size: 0.6rem !important;
+        padding: 0.25rem 0.5rem !important;
+    }
+}
+
+/* Extra small screens */
+@media (max-width: 480px) {
+    .row .col-md-3, .row .col-md-2 {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    .page-header h1 {
+        font-size: 0.85rem !important;
+    }
+}
+
 /* --- Collapsed Sidebar (global — must not be scoped) --- */
 .page.sidebar-collapsed .brand-text,
 [data-sidebar-collapsed="true"] .brand-text {
@@ -440,4 +544,75 @@ h1 .bi, h3 .bi { opacity: 0.7; }
 .page.sidebar-collapsed .nav-section,
 [data-sidebar-collapsed="true"] .nav-section {
     align-items: center;
+}
+
+/* Split pane mobile layout */
+@media (max-width: 768px) {
+    .split-pane-container {
+        flex-direction: column !important;
+        height: auto !important;
+    }
+    .split-pane-sidebar {
+        width: 100% !important;
+        min-width: unset !important;
+        max-width: unset !important;
+        max-height: 200px;
+        overflow-y: auto;
+        border-bottom: 1px solid var(--border-color);
+        margin-bottom: 0.5rem;
+    }
+    .split-pane-main {
+        min-height: 400px;
+    }
+    .split-resize-handle {
+        display: none !important;
+    }
+}
+
+/* --- Mobile Sidebar Overlay --- */
+@media (max-width: 768px) {
+    .sidebar {
+        position: fixed !important;
+        z-index: 1050;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        width: 280px !important;
+        height: 100vh;
+        top: 0;
+        left: 0;
+    }
+    .page.mobile-sidebar-open .sidebar {
+        transform: translateX(0);
+    }
+    .page.sidebar-collapsed .sidebar {
+        width: 280px !important;
+    }
+    .sidebar-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.4);
+        z-index: 1040;
+    }
+    .page.mobile-sidebar-open .sidebar-backdrop {
+        display: block;
+    }
+    .mobile-hamburger {
+        display: flex !important;
+    }
+    .sidebar-toggle {
+        display: none !important;
+    }
+}
+
+/* Mobile table improvements */
+@media (max-width: 768px) {
+    .table th, .table td {
+        white-space: nowrap;
+        font-size: 0.8rem;
+        padding: 0.4rem 0.5rem;
+    }
+    .resizable-table {
+        table-layout: auto !important;
+    }
 }

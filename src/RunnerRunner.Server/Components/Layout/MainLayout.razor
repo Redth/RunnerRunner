@@ -1,17 +1,21 @@
 ﻿@inherits LayoutComponentBase
 
 <div class="page" id="page-root">
-    <aside class="sidebar">
+    <aside class="sidebar" onclick="if(event.target.closest('a'))closeMobileSidebar()">
         <NavMenu />
         <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
             <i class="bi bi-chevron-bar-left collapse-icon-expanded"></i>
             <i class="bi bi-chevron-bar-right collapse-icon-collapsed"></i>
         </button>
     </aside>
+    <div class="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
     <main>
         <header class="top-bar">
             <div class="top-bar-left">
+                <button class="mobile-hamburger" onclick="toggleMobileSidebar()" title="Open menu">
+                    <i class="bi bi-list"></i>
+                </button>
                 <SectionOutlet SectionName="page-header" />
             </div>
             <div class="top-bar-right">

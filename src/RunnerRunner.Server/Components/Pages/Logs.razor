@@ -19,9 +19,9 @@
     </div>
 </SectionContent>
 
-<div class="d-flex" style="height: calc(100vh - 120px);">
+<div class="split-pane-container d-flex" style="height: calc(100vh - 120px);">
     @* Left sidebar *@
-    <div id="logs-sidebar" class="d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
+    <div id="logs-sidebar" class="split-pane-sidebar d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
         @* Server card *@
         <div class="log-source-card @(selectedSource == "server" ? "active" : "")"
              @onclick='() => SelectSource("server")'>
@@ -81,7 +81,7 @@
     <div id="logs-resize-handle" class="split-resize-handle"></div>
 
     @* Main content *@
-    <div class="flex-grow-1 d-flex flex-column" style="min-width: 0;">
+    <div class="split-pane-main flex-grow-1 d-flex flex-column" style="min-width: 0;">
         @* Toolbar *@
         <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
             <div class="input-group" style="max-width: 250px;">

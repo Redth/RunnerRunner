@@ -44,6 +44,12 @@
     <script src="js/terminal.js"></script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
     <script>
+        window.toggleMobileSidebar = function() {
+            document.getElementById('page-root').classList.toggle('mobile-sidebar-open');
+        };
+        window.closeMobileSidebar = function() {
+            document.getElementById('page-root').classList.remove('mobile-sidebar-open');
+        };
         window.toggleSidebar = function() {
             var page = document.querySelector('.page');
             if (!page) return;
