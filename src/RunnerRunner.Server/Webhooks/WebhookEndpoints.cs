@@ -315,8 +315,16 @@ public static class WebhookEndpoints
                 : signatureHeader
             : signatureHeader;
 
-        return CryptographicOperations.FixedTimeEquals(
+        var match = CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(computed),
             Encoding.UTF8.GetBytes(expected.ToLowerInvariant()));
+
+        if (!match)
+        {
+            // Debug: log lengths and first/last chars to help diagnose
+            Console.WriteLine($"[Webhook] Signature mismatch: computed={computed[..8]}... ({computed.Length} chars), expected={expected[..Math.Min(8, expected.Length)]}... ({expected.Length} chars), secret length={secret.Length}, body length={body.Length}");
+        }
+
+        return match;
     }
 }

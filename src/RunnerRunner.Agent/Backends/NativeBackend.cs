@@ -126,6 +126,7 @@ public class NativeBackend : IRunnerBackend
         }
 
         var instanceHandle = runProcess.Id.ToString();
+        await File.WriteAllTextAsync(Path.Combine(instanceDir, "rr.pid"), runProcess.Id.ToString());
         var logFile = Path.Combine(instanceDir, "runner.log");
         _runners[instanceHandle] = new ManagedNativeRunner
         {
@@ -218,6 +219,108 @@ public class NativeBackend : IRunnerBackend
         }
 
         return Task.FromResult(new RunnerHealthStatus { IsRunning = false, Status = "not_found" });
+    }
+
+    /// <summary>
+    /// Discovers RunnerRunner-managed native processes by scanning instance directories for PID files.
+    /// </summary>
+    public async Task<List<DiscoveredRunner>> DiscoverManagedProcessesAsync(CancellationToken ct = default)
+    {
+        var result = new List<DiscoveredRunner>();
+        var basePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
+        var instancesDir = Path.Combine(basePath, "instances");
+
+        if (!Directory.Exists(instancesDir))
+            return result;
+
+        foreach (var dir in Directory.GetDirectories(instancesDir))
+        {
+            var pidFile = Path.Combine(dir, "rr.pid");
+            if (!File.Exists(pidFile))
+                continue;
+
+            try
+            {
+                var pidText = await File.ReadAllTextAsync(pidFile, ct);
+                if (!int.TryParse(pidText.Trim(), out var pid))
+                    continue;
+
+                var isRunning = false;
+                try
+                {
+                    var proc = Process.GetProcessById(pid);
+                    isRunning = !proc.HasExited;
+                }
+                catch
+                {
+                    // Process not found — not running
+                }
+
+                result.Add(new DiscoveredRunner
+                {
+                    ProcessId = pid,
+                    RunnerName = Path.GetFileName(dir),
+                    Backend = ExecutionBackend.Native,
+                    IsRunning = isRunning,
+                    Status = isRunning ? "running" : "exited"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read PID file in {Dir}", dir);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Cleans up an orphaned native runner process and its instance directory.
+    /// </summary>
+    public async Task CleanupOrphanProcessAsync(int processId, string? instanceDir, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Cleaning up orphaned native runner (PID: {PID})", processId);
+
+        try
+        {
+            var proc = Process.GetProcessById(processId);
+            if (!proc.HasExited)
+            {
+                if (!OperatingSystem.IsWindows())
+                {
+                    Process.Start("kill", $"-TERM {processId}")?.WaitForExit(5000);
+                    await Task.Delay(3000, ct);
+                }
+
+                proc.Refresh();
+                if (!proc.HasExited)
+                {
+                    _logger.LogWarning("Orphan PID {PID} did not exit after SIGTERM, force killing", processId);
+                    proc.Kill(entireProcessTree: true);
+                }
+            }
+        }
+        catch (ArgumentException)
+        {
+            // Process already gone
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error killing orphan process {PID}", processId);
+        }
+
+        if (!string.IsNullOrEmpty(instanceDir) && Directory.Exists(instanceDir))
+        {
+            try
+            {
+                Directory.Delete(instanceDir, recursive: true);
+                _logger.LogInformation("Cleaned up orphan instance dir {Dir}", instanceDir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up orphan instance directory {Dir}", instanceDir);
+            }
+        }
     }
 
     // ─── GitHub Actions Runner ─────────────────────────────

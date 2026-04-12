@@ -125,6 +125,46 @@ public class TartBackend : IRunnerBackend
         };
     }
 
+    /// <summary>
+    /// Discovers all RunnerRunner-managed Tart VMs currently on this host.
+    /// Filters by VMs whose name starts with "rr-".
+    /// </summary>
+    public async Task<List<DiscoveredRunner>> DiscoverManagedVmsAsync(CancellationToken ct = default)
+    {
+        var result = new List<DiscoveredRunner>();
+        try
+        {
+            var listResult = await RunCommandAsync("tart", "list --format json", ct);
+            if (listResult.ExitCode != 0 || string.IsNullOrWhiteSpace(listResult.Output))
+                return result;
+
+            using var doc = JsonDocument.Parse(listResult.Output);
+            foreach (var element in doc.RootElement.EnumerateArray())
+            {
+                var name = element.GetProperty("Name").GetString() ?? "";
+                if (!name.StartsWith("rr-"))
+                    continue;
+
+                var state = element.GetProperty("State").GetString() ?? "";
+
+                result.Add(new DiscoveredRunner
+                {
+                    VmName = name,
+                    RunnerName = name.StartsWith("rr-") ? name[3..] : name,
+                    Backend = ExecutionBackend.Tart,
+                    IsRunning = string.Equals(state, "running", StringComparison.OrdinalIgnoreCase),
+                    Status = state
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to discover managed Tart VMs");
+        }
+
+        return result;
+    }
+
     private async Task<string?> WaitForVmIp(string vmName, CancellationToken ct)
     {
         for (int i = 0; i < 45; i++)

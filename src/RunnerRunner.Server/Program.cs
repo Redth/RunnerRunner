@@ -46,6 +46,7 @@ builder.Services.AddSingleton<JitConfigService>();
 builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
+builder.Services.AddHostedService<ReconciliationService>();
 
 // Blazor
 builder.Services.AddRazorComponents()

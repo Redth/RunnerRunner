@@ -213,6 +213,7 @@ public class DockerBackend : IRunnerBackend
                     InstanceId = instanceId ?? "",
                     RunnerName = runnerName ?? container.Names.FirstOrDefault()?.TrimStart('/') ?? "",
                     ContainerId = container.ID,
+                    Backend = ExecutionBackend.Docker,
                     IsRunning = container.State == "running",
                     Status = container.State
                 });
@@ -224,6 +225,13 @@ public class DockerBackend : IRunnerBackend
         }
 
         return result;
+    }
+
+    public async Task CleanupOrphanContainerAsync(string containerId, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Cleaning up orphaned container {Id}", containerId[..Math.Min(12, containerId.Length)]);
+        try { await _client.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct); } catch { }
+        try { await _client.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true }, ct); } catch { }
     }
 
     private async Task<bool> ImageExistsAsync(string imageName, CancellationToken ct)
