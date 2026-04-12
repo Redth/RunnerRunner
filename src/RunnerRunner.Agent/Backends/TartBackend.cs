@@ -230,12 +230,42 @@ public class TartBackend : IRunnerBackend
 
         if (!string.IsNullOrEmpty(request.JitConfig))
         {
-            // JIT mode: skip config.sh, start with --jitconfig
+            // JIT mode: write config to file first (too long for command line), then start
             _logger.LogInformation("Starting runner with JIT config in VM");
+
+            // Write JIT config to a temp file in the VM
+            await SshExec(sshUser, vmIp, sshPassword,
+                $"echo '{EscapeShell(request.JitConfig)}' > /tmp/jitconfig.txt", ct);
+
+            // Start runner reading from file
             var jitScript =
-                $"{envExports} && cd {runnerDir} && " +
-                $"nohup ./run.sh --jitconfig '{request.JitConfig}' > /tmp/runner.log 2>&1 &";
+                $"cd {runnerDir} && " +
+                $"JIT_CONFIG=$(cat /tmp/jitconfig.txt) && " +
+                $"nohup ./run.sh --jitconfig \"$JIT_CONFIG\" > /tmp/runner.log 2>&1 &";
             await SshExec(sshUser, vmIp, sshPassword, jitScript, ct);
+
+            // Verify it started
+            await Task.Delay(3000, ct);
+            var checkResult = await RunCommandAsync(
+                string.IsNullOrEmpty(sshPassword) ? "ssh" : "sshpass",
+                string.IsNullOrEmpty(sshPassword)
+                    ? $"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} pgrep -f Runner.Listener"
+                    : $"-p {EscapeShell(sshPassword)} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} pgrep -f Runner.Listener",
+                ct);
+
+            if (checkResult.ExitCode == 0)
+                _logger.LogInformation("Runner process confirmed running in VM (PID: {Pid})", checkResult.Output.Trim());
+            else
+            {
+                // Log what went wrong
+                var logResult = await RunCommandAsync(
+                    string.IsNullOrEmpty(sshPassword) ? "ssh" : "sshpass",
+                    string.IsNullOrEmpty(sshPassword)
+                        ? $"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} cat /tmp/runner.log"
+                        : $"-p {EscapeShell(sshPassword)} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {sshUser}@{vmIp} cat /tmp/runner.log",
+                    ct);
+                _logger.LogError("Runner failed to start in VM. runner.log: {Log}", logResult.Output);
+            }
         }
         else
         {
