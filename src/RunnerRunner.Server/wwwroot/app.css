@@ -339,6 +339,14 @@ h1 .bi, h3 .bi { opacity: 0.7; }
 .btn .bi { margin-right: 0.25rem; }
 .alert .bi { margin-right: 0.35rem; }
 
+/* Remove focus outline from page header in top bar */
+.top-bar h1, .top-bar .page-header, .top-bar [b-*] {
+    outline: none;
+}
+.top-bar *:focus {
+    outline: none;
+}
+
 /* --- Collapsed Sidebar (global — must not be scoped) --- */
 .page.sidebar-collapsed .brand-text,
 [data-sidebar-collapsed="true"] .brand-text {
