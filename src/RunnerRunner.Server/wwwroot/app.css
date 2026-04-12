@@ -330,3 +330,49 @@ h1 .bi, h3 .bi { opacity: 0.7; }
 .card-title .bi { opacity: 0.8; }
 .btn .bi { margin-right: 0.25rem; }
 .alert .bi { margin-right: 0.35rem; }
+
+/* --- Collapsed Sidebar (global — must not be scoped) --- */
+.page.sidebar-collapsed .brand-text,
+[data-sidebar-collapsed="true"] .brand-text {
+    display: none !important;
+}
+.page.sidebar-collapsed .nav-section-label,
+[data-sidebar-collapsed="true"] .nav-section-label {
+    font-size: 0;
+    padding: 0;
+    height: 1px;
+    background: var(--bg-sidebar-border);
+    width: 28px;
+    margin: 0.4rem auto;
+    overflow: hidden;
+}
+.page.sidebar-collapsed .nav-label,
+[data-sidebar-collapsed="true"] .nav-label {
+    display: none !important;
+}
+.page.sidebar-collapsed .nav-brand,
+[data-sidebar-collapsed="true"] .nav-brand {
+    justify-content: center;
+    padding: 1rem 0;
+    gap: 0;
+}
+.page.sidebar-collapsed a.nav-item,
+[data-sidebar-collapsed="true"] a.nav-item {
+    justify-content: center;
+    padding: 0.6rem 0;
+    margin: 1px 0.5rem;
+}
+.page.sidebar-collapsed a.nav-item .bi,
+[data-sidebar-collapsed="true"] a.nav-item .bi {
+    width: auto;
+    margin: 0 auto;
+    font-size: 1.2rem;
+}
+.page.sidebar-collapsed .nav-menu,
+[data-sidebar-collapsed="true"] .nav-menu {
+    padding: 0.5rem 0;
+}
+.page.sidebar-collapsed .nav-section,
+[data-sidebar-collapsed="true"] .nav-section {
+    align-items: center;
+}
