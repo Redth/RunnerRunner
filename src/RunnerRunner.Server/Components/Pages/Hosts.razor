@@ -63,10 +63,8 @@
     <thead>
         <tr>
             <th role="button" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
-            <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
             <th role="button" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
-            <th role="button" @onclick='() => ToggleSort("Architecture")'>Architecture @SortIndicator("Architecture")</th>
-            <th>Capabilities</th>
+            <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
             <th>Assignments</th>
             <th role="button" @onclick='() => ToggleSort("LastHeartbeat")'>Last Heartbeat @SortIndicator("LastHeartbeat")</th>
             <th>Actions</th>
@@ -96,12 +94,22 @@
                         <button class="btn btn-sm btn-link p-0 ms-1" @onclick="() => StartRename(host)" title="Rename"><i class="bi bi-pencil"></i></button>
                     }
                 </td>
-                <td>@host.Platform</td>
                 <td>
                     <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
                 </td>
-                <td>@host.Architecture</td>
-                <td>@string.Join(", ", host.Capabilities)</td>
+                <td>
+                    <div class="d-flex flex-wrap gap-1">
+                        <span class="host-chip platform-chip"><i class="bi @GetPlatformIcon(host.Platform) me-1"></i>@host.Platform</span>
+                        @if (!string.IsNullOrEmpty(host.Architecture))
+                        {
+                            <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@host.Architecture</span>
+                        }
+                        @foreach (var cap in host.Capabilities)
+                        {
+                            <span class="host-chip cap-chip">@cap</span>
+                        }
+                    </div>
+                </td>
                 <td>
                     @if (hostAssignments.Any())
                     {
@@ -383,4 +391,39 @@
         AgentStatus.Offline => "bg-secondary",
         _ => "bg-secondary"
     };
+
+    private string GetPlatformIcon(HostPlatform platform) => platform switch
+    {
+        HostPlatform.Linux => "bi-ubuntu",
+        HostPlatform.MacOS => "bi-apple",
+        HostPlatform.Windows => "bi-windows",
+        _ => "bi-pc-display"
+    };
 }
+
+<style>
+    .host-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        line-height: 1.4;
+    }
+    .platform-chip {
+        background: var(--bs-primary);
+        color: white;
+    }
+    .arch-chip {
+        background: var(--bg-tertiary, #e9ecef);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color, #dee2e6);
+    }
+    .cap-chip {
+        background: var(--bg-secondary, #f0f0f0);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color, #dee2e6);
+        font-size: 0.7rem;
+    }
+</style>
