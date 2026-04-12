@@ -16,6 +16,7 @@ public interface IAgentHubClient
     Task LoginRegistry(LoginRegistryCommand command);
     Task GetHostEnvironment();
     Task GetRunnerLogs(GetRunnerLogsCommand command);
+    Task CleanupOrphan(CleanupOrphanCommand command);
 }
 
 /// <summary>
@@ -35,6 +36,7 @@ public interface IAgentHubServer
     Task ImageDeleted(ImageDeletedEvent evt);
     Task HostEnvironmentResponse(HostEnvironmentEvent evt);
     Task RunnerDiscovery(RunnerDiscoveryEvent evt);
+    Task Reconciliation(ReconciliationReport report);
     Task RunnerLogsResponse(RunnerLogsEvent evt);
 }
 
@@ -232,8 +234,34 @@ public class DiscoveredRunnerInfo
     public string InstanceId { get; set; } = "";
     public required string RunnerName { get; set; }
     public string ContainerId { get; set; } = "";
+    public string? VmName { get; set; }
+    public int? ProcessId { get; set; }
+    public ExecutionBackend Backend { get; set; }
     public bool IsRunning { get; set; }
     public string Status { get; set; } = "";
+}
+
+/// <summary>
+/// Full reconciliation report sent by agent during heartbeat.
+/// Contains all RunnerRunner-managed resources on the host.
+/// </summary>
+public class ReconciliationReport
+{
+    public required string HostId { get; set; }
+    public List<DiscoveredRunnerInfo> Runners { get; set; } = [];
+}
+
+/// <summary>
+/// Server tells agent to clean up an orphaned resource
+/// (exists on host but has no matching DB record).
+/// </summary>
+public class CleanupOrphanCommand
+{
+    public ExecutionBackend Backend { get; set; }
+    public string? ContainerId { get; set; }
+    public string? VmName { get; set; }
+    public int? ProcessId { get; set; }
+    public string? InstanceDir { get; set; }
 }
 
 public class GetRunnerLogsCommand

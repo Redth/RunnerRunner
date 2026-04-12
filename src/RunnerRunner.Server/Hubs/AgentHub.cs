@@ -331,6 +331,16 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
         return Task.CompletedTask;
     }
 
+    public static event Action<ReconciliationReport>? OnReconciliationReceived;
+
+    public Task Reconciliation(ReconciliationReport report)
+    {
+        _logger.LogDebug("Received reconciliation report from {Host} with {Count} runners",
+            report.HostId, report.Runners.Count);
+        OnReconciliationReceived?.Invoke(report);
+        return Task.CompletedTask;
+    }
+
     // Static accessors for the orchestration engine
     public static IReadOnlyDictionary<string, ConnectedAgent> GetConnectedAgents() => ConnectedAgents;
 

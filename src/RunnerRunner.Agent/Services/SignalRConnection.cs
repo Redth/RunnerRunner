@@ -23,6 +23,7 @@ public class SignalRConnection : IAsyncDisposable
     public event Func<LoginRegistryCommand, Task>? OnLoginRegistry;
     public event Func<Task>? OnGetHostEnvironment;
     public event Func<GetRunnerLogsCommand, Task>? OnGetRunnerLogs;
+    public event Func<CleanupOrphanCommand, Task>? OnCleanupOrphan;
     public event Func<Task>? OnReconnected;
 
     public bool IsConnected => _connection?.State == HubConnectionState.Connected;
@@ -123,6 +124,11 @@ public class SignalRConnection : IAsyncDisposable
             if (OnGetRunnerLogs != null) await OnGetRunnerLogs(cmd);
         });
 
+        connection.On<CleanupOrphanCommand>("CleanupOrphan", async cmd =>
+        {
+            if (OnCleanupOrphan != null) await OnCleanupOrphan(cmd);
+        });
+
         connection.Reconnecting += error =>
         {
             _logger.LogWarning(error, "Connection lost, reconnecting...");
@@ -214,6 +220,12 @@ public class SignalRConnection : IAsyncDisposable
     {
         if (_connection is not null)
             await _connection.InvokeAsync("RunnerLogsResponse", evt);
+    }
+
+    public async Task SendReconciliation(ReconciliationReport report)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("Reconciliation", report);
     }
 
     public async ValueTask DisposeAsync()
