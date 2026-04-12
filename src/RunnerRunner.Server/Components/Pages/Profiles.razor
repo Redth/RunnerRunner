@@ -238,6 +238,18 @@
                         <input class="form-control" @bind="tartDisplay" placeholder="1024x768" />
                     </div>
                 </div>
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">SSH User</label>
+                        <input class="form-control" @bind="tartSshUser" placeholder="admin" />
+                        <small class="text-muted">User to SSH into the VM (default: admin)</small>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <label class="form-label">SSH Password</label>
+                        <input type="password" class="form-control" @bind="tartSshPassword" placeholder="admin" />
+                        <small class="text-muted">Password for SSH auth (Cirrus images use admin/admin)</small>
+                    </div>
+                </div>
             }
 
             @* Environment Variable Sets *@
@@ -513,6 +525,8 @@
     private int? tartMemory;
     private int? tartDisk;
     private string tartDisplay = "";
+    private string tartSshUser = "admin";
+    private string tartSshPassword = "";
 
     // Native config fields
     private string nativeBasePath = "";
@@ -583,6 +597,8 @@
             tartMemory = profile.TartConfig.MemorySizeGb;
             tartDisk = profile.TartConfig.DiskSizeGb;
             tartDisplay = profile.TartConfig.Display ?? "";
+            tartSshUser = profile.TartConfig.SshUser;
+            tartSshPassword = profile.TartConfig.SshPassword ?? "";
         }
 
         isEditing = true;
@@ -627,7 +643,9 @@
                 CpuCount = tartCpu,
                 MemorySizeGb = tartMemory,
                 DiskSizeGb = tartDisk,
-                Display = string.IsNullOrWhiteSpace(tartDisplay) ? null : tartDisplay
+                Display = string.IsNullOrWhiteSpace(tartDisplay) ? null : tartDisplay,
+                SshUser = string.IsNullOrWhiteSpace(tartSshUser) ? "admin" : tartSshUser,
+                SshPassword = string.IsNullOrWhiteSpace(tartSshPassword) ? null : tartSshPassword
             };
             editProfile.DockerConfig = null;
         }
@@ -708,7 +726,7 @@
         dockerRegistry = "ghcr.io"; dockerImage = ""; dockerTag = "latest";
         dockerPullPolicy = PullPolicy.IfNotPresent;
         tartRegistry = "ghcr.io"; tartImage = ""; tartTag = "latest";
-        tartCpu = null; tartMemory = null; tartDisk = null; tartDisplay = "";
+        tartCpu = null; tartMemory = null; tartDisk = null; tartDisplay = ""; tartSshUser = "admin"; tartSshPassword = "";
     }
 
     // --- Label chip helpers ---

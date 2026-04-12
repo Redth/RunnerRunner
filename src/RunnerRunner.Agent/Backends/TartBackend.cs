@@ -39,7 +39,9 @@ public class TartBackend : IRunnerBackend
             ?? throw new InvalidOperationException("TartConfig is required for Tart backend");
 
         var sourceImage = $"{config.RegistryUrl}/{config.ImageName}:{config.Tag}";
-        var vmName = $"rr-{request.RunnerName}";
+        var vmName = request.RunnerName.StartsWith("rr-", StringComparison.OrdinalIgnoreCase)
+            ? request.RunnerName
+            : $"rr-{request.RunnerName}";
 
         // Clone the base image for this runner instance
         _logger.LogInformation("Cloning tart image {Source} → {VM}", sourceImage, vmName);
@@ -316,22 +318,28 @@ public class TartBackend : IRunnerBackend
     private static async Task<(int ExitCode, string Output)> RunCommandAsync(
         string command, string arguments, CancellationToken ct)
     {
-        var process = new Process
+        var psi = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = command,
-                Arguments = arguments,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }
+            FileName = command,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
-        process.Start();
+        // Ensure homebrew paths are available (macOS)
+        var path = psi.Environment.TryGetValue("PATH", out var existingPath) ? existingPath ?? "" : "";
+        if (!path.Contains("/opt/homebrew"))
+        {
+            psi.Environment["PATH"] = $"/opt/homebrew/bin:/opt/homebrew/sbin:{path}";
+        }
+
+        var process = Process.Start(psi)!;
         var output = await process.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
 
-        return (process.ExitCode, output.Trim());
+        var combinedOutput = string.IsNullOrEmpty(stderr) ? output : $"{output}\n{stderr}";
+        return (process.ExitCode, combinedOutput.Trim());
     }
 }
