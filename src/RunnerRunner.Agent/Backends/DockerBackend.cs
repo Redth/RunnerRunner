@@ -70,7 +70,10 @@ public class DockerBackend : IRunnerBackend
         }
 
         // Create and start container with RunnerRunner labels for tracking
-        var createResponse = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
+        // JIT config is passed as RR_JIT_CONFIG env var — the container image's
+        // entrypoint is responsible for checking it and using --jitconfig if set.
+        // We do NOT override the entrypoint to avoid breaking image setup logic.
+        var createParams = new CreateContainerParameters
         {
             Image = imageName,
             Name = $"rr-{request.RunnerName}",
@@ -89,7 +92,9 @@ public class DockerBackend : IRunnerBackend
                     ? new RestartPolicy { Name = RestartPolicyKind.No }
                     : new RestartPolicy { Name = RestartPolicyKind.UnlessStopped }
             }
-        }, ct);
+        };
+
+        var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
 
         await _client.Containers.StartContainerAsync(createResponse.ID, null, ct);
 

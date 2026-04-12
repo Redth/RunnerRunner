@@ -11,6 +11,12 @@ public class TartImageConfig
     public int? MemorySizeGb { get; set; }
     public string? Display { get; set; }
     public List<SharedDirMount> SharedDirs { get; set; } = [];
+
+    /// <summary>SSH user for the VM (default: admin)</summary>
+    public string SshUser { get; set; } = "admin";
+
+    /// <summary>SSH password (if key-based auth not configured)</summary>
+    public string? SshPassword { get; set; }
 }
 
 public class SharedDirMount
