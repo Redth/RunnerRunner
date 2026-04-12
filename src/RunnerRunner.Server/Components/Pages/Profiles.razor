@@ -356,9 +356,7 @@
     <thead>
         <tr>
             <th role="button" @onclick='() => SetSort("Name")' style="cursor:pointer; user-select:none;">Name @SortIndicator("Name")</th>
-            <th role="button" @onclick='() => SetSort("Provider")' style="cursor:pointer; user-select:none;">Provider @SortIndicator("Provider")</th>
-            <th role="button" @onclick='() => SetSort("Platform")' style="cursor:pointer; user-select:none;">Platform @SortIndicator("Platform")</th>
-            <th role="button" @onclick='() => SetSort("Backend")' style="cursor:pointer; user-select:none;">Backend @SortIndicator("Backend")</th>
+            <th role="button" @onclick='() => SetSort("Provider")' style="cursor:pointer; user-select:none;">Provider / Platform @SortIndicator("Provider")</th>
             <th>Labels</th>
             <th>Env Sets</th>
             <th>Max Parallel</th>
@@ -369,16 +367,57 @@
         @foreach (var profile in FilteredProfiles)
         {
             <tr>
-                <td>@profile.Name</td>
-                <td>@profile.Provider</td>
-                <td>@profile.RequiredHostPlatform</td>
-                <td>@profile.ExecutionBackend</td>
-                <td>@string.Join(", ", profile.Labels)</td>
-                <td>@profile.EnvironmentVariableSetIds.Count set(s)</td>
+                <td>
+                    <strong>@profile.Name</strong>
+                    @if (!string.IsNullOrWhiteSpace(profile.Description))
+                    {
+                        <br/><small class="text-muted">@profile.Description</small>
+                    }
+                </td>
+                <td>
+                    <div class="d-flex flex-wrap gap-1">
+                        <span class="host-chip" style="background: @GetProviderColor(profile.Provider); color: white;">
+                            <i class="bi @GetProviderIcon(profile.Provider) me-1"></i>@profile.Provider
+                        </span>
+                        <span class="host-chip platform-chip">
+                            <i class="bi @GetPlatformIcon(profile.RequiredHostPlatform) me-1"></i>@profile.RequiredHostPlatform
+                        </span>
+                    </div>
+                    <div class="d-flex flex-wrap gap-1 mt-1">
+                        <span class="host-chip arch-chip">
+                            <i class="bi @GetBackendIcon(profile.ExecutionBackend) me-1"></i>@profile.ExecutionBackend
+                        </span>
+                    </div>
+                </td>
+                <td>
+                    @if (profile.Labels.Any())
+                    {
+                        <div class="d-flex flex-wrap gap-1">
+                            @foreach (var label in profile.Labels)
+                            {
+                                <span class="host-chip cap-chip">@label</span>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </td>
+                <td>
+                    @if (profile.EnvironmentVariableSetIds.Any())
+                    {
+                        <span class="badge bg-secondary">@profile.EnvironmentVariableSetIds.Count set(s)</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </td>
                 <td>@profile.MaxParallelPerHost</td>
                 <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)">  <i class="bi bi-pencil-square"></i> Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteProfile(profile.Id)">  <i class="bi bi-trash3"></i> Delete</button>
+                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)"><i class="bi bi-pencil-square"></i> Edit</button>
+                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteProfile(profile.Id)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
         }
@@ -735,4 +774,36 @@
         public bool IsSecret { get; set; }
         public bool IsUnknown { get; set; }
     }
+
+    private string GetPlatformIcon(HostPlatform platform) => platform switch
+    {
+        HostPlatform.Linux => "bi-ubuntu",
+        HostPlatform.MacOS => "bi-apple",
+        HostPlatform.Windows => "bi-windows",
+        _ => "bi-pc-display"
+    };
+
+    private string GetProviderIcon(RunnerProvider provider) => provider switch
+    {
+        RunnerProvider.GitHubActions => "bi-github",
+        RunnerProvider.GiteaActions => "bi-git",
+        RunnerProvider.AzureDevOps => "bi-cloud-fill",
+        _ => "bi-gear"
+    };
+
+    private string GetProviderColor(RunnerProvider provider) => provider switch
+    {
+        RunnerProvider.GitHubActions => "#24292f",
+        RunnerProvider.GiteaActions => "#609926",
+        RunnerProvider.AzureDevOps => "#0078d4",
+        _ => "#6c757d"
+    };
+
+    private string GetBackendIcon(ExecutionBackend backend) => backend switch
+    {
+        ExecutionBackend.Docker => "bi-box-fill",
+        ExecutionBackend.Tart => "bi-display",
+        ExecutionBackend.Native => "bi-terminal",
+        _ => "bi-gear"
+    };
 }
