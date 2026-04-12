@@ -70,9 +70,6 @@ public class DockerBackend : IRunnerBackend
         }
 
         // Create and start container with RunnerRunner labels for tracking
-        // JIT config is passed as RR_JIT_CONFIG env var — the container image's
-        // entrypoint is responsible for checking it and using --jitconfig if set.
-        // We do NOT override the entrypoint to avoid breaking image setup logic.
         var createParams = new CreateContainerParameters
         {
             Image = imageName,
@@ -93,6 +90,46 @@ public class DockerBackend : IRunnerBackend
                     : new RestartPolicy { Name = RestartPolicyKind.UnlessStopped }
             }
         };
+
+        // JIT mode: inspect image for original entrypoint, then override with
+        // a wrapper that does JIT setup and exec's the original entrypoint.
+        if (!string.IsNullOrEmpty(request.JitConfig))
+        {
+            var imageInspect = await _client.Images.InspectImageAsync(imageName, ct);
+            var originalEntrypoint = imageInspect.Config?.Entrypoint;
+            var originalCmd = imageInspect.Config?.Cmd;
+
+            // Build the exec chain to call after JIT setup
+            var execParts = new List<string>();
+            if (originalEntrypoint?.Count > 0)
+                execParts.AddRange(originalEntrypoint);
+            if (originalCmd?.Count > 0)
+                execParts.AddRange(originalCmd);
+
+            var execChain = execParts.Count > 0
+                ? "exec " + string.Join(" ", execParts.Select(p => $"\"{p}\""))
+                : "exec /bin/sh -c 'echo No original entrypoint found; sleep infinity'";
+
+            // The wrapper script:
+            // 1. Finds run.sh in common locations
+            // 2. If found, runs with --jitconfig (runner exits after single job)
+            // 3. If not found, falls back to the original entrypoint (image handles RR_JIT_CONFIG env var)
+            var wrapperScript =
+                "RUN_SH=$(find / -name 'run.sh' -path '*/actions-runner/*' -o -name 'run.sh' -path '*/runner/*' 2>/dev/null | head -1); " +
+                "if [ -n \"$RUN_SH\" ] && [ -n \"$RR_JIT_CONFIG\" ]; then " +
+                "  echo \"[RunnerRunner] Starting JIT runner: $RUN_SH\"; " +
+                "  cd \"$(dirname \"$RUN_SH\")\" && exec \"$RUN_SH\" --jitconfig \"$RR_JIT_CONFIG\"; " +
+                "else " +
+                $"  echo \"[RunnerRunner] Falling back to original entrypoint\"; {execChain}; " +
+                "fi";
+
+            createParams.Entrypoint = new List<string> { "/bin/sh", "-c", wrapperScript };
+            // Clear Cmd so it doesn't append to our entrypoint
+            createParams.Cmd = new List<string>();
+
+            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} (original: {Original})",
+                imageName, string.Join(" ", execParts));
+        }
 
         var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
 
