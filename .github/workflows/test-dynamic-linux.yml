@@ -1,0 +1,60 @@
+name: Test Dynamic Runner (Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: 'Test message to log'
+        required: false
+        default: 'Hello from dynamic Linux runner!'
+
+jobs:
+  test-linux:
+    runs-on: [self-hosted, Linux]
+    steps:
+      - name: Runner Info
+        run: |
+          echo "========================================="
+          echo "  RunnerRunner Dynamic Runner Test"
+          echo "  Platform: Linux"
+          echo "========================================="
+          echo ""
+          echo "Runner Name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          echo "Runner Arch: $RUNNER_ARCH"
+          echo "Hostname: $(hostname)"
+          echo "User: $(whoami)"
+          echo "Working Dir: $(pwd)"
+          echo ""
+          echo "RR_INSTANCE_ID: ${RR_INSTANCE_ID:-not set}"
+          echo "RR_RUNNER_NAME: ${RR_RUNNER_NAME:-not set}"
+          echo "RR_PROVISIONING_MODE: ${RR_PROVISIONING_MODE:-not set}"
+          echo ""
+
+      - name: System Info
+        run: |
+          echo "--- OS ---"
+          cat /etc/os-release 2>/dev/null || echo "Unknown OS"
+          echo ""
+          echo "--- CPU ---"
+          nproc
+          echo ""
+          echo "--- Memory ---"
+          free -h 2>/dev/null || echo "free not available"
+          echo ""
+          echo "--- Disk ---"
+          df -h / 2>/dev/null || echo "df not available"
+
+      - name: Test Work
+        run: |
+          echo "Message: ${{ github.event.inputs.message }}"
+          echo ""
+          echo "Doing some test work..."
+          sleep 5
+          echo "Writing test output..."
+          for i in $(seq 1 10); do
+            echo "  Step $i/10 complete"
+            sleep 1
+          done
+          echo ""
+          echo "✅ Test complete!"
