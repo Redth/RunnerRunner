@@ -67,62 +67,72 @@
 }
 else
 {
-    @foreach (var group in groups)
-    {
-        var hostLabel = hostNames.GetValueOrDefault(group.Key, group.Key);
-        var hostId = group.Key;
-        var isExpanded = expandedHosts.Contains(hostId);
-        var sorted = ApplySort(group).ToList();
-
-        <div class="card mb-3">
-            <div class="card-header d-flex align-items-center py-2" role="button" @onclick="() => ToggleHost(hostId)" style="cursor:pointer; user-select:none;">
-                <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right") me-2"></i>
-                <strong>@hostLabel</strong>
-                <span class="badge bg-primary ms-2">@sorted.Count</span>
-            </div>
-            @if (isExpanded)
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th role="button" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner Name @SortIndicator("RunnerName")</th>
+                <th role="button" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
+                <th role="button" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
+                <th role="button" @onclick='() => SetSort("Started")' style="cursor:pointer; user-select:none;">Started @SortIndicator("Started")</th>
+                <th role="button" @onclick='() => SetSort("LastHealthCheck")' style="cursor:pointer; user-select:none;">Last Health Check @SortIndicator("LastHealthCheck")</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var group in groups)
             {
-                <div class="card-body p-0">
-                    <table class="table table-striped mb-0">
-                        <thead>
-                            <tr>
-                                <th role="button" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner Name @SortIndicator("RunnerName")</th>
-                                <th role="button" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
-                                <th role="button" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
-                                <th role="button" @onclick='() => SetSort("Started")' style="cursor:pointer; user-select:none;">Started @SortIndicator("Started")</th>
-                                <th role="button" @onclick='() => SetSort("LastHealthCheck")' style="cursor:pointer; user-select:none;">Last Health Check @SortIndicator("LastHealthCheck")</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var inst in sorted)
-                            {
-                                <tr>
-                                    <td>@inst.RunnerName</td>
-                                    <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
-                                    <td><span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span></td>
-                                    <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
-                                    <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
-                                    <td>
-                                        <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
-                                        @if (inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
-                                        {
-                                            <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)"><i class="bi bi-stop-circle"></i> Stop</button>
-                                        }
-                                        @if (inst.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)
-                                        {
-                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveInstance(inst.Id)">Remove</button>
-                                        }
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
+                var hostLabel = hostNames.GetValueOrDefault(group.Key, group.Key);
+                var hostId = group.Key;
+                var isExpanded = expandedHosts.Contains(hostId);
+                var sorted = ApplySort(group).ToList();
+
+                <tr class="group-header" role="button" @onclick="() => ToggleHost(hostId)" style="cursor:pointer; user-select:none;">
+                    <td colspan="6">
+                        <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right") me-2"></i>
+                        <strong>@hostLabel</strong>
+                        <span class="badge bg-primary ms-2">@sorted.Count</span>
+                    </td>
+                </tr>
+                @if (isExpanded)
+                {
+                    @foreach (var inst in sorted)
+                    {
+                        <tr>
+                            <td>@inst.RunnerName</td>
+                            <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
+                            <td><span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span></td>
+                            <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
+                            <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
+                            <td>
+                                <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
+                                @if (inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
+                                {
+                                    <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)"><i class="bi bi-stop-circle"></i> Stop</button>
+                                }
+                                @if (inst.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveInstance(inst.Id)">Remove</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                }
             }
-        </div>
-    }
+        </tbody>
+    </table>
 }
+
+<style>
+    tr.group-header td {
+        background: var(--bg-secondary, #f8f9fc);
+        border-bottom: 2px solid var(--border-color, #e5e7eb);
+        padding: 0.5rem 0.75rem;
+        font-size: 0.95rem;
+    }
+    tr.group-header:hover td {
+        background: var(--bg-tertiary, #f0f2f5);
+    }
+</style>
 
 @code {
     private List<RunnerInstance> instances = [];
