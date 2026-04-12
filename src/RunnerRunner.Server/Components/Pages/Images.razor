@@ -7,6 +7,7 @@
 @using Microsoft.AspNetCore.SignalR
 @inject IDocumentStore Store
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Images - RunnerRunner</PageTitle>
@@ -17,9 +18,9 @@
     </div>
 </SectionContent>
 
-<div class="d-flex" style="height: calc(100vh - 120px); gap: 1rem;">
+<div class="d-flex" style="height: calc(100vh - 120px);">
     @* Left sidebar *@
-    <div class="d-flex flex-column" style="width: 260px; min-width: 220px; overflow-y: auto;">
+    <div id="images-sidebar" class="d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
         <div class="sidebar-section-header">
             <i class="bi bi-pc-display me-1"></i> Hosts
             <span class="badge bg-secondary ms-auto">@hosts.Count</span>
@@ -40,6 +41,9 @@
             </div>
         }
     </div>
+
+    @* Resize handle *@
+    <div id="images-resize-handle" class="split-resize-handle"></div>
 
     @* Right pane *@
     <div class="flex-grow-1 d-flex flex-column" style="min-width: 0; overflow-y: auto;">
@@ -262,6 +266,19 @@
         letter-spacing: 0.05em;
         color: var(--text-muted, #6c757d);
     }
+    .split-resize-handle {
+        width: 6px;
+        cursor: col-resize;
+        background: transparent;
+        transition: background 0.15s;
+        flex-shrink: 0;
+        border-radius: 3px;
+        margin: 0 2px;
+    }
+    .split-resize-handle:hover, .split-resize-handle:active {
+        background: var(--bs-primary);
+        opacity: 0.4;
+    }
 </style>
 
 @code {
@@ -298,6 +315,12 @@
         AgentHub.OnImagePullProgressReceived += HandlePullProgress;
         AgentHub.OnImagePullCompleteReceived += HandlePullComplete;
         AgentHub.OnImageDeletedReceived += HandleImageDeleted;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await JS.InvokeVoidAsync("rrSplitPane.init", "images-resize-handle", "images-sidebar", "rr-images-sidebar-width", 180, 500);
     }
 
     private async Task SelectHost(string hostId)

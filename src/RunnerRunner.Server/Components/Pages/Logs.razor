@@ -19,9 +19,9 @@
     </div>
 </SectionContent>
 
-<div class="d-flex" style="height: calc(100vh - 120px); gap: 1rem;">
+<div class="d-flex" style="height: calc(100vh - 120px);">
     @* Left sidebar *@
-    <div class="d-flex flex-column" style="width: 260px; min-width: 220px; overflow-y: auto;">
+    <div id="logs-sidebar" class="d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
         @* Server card *@
         <div class="log-source-card @(selectedSource == "server" ? "active" : "")"
              @onclick='() => SelectSource("server")'>
@@ -77,6 +77,9 @@
         }
     </div>
 
+    @* Resize handle *@
+    <div id="logs-resize-handle" class="split-resize-handle"></div>
+
     @* Main content *@
     <div class="flex-grow-1 d-flex flex-column" style="min-width: 0;">
         @* Toolbar *@
@@ -117,7 +120,7 @@
 
         @* Terminal container *@
         <div class="flex-grow-1 rounded overflow-hidden border" style="min-height: 300px;">
-            <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
+            <div id="rr-terminal" style="width: 100%; height: 100%; padding: 0.75rem;"></div>
         </div>
     </div>
 </div>
@@ -148,6 +151,19 @@
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: var(--text-muted, #6c757d);
+    }
+    .split-resize-handle {
+        width: 6px;
+        cursor: col-resize;
+        background: transparent;
+        transition: background 0.15s;
+        flex-shrink: 0;
+        border-radius: 3px;
+        margin: 0 2px;
+    }
+    .split-resize-handle:hover, .split-resize-handle:active {
+        background: var(--bs-primary);
+        opacity: 0.4;
     }
 </style>
 
@@ -186,6 +202,7 @@
         if (firstRender)
         {
             await InitTerminal();
+            await JS.InvokeVoidAsync("rrSplitPane.init", "logs-resize-handle", "logs-sidebar", "rr-logs-sidebar-width", 180, 500);
             await FetchLogs();
         }
     }

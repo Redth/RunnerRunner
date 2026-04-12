@@ -126,3 +126,49 @@ window.rrTerminal = {
         delete this._instances[elementId];
     }
 };
+
+// Resizable split-pane
+window.rrSplitPane = {
+    init: function (handleId, panelId, storageKey, minWidth, maxWidth) {
+        var handle = document.getElementById(handleId);
+        var panel = document.getElementById(panelId);
+        if (!handle || !panel) return;
+
+        minWidth = minWidth || 180;
+        maxWidth = maxWidth || 500;
+
+        // Restore saved width
+        var saved = localStorage.getItem(storageKey);
+        if (saved) {
+            var w = parseInt(saved, 10);
+            if (w >= minWidth && w <= maxWidth) panel.style.width = w + 'px';
+        }
+
+        var startX, startW;
+        handle.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            startX = e.clientX;
+            startW = panel.getBoundingClientRect().width;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+
+            function onMove(ev) {
+                var newW = Math.min(maxWidth, Math.max(minWidth, startW + ev.clientX - startX));
+                panel.style.width = newW + 'px';
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                localStorage.setItem(storageKey, Math.round(panel.getBoundingClientRect().width));
+                // Refit terminal if present
+                if (window.rrTerminal && window.rrTerminal._instances['rr-terminal']) {
+                    window.rrTerminal.fit('rr-terminal');
+                }
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+};
