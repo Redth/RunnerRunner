@@ -70,6 +70,11 @@
                 if (page) page.classList.add('sidebar-collapsed');
             }
         });
+        // Auto-init resizable table columns on DOM changes (Blazor navigations)
+        var _resizeObserver = new MutationObserver(function() {
+            if (window.rrResizableColumns) window.rrResizableColumns.init();
+        });
+        _resizeObserver.observe(document.body, { childList: true, subtree: true });
     </script>
 </body>
 

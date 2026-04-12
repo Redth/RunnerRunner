@@ -175,14 +175,14 @@
                 {
                     @if (activeTab == "docker")
                     {
-                        <table class="table table-striped mb-0">
+                        <table class="table table-striped resizable-table mb-0">
                             <thead>
                                 <tr>
                                     <th role="button" @onclick='() => ToggleSort("Repository")'>Repository @SortIndicator("Repository")</th>
                                     <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
                                     <th>Image ID</th>
-                                    <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
-                                    <th role="button" @onclick='() => ToggleSort("Created")'>Created @SortIndicator("Created")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Size")' style="min-width: 100px;">Size @SortIndicator("Size")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Created")' style="min-width: 150px;">Created @SortIndicator("Created")</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
@@ -207,12 +207,12 @@
                     }
                     else
                     {
-                        <table class="table table-striped mb-0">
+                        <table class="table table-striped resizable-table mb-0">
                             <thead>
                                 <tr>
                                     <th role="button" @onclick='() => ToggleSort("Repository")'>Name @SortIndicator("Repository")</th>
                                     <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
-                                    <th role="button" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                                    <th role="button" @onclick='() => ToggleSort("Size")' style="min-width: 100px;">Size @SortIndicator("Size")</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
