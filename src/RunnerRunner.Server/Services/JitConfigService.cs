@@ -41,28 +41,28 @@ public class JitConfigService
 		{
 			var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
 
-			string endpoint;
-			if (!string.IsNullOrEmpty(credential.GitHubOrg))
-			{
-				endpoint = $"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/generate-jitconfig";
-			}
-			else if (!string.IsNullOrEmpty(credential.GitHubRepo))
+			// Build list of endpoints to try (repo-level first if both are set, then org-level)
+			var endpoints = new List<(string url, string scope)>();
+
+			if (!string.IsNullOrEmpty(credential.GitHubRepo))
 			{
 				var parts = credential.GitHubRepo.Split('/', 2);
-				if (parts.Length != 2)
-					return new JitConfigResult { Success = false, Error = $"Invalid repo format: '{credential.GitHubRepo}'. Expected 'owner/repo'." };
+				if (parts.Length == 2)
+					endpoints.Add(($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{credential.GitHubRepo}"));
+			}
 
-				endpoint = $"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig";
-			}
-			else
+			if (!string.IsNullOrEmpty(credential.GitHubOrg))
 			{
-				return new JitConfigResult { Success = false, Error = "Neither GitHubOrg nor GitHubRepo is configured on the credential." };
+				endpoints.Add(($"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/generate-jitconfig", $"org:{credential.GitHubOrg}"));
 			}
+
+			if (endpoints.Count == 0)
+				return new JitConfigResult { Success = false, Error = "Neither GitHubOrg nor GitHubRepo is configured on the credential." };
 
 			var requestBody = new
 			{
 				name = runnerName,
-				labels,
+				labels = labels.Select(l => l).ToArray(),
 				runner_group_id = 1,
 				work_folder = "_work"
 			};
@@ -70,27 +70,38 @@ public class JitConfigService
 			using var client = _httpClientFactory.CreateClient();
 			client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential.GitHubToken);
 			client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
+			client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
 			var json = JsonSerializer.Serialize(requestBody);
-			using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-			_logger.LogInformation("Requesting GitHub JIT config for runner '{RunnerName}' at {Endpoint}", runnerName, endpoint);
-
-			var response = await client.PostAsync(endpoint, content);
-			var responseBody = await response.Content.ReadAsStringAsync();
-
-			if (!response.IsSuccessStatusCode)
+			// Try each endpoint — repo-level first, fall back to org-level
+			foreach (var (endpoint, scope) in endpoints)
 			{
-				_logger.LogError("GitHub JIT config request failed with {StatusCode}: {Body}", response.StatusCode, responseBody);
-				return new JitConfigResult { Success = false, Error = $"GitHub API returned {(int)response.StatusCode}: {responseBody}" };
+				_logger.LogInformation("Requesting GitHub JIT config for runner '{RunnerName}' at {Endpoint} (scope: {Scope})",
+					runnerName, endpoint, scope);
+
+				using var content = new StringContent(json, Encoding.UTF8, "application/json");
+				var response = await client.PostAsync(endpoint, content);
+				var responseBody = await response.Content.ReadAsStringAsync();
+
+				if (!response.IsSuccessStatusCode)
+				{
+					_logger.LogWarning("GitHub JIT config request to {Scope} failed with {StatusCode}: {Body}",
+						scope, response.StatusCode, responseBody);
+					continue; // Try next endpoint
+				}
+
+				using var doc = JsonDocument.Parse(responseBody);
+				var encodedJitConfig = doc.RootElement.GetProperty("encoded_jit_config").GetString();
+
+				_logger.LogInformation("Successfully generated GitHub JIT config for runner '{RunnerName}' (scope: {Scope})",
+					runnerName, scope);
+
+				return new JitConfigResult { Success = true, JitConfig = encodedJitConfig };
 			}
 
-			using var doc = JsonDocument.Parse(responseBody);
-			var encodedJitConfig = doc.RootElement.GetProperty("encoded_jit_config").GetString();
-
-			_logger.LogInformation("Successfully generated GitHub JIT config for runner '{RunnerName}'", runnerName);
-
-			return new JitConfigResult { Success = true, JitConfig = encodedJitConfig };
+			// All endpoints failed
+			return new JitConfigResult { Success = false, Error = "GitHub JIT config failed for all endpoints (repo + org). Check token permissions: needs admin:self_hosted_runner scope." };
 		}
 		catch (HttpRequestException ex)
 		{
