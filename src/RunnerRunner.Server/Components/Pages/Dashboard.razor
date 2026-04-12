@@ -56,22 +56,59 @@ else
         <thead>
             <tr>
                 <th>Name</th>
+                <th>Status</th>
                 <th>Platform</th>
-                <th>Architecture</th>
-                <th>Capabilities</th>
-                <th>Runners</th>
+                <th>Assignments</th>
                 <th>Last Heartbeat</th>
             </tr>
         </thead>
         <tbody>
             @foreach (var agent in connectedAgents)
             {
+                var host = hosts.FirstOrDefault(h => h.Name == agent.Value.AgentInfo.Name);
+                var label = host?.Label ?? agent.Value.AgentInfo.Name;
+                var agentName = agent.Value.AgentInfo.Name;
+                var hostAssignments = host != null ? assignments.Where(a => a.HostId == host.Id).ToList() : new();
                 <tr>
-                    <td>@agent.Value.AgentInfo.Name</td>
-                    <td>@agent.Value.AgentInfo.Platform</td>
-                    <td>@agent.Value.AgentInfo.Architecture</td>
-                    <td>@string.Join(", ", agent.Value.AgentInfo.Capabilities)</td>
-                    <td>@(agent.Value.LastMetrics?.RunningInstanceCount ?? 0)</td>
+                    <td>
+                        <span>@label</span>
+                        @if (host != null && !string.IsNullOrWhiteSpace(host.DisplayName))
+                        {
+                            <br/><small class="text-muted">@agentName</small>
+                        }
+                    </td>
+                    <td><span class="badge bg-success">Online</span></td>
+                    <td>
+                        <div class="d-flex flex-wrap gap-1">
+                            <span class="host-chip platform-chip"><i class="bi @GetPlatformIcon(agent.Value.AgentInfo.Platform) me-1"></i>@agent.Value.AgentInfo.Platform</span>
+                            @if (!string.IsNullOrEmpty(agent.Value.AgentInfo.Architecture))
+                            {
+                                <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@agent.Value.AgentInfo.Architecture</span>
+                            }
+                        </div>
+                        @if (agent.Value.AgentInfo.Capabilities.Any())
+                        {
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                @foreach (var cap in agent.Value.AgentInfo.Capabilities)
+                                {
+                                    <span class="host-chip cap-chip">@cap</span>
+                                }
+                            </div>
+                        }
+                    </td>
+                    <td>
+                        @if (hostAssignments.Any())
+                        {
+                            @foreach (var a in hostAssignments)
+                            {
+                                <span class="badge bg-info me-1">@(profileNames.GetValueOrDefault(a.ProfileId, "?")) ×@a.DesiredCount</span>
+                            }
+                        }
+                        else
+                        {
+                            <span class="text-muted">None</span>
+                        }
+                    </td>
                     <td>@(agent.Value.LastHeartbeat?.ToString("HH:mm:ss") ?? "—")</td>
                 </tr>
             }
@@ -85,6 +122,9 @@ else
     private int profileCount;
     private int envVarSetCount;
     private IReadOnlyDictionary<string, ConnectedAgent> connectedAgents = new Dictionary<string, ConnectedAgent>();
+    private List<RunnerRunner.Core.Models.Host> hosts = [];
+    private List<RunnerRunner.Core.Models.RunnerAssignment> assignments = [];
+    private Dictionary<string, string> profileNames = new();
 
     [Inject] IDocumentStore Store { get; set; } = default!;
 
@@ -94,7 +134,20 @@ else
         connectedHostCount = connectedAgents.Count;
         runningInstanceCount = connectedAgents.Values
             .Sum(a => a.LastMetrics?.RunningInstanceCount ?? 0);
-        profileCount = (await Store.Query<RunnerRunner.Core.Models.RunnerProfile>().ToList()).Count;
+
+        var profiles = (await Store.Query<RunnerRunner.Core.Models.RunnerProfile>().ToList()).ToList();
+        profileCount = profiles.Count;
+        profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         envVarSetCount = (await Store.Query<RunnerRunner.Core.Models.EnvironmentVariableSet>().ToList()).Count;
+        hosts = (await Store.Query<RunnerRunner.Core.Models.Host>().ToList()).ToList();
+        assignments = (await Store.Query<RunnerRunner.Core.Models.RunnerAssignment>().ToList()).ToList();
     }
+
+    private string GetPlatformIcon(RunnerRunner.Core.Models.HostPlatform platform) => platform switch
+    {
+        RunnerRunner.Core.Models.HostPlatform.Linux => "bi-ubuntu",
+        RunnerRunner.Core.Models.HostPlatform.MacOS => "bi-apple",
+        RunnerRunner.Core.Models.HostPlatform.Windows => "bi-windows",
+        _ => "bi-pc-display"
+    };
 }
