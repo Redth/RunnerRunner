@@ -43,6 +43,22 @@
             </div>
         </div>
     </div>
+    <div class="col-md-3">
+        <div class="card text-bg-warning mb-3">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-lightning me-1"></i> Dynamic Runners</h5>
+                <p class="card-text display-4">@dynamicRunnerCount</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-bg-dark mb-3">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-broadcast-pin me-1"></i> Webhook Events (1h)</h5>
+                <p class="card-text display-4">@recentWebhookEventCount</p>
+            </div>
+        </div>
+    </div>
 </div>
 
 <h3 class="mt-4"><i class="bi bi-people-fill me-2"></i>Connected Agents</h3>
@@ -121,6 +137,8 @@ else
     private int runningInstanceCount;
     private int profileCount;
     private int envVarSetCount;
+    private int dynamicRunnerCount;
+    private int recentWebhookEventCount;
     private IReadOnlyDictionary<string, ConnectedAgent> connectedAgents = new Dictionary<string, ConnectedAgent>();
     private List<RunnerRunner.Core.Models.Host> hosts = [];
     private List<RunnerRunner.Core.Models.RunnerAssignment> assignments = [];
@@ -141,6 +159,16 @@ else
         envVarSetCount = (await Store.Query<RunnerRunner.Core.Models.EnvironmentVariableSet>().ToList()).Count;
         hosts = (await Store.Query<RunnerRunner.Core.Models.Host>().ToList()).ToList();
         assignments = (await Store.Query<RunnerRunner.Core.Models.RunnerAssignment>().ToList()).ToList();
+
+        var allInstances = (await Store.Query<RunnerRunner.Core.Models.RunnerInstance>().ToList()).ToList();
+        dynamicRunnerCount = allInstances.Count(i =>
+            i.ProvisioningMode == "dynamic"
+            && (i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Running
+                || i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Starting));
+
+        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
+        recentWebhookEventCount = (await Store.Query<RunnerRunner.Core.Models.WebhookEvent>().ToList())
+            .Count(e => e.ReceivedAt > oneHourAgo);
     }
 
     private string GetPlatformIcon(RunnerRunner.Core.Models.HostPlatform platform) => platform switch

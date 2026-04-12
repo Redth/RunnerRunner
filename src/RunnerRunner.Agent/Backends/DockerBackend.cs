@@ -62,6 +62,13 @@ public class DockerBackend : IRunnerBackend
         envVars.Add($"RR_INSTANCE_ID={request.InstanceId}");
         envVars.Add($"RR_RUNNER_NAME={request.RunnerName}");
 
+        // Pass JIT config for dynamic provisioning
+        if (!string.IsNullOrEmpty(request.JitConfig))
+        {
+            envVars.Add($"RR_JIT_CONFIG={request.JitConfig}");
+            envVars.Add($"RR_PROVISIONING_MODE={request.ProvisioningMode}");
+        }
+
         // Create and start container with RunnerRunner labels for tracking
         var createResponse = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
         {

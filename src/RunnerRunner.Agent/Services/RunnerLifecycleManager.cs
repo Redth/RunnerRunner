@@ -43,7 +43,9 @@ public class RunnerLifecycleManager
             RegistrationToken = command.RegistrationToken,
             RunnerUrl = command.RunnerUrl,
             RunnerBasePath = command.RunnerBasePath,
-            WorkDirectory = command.WorkDirectory
+            WorkDirectory = command.WorkDirectory,
+            JitConfig = command.JitConfig,
+            ProvisioningMode = command.ProvisioningMode
         };
 
         var info = await backend.StartRunnerAsync(request, ct);

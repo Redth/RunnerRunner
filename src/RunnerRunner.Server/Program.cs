@@ -3,6 +3,7 @@ using RunnerRunner.Server.Data;
 using RunnerRunner.Server.Hubs;
 using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Services;
+using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -39,10 +40,12 @@ builder.Services.AddSingleton<IRunnerProviderPlugin, AzDoAgentProvider>();
 
 // Services
 builder.Services.AddSingleton<AuditService>();
+builder.Services.AddSingleton<JitConfigService>();
 
 // Background services
 builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
+builder.Services.AddHostedService<DynamicProvisioningService>();
 
 // Blazor
 builder.Services.AddRazorComponents()
@@ -69,6 +72,9 @@ app.MapRazorComponents<App>()
 
 // SignalR hub for agent connections
 app.MapHub<AgentHub>("/hubs/agent");
+
+// Webhook endpoints for GitHub/Gitea workflow_job events
+app.MapWebhookEndpoints();
 
 // Aspire health check endpoints
 app.MapDefaultEndpoints();

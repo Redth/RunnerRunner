@@ -1,0 +1,122 @@
+@page "/webhook-events"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+
+<PageTitle>Webhook Events - RunnerRunner</PageTitle>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-clock-history"></i> Webhook Events</h1>
+        <span class="page-desc">Audit log of received webhook events.</span>
+    </div>
+</SectionContent>
+
+<div class="mb-3 d-flex flex-wrap align-items-end gap-2">
+    <div>
+        <label class="form-label mb-0 small text-muted">Search</label>
+        <input type="text" class="form-control form-control-sm" placeholder="Filter events…" @bind="searchText" @bind:event="oninput" style="min-width:220px;" />
+    </div>
+    <div>
+        <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </div>
+</div>
+
+@if (!filteredEvents.Any())
+{
+    <div class="text-center text-muted py-4">No webhook events match the current filters.</div>
+}
+else
+{
+    <table class="table table-striped resizable-table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Repository</th>
+                <th>Workflow</th>
+                <th>Labels</th>
+                <th>Matched Profile</th>
+                <th>Status</th>
+                <th>Instance</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var evt in filteredEvents)
+            {
+                <tr>
+                    <td>@evt.ReceivedAt.ToString("g")</td>
+                    <td>@evt.Repository</td>
+                    <td>@evt.WorkflowName</td>
+                    <td>
+                        <div class="d-flex flex-wrap gap-1">
+                            @foreach (var label in evt.Labels)
+                            {
+                                <span class="badge bg-secondary">@label</span>
+                            }
+                        </div>
+                    </td>
+                    <td>@(evt.MatchedProfileName ?? "—")</td>
+                    <td><span class="badge @GetStatusBadge(evt.Status)">@evt.Status</span></td>
+                    <td>
+                        @if (!string.IsNullOrEmpty(evt.InstanceId))
+                        {
+                            <a href="/runners">@evt.InstanceId[..Math.Min(8, evt.InstanceId.Length)]…</a>
+                        }
+                        else
+                        {
+                            <span class="text-muted">—</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<WebhookEvent> allEvents = [];
+    private List<WebhookEvent> filteredEvents = [];
+    private string searchText = "";
+
+    private string _lastSearch = "";
+
+    protected override async Task OnInitializedAsync() => await Refresh();
+
+    protected override void OnParametersSet() => ApplyFilter();
+
+    private void ApplyFilter()
+    {
+        if (searchText == _lastSearch && filteredEvents.Any())
+            return;
+        _lastSearch = searchText;
+
+        var q = allEvents.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            var term = searchText.Trim();
+            q = q.Where(e =>
+                e.Repository.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.WorkflowName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.Status.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+        filteredEvents = q.ToList();
+    }
+
+    private async Task Refresh()
+    {
+        allEvents = (await Store.Query<WebhookEvent>().ToList())
+            .OrderByDescending(e => e.ReceivedAt)
+            .ToList();
+        _lastSearch = ""; // force refilter
+        ApplyFilter();
+    }
+
+    private string GetStatusBadge(string status) => status switch
+    {
+        "provisioned" => "bg-success",
+        "matched" => "bg-warning text-dark",
+        "error" or "rejected" => "bg-danger",
+        "no_match" or "rate_limited" => "bg-secondary",
+        _ => "bg-secondary"
+    };
+}

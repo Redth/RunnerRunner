@@ -91,12 +91,28 @@ public class NativeBackend : IRunnerBackend
         switch (provider)
         {
             case RunnerProvider.GitHubActions:
-                await ConfigureGitHubRunnerAsync(instanceDir, workDir, request, ct);
-                runProcess = StartGitHubRunner(instanceDir, request);
+                if (!string.IsNullOrEmpty(request.JitConfig))
+                {
+                    // JIT config mode — skip config.sh, use --jitconfig directly
+                    _logger.LogInformation("Using JIT config for runner {RunnerName} (dynamic provisioning)", request.RunnerName);
+                    runProcess = StartGitHubJitRunner(instanceDir, request);
+                }
+                else
+                {
+                    await ConfigureGitHubRunnerAsync(instanceDir, workDir, request, ct);
+                    runProcess = StartGitHubRunner(instanceDir, request);
+                }
                 break;
 
             case RunnerProvider.GiteaActions:
-                await ConfigureGiteaRunnerAsync(instanceDir, workDir, request, ct);
+                if (request.Ephemeral)
+                {
+                    await ConfigureGiteaRunnerAsync(instanceDir, workDir, request, ct, ephemeral: true);
+                }
+                else
+                {
+                    await ConfigureGiteaRunnerAsync(instanceDir, workDir, request, ct);
+                }
                 runProcess = StartGiteaRunner(instanceDir, request);
                 break;
 
@@ -240,6 +256,13 @@ public class NativeBackend : IRunnerBackend
         await RunScriptAsync(configScript, args, instanceDir, request.EnvironmentVariables, ct);
     }
 
+    private Process StartGitHubJitRunner(string instanceDir, RunnerStartRequest request)
+    {
+        var isWindows = OperatingSystem.IsWindows();
+        var runScript = Path.Combine(instanceDir, isWindows ? "run.cmd" : "run.sh");
+        return StartProcess(runScript, ["--jitconfig", request.JitConfig!], instanceDir, request.EnvironmentVariables);
+    }
+
     private Process StartGitHubRunner(string instanceDir, RunnerStartRequest request)
     {
         var isWindows = OperatingSystem.IsWindows();
@@ -250,7 +273,7 @@ public class NativeBackend : IRunnerBackend
     // ─── Gitea Actions Runner (act_runner) ─────────────────
 
     private async Task ConfigureGiteaRunnerAsync(
-        string instanceDir, string workDir, RunnerStartRequest request, CancellationToken ct)
+        string instanceDir, string workDir, RunnerStartRequest request, CancellationToken ct, bool ephemeral = false)
     {
         // act_runner uses a config.yaml and `register` command
         var actRunner = FindExecutable(instanceDir, "act_runner");
@@ -264,6 +287,9 @@ public class NativeBackend : IRunnerBackend
             "--labels", string.Join(",", request.Labels),
             "--no-interactive"
         };
+
+        if (ephemeral)
+            args.Add("--ephemeral");
 
         await RunCommandAsync(actRunner, string.Join(" ", args), instanceDir, request.EnvironmentVariables, ct);
     }

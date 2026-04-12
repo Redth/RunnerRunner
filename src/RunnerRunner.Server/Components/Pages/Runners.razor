@@ -52,6 +52,14 @@
         </select>
     </div>
     <div>
+        <label class="form-label mb-0 small text-muted">Mode</label>
+        <select class="form-select form-select-sm" @bind="filterMode" style="min-width:120px;">
+            <option value="">All</option>
+            <option value="static">Static</option>
+            <option value="dynamic">Dynamic</option>
+        </select>
+    </div>
+    <div>
         <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
     </div>
 </div>
@@ -73,6 +81,7 @@ else
                 <th role="button" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner Name @SortIndicator("RunnerName")</th>
                 <th role="button" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
                 <th role="button" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
+                <th role="button" @onclick='() => SetSort("Mode")' style="cursor:pointer; user-select:none;">Mode @SortIndicator("Mode")</th>
                 <th role="button" @onclick='() => SetSort("Started")' style="cursor:pointer; user-select:none;">Started @SortIndicator("Started")</th>
                 <th role="button" @onclick='() => SetSort("LastHealthCheck")' style="cursor:pointer; user-select:none;">Last Health Check @SortIndicator("LastHealthCheck")</th>
                 <th>Actions</th>
@@ -87,7 +96,7 @@ else
                 var sorted = ApplySort(group).ToList();
 
                 <tr class="group-header" role="button" @onclick="() => ToggleHost(hostId)" style="cursor:pointer; user-select:none;">
-                    <td colspan="6">
+                    <td colspan="7">
                         <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right") me-2"></i>
                         <strong>@hostLabel</strong>
                         <span class="badge bg-primary ms-2">@sorted.Count</span>
@@ -101,6 +110,7 @@ else
                             <td>@inst.RunnerName</td>
                             <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
                             <td><span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span></td>
+                            <td><span class="badge @(inst.ProvisioningMode == "dynamic" ? "bg-warning text-dark" : "bg-secondary")">@(inst.ProvisioningMode == "dynamic" ? "Dynamic" : "Static")</span></td>
                             <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
                             <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
                             <td>
@@ -143,6 +153,7 @@ else
     private string filterStatus = "";
     private string filterHostId = "";
     private string filterProfileId = "";
+    private string filterMode = "";
 
     private string sortColumn = "Started";
     private bool sortAscending = false;
@@ -174,6 +185,9 @@ else
         if (!string.IsNullOrWhiteSpace(filterProfileId))
             q = q.Where(i => i.ProfileId == filterProfileId);
 
+        if (!string.IsNullOrWhiteSpace(filterMode))
+            q = q.Where(i => i.ProvisioningMode == filterMode);
+
         if (!string.IsNullOrWhiteSpace(filterStatus) && Enum.TryParse<RunnerInstanceStatus>(filterStatus, out var status))
             q = q.Where(i => i.Status == status);
 
@@ -199,6 +213,7 @@ else
                 ? items.OrderBy(i => profileNames.GetValueOrDefault(i.ProfileId, i.ProfileId))
                 : items.OrderByDescending(i => profileNames.GetValueOrDefault(i.ProfileId, i.ProfileId)),
             "Status" => sortAscending ? items.OrderBy(i => i.Status) : items.OrderByDescending(i => i.Status),
+            "Mode" => sortAscending ? items.OrderBy(i => i.ProvisioningMode) : items.OrderByDescending(i => i.ProvisioningMode),
             "Started" => sortAscending ? items.OrderBy(i => i.StartedAt ?? i.CreatedAt) : items.OrderByDescending(i => i.StartedAt ?? i.CreatedAt),
             "LastHealthCheck" => sortAscending ? items.OrderBy(i => i.LastHealthCheck) : items.OrderByDescending(i => i.LastHealthCheck),
             _ => items.OrderByDescending(i => i.StartedAt ?? i.CreatedAt)

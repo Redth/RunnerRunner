@@ -62,6 +62,13 @@ public class TartBackend : IRunnerBackend
         // Write environment variables as .env file (including RR_ identity vars)
         request.EnvironmentVariables["RR_INSTANCE_ID"] = request.InstanceId;
         request.EnvironmentVariables["RR_RUNNER_NAME"] = request.RunnerName;
+
+        // Pass JIT config for dynamic provisioning
+        if (!string.IsNullOrEmpty(request.JitConfig))
+        {
+            request.EnvironmentVariables["RR_JIT_CONFIG"] = request.JitConfig;
+            request.EnvironmentVariables["RR_PROVISIONING_MODE"] = request.ProvisioningMode;
+        }
         var envFileContent = string.Join("\n",
             request.EnvironmentVariables.Select(kvp => $"{kvp.Key}={kvp.Value}"));
         await File.WriteAllTextAsync(Path.Combine(configDir, ".env"), envFileContent, ct);
