@@ -35,29 +35,40 @@ public class JitConfigService
 		ProviderCredential credential,
 		string runnerName,
 		List<string> labels,
-		string runnerGroup = "Default")
+		string runnerGroup = "Default",
+		string? webhookRepo = null)
 	{
 		try
 		{
 			var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
 
-			// Build list of endpoints to try (repo-level first if both are set, then org-level)
+			// Build list of endpoints to try (repo-level first, then org-level)
 			var endpoints = new List<(string url, string scope)>();
 
-			if (!string.IsNullOrEmpty(credential.GitHubRepo))
+			// 1. Use the actual repo from the webhook event (most specific, most likely to work)
+			if (!string.IsNullOrEmpty(webhookRepo))
+			{
+				var parts = webhookRepo.Split('/', 2);
+				if (parts.Length == 2)
+					endpoints.Add(($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{webhookRepo}"));
+			}
+
+			// 2. Try credential's configured repo
+			if (!string.IsNullOrEmpty(credential.GitHubRepo) && credential.GitHubRepo != webhookRepo)
 			{
 				var parts = credential.GitHubRepo.Split('/', 2);
 				if (parts.Length == 2)
 					endpoints.Add(($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{credential.GitHubRepo}"));
 			}
 
+			// 3. Try org-level
 			if (!string.IsNullOrEmpty(credential.GitHubOrg))
 			{
 				endpoints.Add(($"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/generate-jitconfig", $"org:{credential.GitHubOrg}"));
 			}
 
 			if (endpoints.Count == 0)
-				return new JitConfigResult { Success = false, Error = "Neither GitHubOrg nor GitHubRepo is configured on the credential." };
+				return new JitConfigResult { Success = false, Error = "No GitHub org, repo, or webhook repo available to generate JIT config." };
 
 			var requestBody = new
 			{

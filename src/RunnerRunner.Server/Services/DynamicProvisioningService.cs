@@ -155,7 +155,7 @@ public class DynamicProvisioningService : IHostedService
             jitResult = profile.Provider switch
             {
                 RunnerProvider.GitHubActions => await _jitConfigService.GenerateGitHubJitConfig(
-                    credential, runnerName, profile.Labels, profile.RunnerGroup),
+                    credential, runnerName, profile.Labels, profile.RunnerGroup, evt.Repository),
                 RunnerProvider.GiteaActions => await _jitConfigService.GenerateGiteaJitConfig(
                     credential, runnerName),
                 _ => null
