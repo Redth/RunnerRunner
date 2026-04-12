@@ -102,15 +102,16 @@ public class TartBackend : IRunnerBackend
         _logger.LogInformation("Stopping tart VM {VM}", instanceHandle);
 
         // Gracefully stop the VM
-        await RunCommandAsync("tart", $"stop {instanceHandle}", ct);
+        var stopResult = await RunCommandAsync("tart", $"stop {instanceHandle}", ct);
+        if (stopResult.ExitCode != 0)
+            _logger.LogWarning("tart stop {VM} returned {Code}: {Output}", instanceHandle, stopResult.ExitCode, stopResult.Output);
 
-        // Delete the cloned VM
-        await RunCommandAsync("tart", $"delete {instanceHandle}", ct);
-
-        // Clean up config directory
-        var configDir = Path.Combine(Path.GetTempPath(), "runnerrunner", instanceHandle);
-        if (Directory.Exists(configDir))
-            Directory.Delete(configDir, recursive: true);
+        // Delete the cloned VM to free disk space
+        var deleteResult = await RunCommandAsync("tart", $"delete {instanceHandle}", ct);
+        if (deleteResult.ExitCode != 0)
+            _logger.LogWarning("tart delete {VM} returned {Code}: {Output}", instanceHandle, deleteResult.ExitCode, deleteResult.Output);
+        else
+            _logger.LogInformation("Tart VM {VM} stopped and deleted", instanceHandle);
     }
 
     public async Task<RunnerHealthStatus> GetHealthAsync(string instanceHandle, CancellationToken ct = default)
@@ -142,11 +143,9 @@ public class TartBackend : IRunnerBackend
     {
         _logger.LogInformation("Setting up runner in Tart VM {VM} ({IP}) via SSH", vmName, vmIp);
 
-        var sshPrefix = BuildSshPrefix(sshUser, vmIp, sshPassword);
-
         // Export env vars into the SSH session
         var envExports = string.Join(" ", request.EnvironmentVariables
-            .Select(kv => $"{kv.Key}='{EscapeShell(kv.Value)}'"));
+            .Select(kv => $"export {kv.Key}='{EscapeShell(kv.Value)}'"));
 
         // Determine runner version and download URL
         var version = request.RunnerAgentVersion ?? "2.321.0";
@@ -163,16 +162,16 @@ public class TartBackend : IRunnerBackend
 
         if (request.Provider == RunnerProvider.GitHubActions)
         {
-            await SetupGitHubRunnerViaSsh(sshPrefix, sshUser, envExports, downloadUrl, runnerTar, version, request, ct);
+            await SetupGitHubRunnerViaSsh(sshUser, vmIp, sshPassword, envExports, downloadUrl, runnerTar, version, request, ct);
         }
         else if (request.Provider == RunnerProvider.GiteaActions)
         {
-            await SetupGiteaRunnerViaSsh(sshPrefix, sshUser, envExports, downloadUrl, version, request, ct);
+            await SetupGiteaRunnerViaSsh(sshUser, vmIp, sshPassword, envExports, downloadUrl, version, request, ct);
         }
     }
 
     private async Task SetupGitHubRunnerViaSsh(
-        string sshPrefix, string sshUser, string envExports,
+        string sshUser, string vmIp, string? sshPassword, string envExports,
         string downloadUrl, string runnerTar, string version,
         RunnerStartRequest request, CancellationToken ct)
     {
@@ -185,16 +184,16 @@ public class TartBackend : IRunnerBackend
             $"tar xzf {runnerTar} && rm -f {runnerTar}";
 
         _logger.LogInformation("Downloading GitHub Actions runner v{Version} in VM", version);
-        await SshExec(sshPrefix, setupScript, ct);
+        await SshExec(sshUser, vmIp, sshPassword, setupScript, ct);
 
         if (!string.IsNullOrEmpty(request.JitConfig))
         {
             // JIT mode: skip config.sh, start with --jitconfig
             _logger.LogInformation("Starting runner with JIT config in VM");
             var jitScript =
-                $"cd {runnerDir} && {envExports} " +
+                $"{envExports} && cd {runnerDir} && " +
                 $"nohup ./run.sh --jitconfig '{request.JitConfig}' > /tmp/runner.log 2>&1 &";
-            await SshExec(sshPrefix, jitScript, ct);
+            await SshExec(sshUser, vmIp, sshPassword, jitScript, ct);
         }
         else
         {
@@ -207,20 +206,20 @@ public class TartBackend : IRunnerBackend
 
             _logger.LogInformation("Configuring runner {Name} in VM (static mode)", name);
             var configScript =
-                $"cd {runnerDir} && {envExports} " +
+                $"{envExports} && cd {runnerDir} && " +
                 $"./config.sh --url '{url}' --token '{token}' --name '{name}' " +
                 $"--labels '{labels}' --unattended --replace{ephemeralFlag}";
-            await SshExec(sshPrefix, configScript, ct);
+            await SshExec(sshUser, vmIp, sshPassword, configScript, ct);
 
-            var runScript = $"cd {runnerDir} && {envExports} nohup ./run.sh > /tmp/runner.log 2>&1 &";
-            await SshExec(sshPrefix, runScript, ct);
+            var runScript = $"{envExports} && cd {runnerDir} && nohup ./run.sh > /tmp/runner.log 2>&1 &";
+            await SshExec(sshUser, vmIp, sshPassword, runScript, ct);
         }
 
         _logger.LogInformation("Runner started in Tart VM {VM}", $"rr-{request.RunnerName}");
     }
 
     private async Task SetupGiteaRunnerViaSsh(
-        string sshPrefix, string sshUser, string envExports,
+        string sshUser, string vmIp, string? sshPassword, string envExports,
         string downloadUrl, string version,
         RunnerStartRequest request, CancellationToken ct)
     {
@@ -234,33 +233,41 @@ public class TartBackend : IRunnerBackend
             $"curl -sL -o act_runner '{downloadUrl}' && chmod +x act_runner";
 
         _logger.LogInformation("Downloading Gitea act_runner v{Version} in VM", version);
-        await SshExec(sshPrefix, setupScript, ct);
+        await SshExec(sshUser, vmIp, sshPassword, setupScript, ct);
 
         var registerScript =
-            $"cd {runnerDir} && {envExports} " +
+            $"{envExports} && cd {runnerDir} && " +
             $"./act_runner register --instance '{instanceUrl}' --token '{token}' " +
             $"--name '{request.RunnerName}' --no-interactive{ephemeralFlag}";
-        await SshExec(sshPrefix, registerScript, ct);
+        await SshExec(sshUser, vmIp, sshPassword, registerScript, ct);
 
-        var runScript = $"cd {runnerDir} && {envExports} nohup ./act_runner daemon > /tmp/runner.log 2>&1 &";
-        await SshExec(sshPrefix, runScript, ct);
+        var runScript = $"{envExports} && cd {runnerDir} && nohup ./act_runner daemon > /tmp/runner.log 2>&1 &";
+        await SshExec(sshUser, vmIp, sshPassword, runScript, ct);
 
         _logger.LogInformation("Gitea runner started in Tart VM");
     }
 
-    private async Task SshExec(string sshPrefix, string script, CancellationToken ct)
+    private async Task SshExec(string sshUser, string vmIp, string? sshPassword, string script, CancellationToken ct)
     {
-        var result = await RunCommandAsync("bash", $"-c \"{sshPrefix} '{EscapeShell(script)}'\"", ct);
+        _logger.LogDebug("SSH exec on {User}@{Ip}: {Script}",
+            sshUser, vmIp, script.Length > 200 ? script[..200] + "..." : script);
+
+        var sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15";
+
+        (int ExitCode, string Output) result;
+        if (!string.IsNullOrEmpty(sshPassword))
+        {
+            result = await RunCommandAsync("sshpass",
+                $"-p {EscapeShell(sshPassword)} ssh {sshOpts} {sshUser}@{vmIp} {EscapeShell(script)}", ct);
+        }
+        else
+        {
+            result = await RunCommandAsync("ssh",
+                $"{sshOpts} {sshUser}@{vmIp} {EscapeShell(script)}", ct);
+        }
+
         if (result.ExitCode != 0)
             _logger.LogWarning("SSH command returned {Code}: {Output}", result.ExitCode, result.Output);
-    }
-
-    private static string BuildSshPrefix(string user, string ip, string? password)
-    {
-        var sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15";
-        if (!string.IsNullOrEmpty(password))
-            return $"sshpass -p '{password}' ssh {sshOpts} {user}@{ip}";
-        return $"ssh {sshOpts} {user}@{ip}";
     }
 
     private static string EscapeShell(string value) =>
