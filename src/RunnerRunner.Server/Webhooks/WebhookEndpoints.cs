@@ -13,6 +13,7 @@ public static class WebhookEndpoints
     /// Parameters: (WebhookEvent, profileId)
     /// </summary>
     public static event Action<WebhookEvent, string>? OnJobQueued;
+    public static event Action<string, string>? OnJobCompleted; // jobId, conclusion
 
     public static IEndpointRouteBuilder MapWebhookEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -138,7 +139,37 @@ public static class WebhookEndpoints
             }
         }
 
-        // Only process "queued" actions
+        // Handle "completed" — trigger cleanup of dynamic runners
+        if (action == "completed")
+        {
+            // Extract conclusion (success, failure, cancelled, etc.)
+            var conclusion = "";
+            if (json.TryGetProperty("workflow_job", out var wfJob2) &&
+                wfJob2.TryGetProperty("conclusion", out var conclusionProp))
+            {
+                conclusion = conclusionProp.GetString() ?? "";
+            }
+
+            await store.Insert(new WebhookEvent
+            {
+                BindingId = binding.Id,
+                Provider = providerName,
+                Action = action,
+                JobId = jobId,
+                RunId = runId,
+                Repository = repo,
+                WorkflowName = workflowName,
+                Labels = labels,
+                Status = "completed"
+            });
+
+            logger.LogInformation("Job {JobId} completed ({Conclusion}), triggering cleanup", jobId, conclusion);
+            OnJobCompleted?.Invoke(jobId, conclusion);
+
+            return Results.Ok(new { message = $"Job completed ({conclusion}), cleanup triggered" });
+        }
+
+        // Other non-queued actions — just log
         if (action != "queued")
         {
             await store.Insert(new WebhookEvent

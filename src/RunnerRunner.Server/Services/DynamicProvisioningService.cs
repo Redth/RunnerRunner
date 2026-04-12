@@ -34,13 +34,15 @@ public class DynamicProvisioningService : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         WebhookEndpoints.OnJobQueued += HandleJobQueued;
-        _logger.LogInformation("DynamicProvisioningService started, subscribed to OnJobQueued");
+        WebhookEndpoints.OnJobCompleted += HandleJobCompleted;
+        _logger.LogInformation("DynamicProvisioningService started");
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
         WebhookEndpoints.OnJobQueued -= HandleJobQueued;
+        WebhookEndpoints.OnJobCompleted -= HandleJobCompleted;
         _logger.LogInformation("DynamicProvisioningService stopped");
         return Task.CompletedTask;
     }
@@ -343,5 +345,62 @@ public class DynamicProvisioningService : IHostedService
         evt.Status = "error";
         evt.Error = error;
         await store.Update(evt);
+    }
+
+    private async void HandleJobCompleted(string jobId, string conclusion)
+    {
+        try
+        {
+            _logger.LogInformation("Job {JobId} completed ({Conclusion}), looking for dynamic runner to clean up",
+                jobId, conclusion);
+
+            using var scope = _services.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+
+            // Find the dynamic runner instance for this job
+            var instances = (await store.Query<RunnerInstance>().ToList())
+                .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
+                .ToList();
+
+            if (!instances.Any())
+            {
+                _logger.LogDebug("No dynamic runner found for job {JobId}", jobId);
+                return;
+            }
+
+            foreach (var instance in instances)
+            {
+                _logger.LogInformation("Cleaning up dynamic runner {RunnerName} (container: {ContainerId}) for completed job {JobId}",
+                    instance.RunnerName, instance.ContainerId?[..Math.Min(12, instance.ContainerId?.Length ?? 0)], jobId);
+
+                // Send stop command to agent
+                var host = (await store.Query<Host>().ToList()).FirstOrDefault(h => h.Id == instance.HostId);
+                if (host != null)
+                {
+                    var agent = AgentHub.GetConnectedAgents().Values
+                        .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+
+                    if (agent != null)
+                    {
+                        await _hubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+                        {
+                            InstanceId = instance.Id,
+                            InstanceHandle = instance.ContainerId ?? instance.VmName ?? instance.ProcessId?.ToString()
+                        });
+                    }
+                }
+
+                // Mark as stopped
+                instance.Status = RunnerInstanceStatus.Stopped;
+                instance.StoppedAt = DateTime.UtcNow;
+                await store.Update(instance);
+
+                _logger.LogInformation("Dynamic runner {RunnerName} cleaned up", instance.RunnerName);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error cleaning up dynamic runner for job {JobId}", jobId);
+        }
     }
 }

@@ -124,6 +124,7 @@ else
     private string GetStatusBadge(string status) => status switch
     {
         "provisioned" => "bg-success",
+        "completed" => "bg-success",
         "matched" => "bg-warning text-dark",
         "error" or "rejected" => "bg-danger",
         "no_match" or "rate_limited" => "bg-secondary",
