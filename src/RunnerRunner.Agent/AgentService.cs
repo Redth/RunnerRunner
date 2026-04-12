@@ -83,6 +83,17 @@ public class AgentService : BackgroundService
             {
                 var metrics = _healthReporter.CollectMetrics(_agentId);
                 await _signalR.SendHeartbeat(metrics);
+
+                // Send per-runner health updates
+                foreach (var runner in _lifecycleManager.RunningInstances.Values)
+                {
+                    await _signalR.SendRunnerHealthUpdate(new RunnerHealthUpdateEvent
+                    {
+                        InstanceId = runner.InstanceId,
+                        Status = RunnerInstanceStatus.Running,
+                        CheckedAt = DateTime.UtcNow
+                    });
+                }
             }
             catch (Exception ex)
             {
