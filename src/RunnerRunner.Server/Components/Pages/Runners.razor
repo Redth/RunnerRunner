@@ -67,7 +67,10 @@
 
 @{
     var filtered = GetFilteredInstances();
-    var groups = filtered.GroupBy(i => i.HostId).OrderBy(g => hostNames.GetValueOrDefault(g.Key, g.Key)).ToList();
+    var groups = filtered.GroupBy(i => i.HostId)
+        .OrderBy(g => validHostIds.Contains(g.Key) ? 1 : 0)  // orphans first
+        .ThenBy(g => hostNames.GetValueOrDefault(g.Key, g.Key))
+        .ToList();
 }
 
 @if (!groups.Any())
@@ -92,16 +95,23 @@ else
         <tbody>
             @foreach (var group in groups)
             {
-                var hostLabel = hostNames.GetValueOrDefault(group.Key, group.Key);
                 var hostId = group.Key;
+                var isOrphan = !validHostIds.Contains(hostId);
+                var hostLabel = isOrphan ? "⚠ Orphaned Runners" : hostNames.GetValueOrDefault(hostId, hostId);
                 var isExpanded = expandedHosts.Contains(hostId);
                 var sorted = ApplySort(group).ToList();
 
-                <tr class="group-header" role="button" @onclick="() => ToggleHost(hostId)" style="cursor:pointer; user-select:none;">
+                <tr class="group-header @(isOrphan ? "group-orphaned" : "")" role="button" @onclick="() => ToggleHost(hostId)" style="cursor:pointer; user-select:none;">
                     <td colspan="7">
                         <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right") me-2"></i>
                         <strong>@hostLabel</strong>
-                        <span class="badge bg-primary ms-2">@sorted.Count</span>
+                        <span class="badge @(isOrphan ? "bg-danger" : "bg-primary") ms-2">@sorted.Count</span>
+                        @if (isOrphan)
+                        {
+                            <button class="btn btn-sm btn-outline-danger ms-2" @onclick:stopPropagation="true" @onclick="() => ConfirmAndRemoveOrphans(sorted)">
+                                <i class="bi bi-trash3 me-1"></i>Remove All
+                            </button>
+                        }
                     </td>
                 </tr>
                 @if (isExpanded)
@@ -117,14 +127,11 @@ else
                             <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
                             <td>
                                 <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
-                                @if (inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
+                                @if (!isOrphan && inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
                                 {
                                     <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)"><i class="bi bi-stop-circle"></i> Stop</button>
                                 }
-                                @if (inst.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)
-                                {
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndRemoveInstance(inst)">Remove</button>
-                                }
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndRemoveInstance(inst)">Remove</button>
                             </td>
                         </tr>
                     }
@@ -145,12 +152,20 @@ else
     tr.group-header:hover td {
         background: var(--bg-tertiary, #f0f2f5);
     }
+    tr.group-orphaned td {
+        background: #fff3cd;
+        border-bottom-color: #ffc107;
+    }
+    tr.group-orphaned:hover td {
+        background: #ffecb5;
+    }
 </style>
 
 @code {
     private List<RunnerInstance> instances = [];
     private Dictionary<string, string> hostNames = new();
     private Dictionary<string, string> hostAgentNames = new();
+    private HashSet<string> validHostIds = new();
     private Dictionary<string, string> profileNames = new();
 
     private string searchText = "";
@@ -171,6 +186,7 @@ else
         instances = (await Store.Query<RunnerInstance>().ToList()).ToList();
         var hosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        validHostIds = hosts.Select(h => h.Id).ToHashSet();
         hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
         hostAgentNames = hosts.ToDictionary(h => h.Id, h => h.Name);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
@@ -273,6 +289,15 @@ else
     {
         var confirmed = await JS.InvokeAsync<bool>("confirm", $"Remove runner instance '{inst.RunnerName}'?");
         if (confirmed) await RemoveInstance(inst.Id);
+    }
+
+    private async Task ConfirmAndRemoveOrphans(List<RunnerInstance> orphans)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Remove {orphans.Count} orphaned runner record(s)? These runners have no associated host.");
+        if (!confirmed) return;
+        foreach (var inst in orphans)
+            await Store.Remove<RunnerInstance>(inst.Id);
+        await Refresh();
     }
 
     private async Task RemoveInstance(string id)
