@@ -75,9 +75,10 @@ public static class WebhookEndpoints
         var org = repo.Contains('/') ? repo.Split('/')[0] : "";
         WebhookBinding? binding = null;
 
+        // Try all matching bindings — validate signature for each to find the right one
+        var candidateBindings = new List<WebhookBinding>();
         foreach (var b in bindings)
         {
-            // Check repo-level match first, then org-level
             var repoMatch = b.AllowedRepos.Any(r =>
                 r.Equals(repo, StringComparison.OrdinalIgnoreCase));
             var orgMatch = b.AllowedOrgs.Any(o =>
@@ -86,9 +87,46 @@ public static class WebhookEndpoints
             if (repoMatch || orgMatch ||
                 (b.AllowedRepos.Count == 0 && b.AllowedOrgs.Count == 0))
             {
-                binding = b;
+                candidateBindings.Add(b);
+            }
+        }
+
+        // Validate signature against each candidate — pick the one that matches
+        var signature = provider == RunnerProvider.GitHubActions
+            ? ctx.Request.Headers["X-Hub-Signature-256"].FirstOrDefault()
+            : ctx.Request.Headers["X-Gitea-Signature"].FirstOrDefault();
+
+        foreach (var candidate in candidateBindings)
+        {
+            if (string.IsNullOrEmpty(candidate.WebhookSecret) ||
+                ValidateSignature(body, candidate.WebhookSecret, signature, provider))
+            {
+                binding = candidate;
                 break;
             }
+        }
+
+        if (binding == null && candidateBindings.Count > 0)
+        {
+            // Had scope matches but all signatures failed
+            logger.LogWarning("Webhook from {Repo} matched {Count} binding(s) but all signature validations failed",
+                repo, candidateBindings.Count);
+
+            await store.Insert(new WebhookEvent
+            {
+                BindingId = candidateBindings[0].Id,
+                Provider = providerName,
+                Action = action,
+                JobId = jobId,
+                RunId = runId,
+                Repository = repo,
+                WorkflowName = workflowName,
+                Labels = labels,
+                Status = "rejected",
+                Error = "Signature validation failed"
+            });
+
+            return Results.Unauthorized();
         }
 
         if (binding == null)
@@ -108,35 +146,6 @@ public static class WebhookEndpoints
             });
 
             return Results.Ok(new { message = "No matching binding" });
-        }
-
-        // Validate HMAC-SHA256 signature
-        if (!string.IsNullOrEmpty(binding.WebhookSecret))
-        {
-            var signature = provider == RunnerProvider.GitHubActions
-                ? ctx.Request.Headers["X-Hub-Signature-256"].FirstOrDefault()
-                : ctx.Request.Headers["X-Gitea-Signature"].FirstOrDefault();
-
-            if (!ValidateSignature(body, binding.WebhookSecret, signature, provider))
-            {
-                logger.LogWarning("Invalid webhook signature for binding {BindingName}", binding.Name);
-
-                await store.Insert(new WebhookEvent
-                {
-                    BindingId = binding.Id,
-                    Provider = providerName,
-                    Action = action,
-                    JobId = jobId,
-                    RunId = runId,
-                    Repository = repo,
-                    WorkflowName = workflowName,
-                    Labels = labels,
-                    Status = "rejected",
-                    Error = "Invalid signature"
-                });
-
-                return Results.Unauthorized();
-            }
         }
 
         // Handle "completed" — trigger cleanup of dynamic runners
