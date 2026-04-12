@@ -220,7 +220,9 @@ public class DynamicProvisioningService : IHostedService
 
         // Update instance status
         instance.Status = RunnerInstanceStatus.Starting;
+        instance.DeployedAt = DateTime.UtcNow;
         instance.StartedAt = DateTime.UtcNow;
+        instance.StatusMessage = "Deploy command sent to agent";
         await store.Update(instance);
 
         // Update webhook event

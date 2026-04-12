@@ -238,7 +238,9 @@ public class OrchestrationEngine : BackgroundService
         await _hubContext.Clients.Client(agent.ConnectionId).DeployRunner(command);
 
         instance.Status = RunnerInstanceStatus.Starting;
+        instance.DeployedAt = DateTime.UtcNow;
         instance.StartedAt = DateTime.UtcNow;
+        instance.StatusMessage = "Deploy command sent to agent";
         await store.Update(instance);
 
         _logger.LogInformation("Deploy command sent for {RunnerName} to {Host}", runnerName, agent.AgentInfo.Name);

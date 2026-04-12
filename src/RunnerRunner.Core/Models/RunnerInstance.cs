@@ -26,7 +26,11 @@ public class RunnerInstance
     public string? JobId { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeployedAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? StoppedAt { get; set; }
     public DateTime? LastHealthCheck { get; set; }
+
+    /// <summary>Human-readable status detail, e.g. "Downloading runner v2.333.1", "Connected to GitHub"</summary>
+    public string? StatusMessage { get; set; }
 }
