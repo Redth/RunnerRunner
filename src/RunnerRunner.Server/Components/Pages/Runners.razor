@@ -121,7 +121,13 @@ else
                         <tr>
                             <td>@inst.RunnerName</td>
                             <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
-                            <td><span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span></td>
+                            <td>
+                                <span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span>
+                                @if (!string.IsNullOrEmpty(inst.StatusMessage))
+                                {
+                                    <br/><small class="text-muted" style="font-size: 0.7rem;">@inst.StatusMessage</small>
+                                }
+                            </td>
                             <td><span class="badge @(inst.ProvisioningMode == "dynamic" ? "bg-warning text-dark" : "bg-secondary")">@(inst.ProvisioningMode == "dynamic" ? "Dynamic" : "Static")</span></td>
                             <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
                             <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>

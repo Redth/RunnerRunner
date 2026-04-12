@@ -138,6 +138,7 @@ public class RunnerHealthUpdateEvent
     public string InstanceId { get; set; } = "";
     public RunnerInstanceStatus Status { get; set; }
     public DateTime CheckedAt { get; set; }
+    public string? StatusMessage { get; set; }
 }
 
 public class HeartbeatEvent

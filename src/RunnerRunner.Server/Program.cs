@@ -47,6 +47,7 @@ builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
 builder.Services.AddHostedService<ReconciliationService>();
+builder.Services.AddHostedService<RunnerTimeoutService>();
 
 // Blazor
 builder.Services.AddRazorComponents()

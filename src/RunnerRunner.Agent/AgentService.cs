@@ -92,7 +92,8 @@ public class AgentService : BackgroundService
                     {
                         InstanceId = runner.InstanceId,
                         Status = RunnerInstanceStatus.Running,
-                        CheckedAt = DateTime.UtcNow
+                        CheckedAt = DateTime.UtcNow,
+                        StatusMessage = "Running"
                     });
                 }
                 // Reconciliation: report actual state to server
@@ -168,6 +169,16 @@ public class AgentService : BackgroundService
                     InstanceId = command.InstanceId,
                     RunnerName = result.RunnerName,
                     InstanceHandle = result.InstanceHandle
+                });
+
+                await _signalR.SendRunnerHealthUpdate(new RunnerHealthUpdateEvent
+                {
+                    InstanceId = command.InstanceId,
+                    Status = RunnerInstanceStatus.Running,
+                    CheckedAt = DateTime.UtcNow,
+                    StatusMessage = command.ProvisioningMode == "dynamic"
+                        ? "Runner deployed, waiting for job"
+                        : "Runner started"
                 });
             }
         }

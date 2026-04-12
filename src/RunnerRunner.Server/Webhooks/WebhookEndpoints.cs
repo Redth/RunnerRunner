@@ -148,6 +148,41 @@ public static class WebhookEndpoints
             return Results.Ok(new { message = "No matching binding" });
         }
 
+        // Handle "in_progress" — confirm dynamic runner is active
+        if (action == "in_progress")
+        {
+            // Find the dynamic runner for this job and confirm it's running
+            var dynamicInstances = (await store.Query<RunnerInstance>().ToList())
+                .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
+                .ToList();
+
+            foreach (var inst in dynamicInstances)
+            {
+                inst.Status = RunnerInstanceStatus.Running;
+                inst.StatusMessage = "Job in progress";
+                inst.LastHealthCheck = DateTime.UtcNow;
+                await store.Update(inst);
+            }
+
+            await store.Insert(new WebhookEvent
+            {
+                BindingId = binding.Id,
+                Provider = providerName,
+                Action = action,
+                JobId = jobId,
+                RunId = runId,
+                Repository = repo,
+                WorkflowName = workflowName,
+                Labels = labels,
+                Status = "in_progress",
+                MatchedProfileId = dynamicInstances.FirstOrDefault()?.ProfileId,
+                InstanceId = dynamicInstances.FirstOrDefault()?.Id
+            });
+
+            logger.LogInformation("Job {JobId} in progress, runner confirmed active", jobId);
+            return Results.Ok(new { message = "Job in progress acknowledged" });
+        }
+
         // Handle "completed" — trigger cleanup of dynamic runners
         if (action == "completed")
         {

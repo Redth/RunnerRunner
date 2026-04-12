@@ -141,6 +141,8 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
         {
             instance.Status = evt.Status;
             instance.LastHealthCheck = evt.CheckedAt;
+            if (!string.IsNullOrEmpty(evt.StatusMessage))
+                instance.StatusMessage = evt.StatusMessage;
             await _store.Update(instance);
         }
     }
