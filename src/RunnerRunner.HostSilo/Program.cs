@@ -1,4 +1,5 @@
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Data;
 using Orleans.Runtime.MembershipService.SiloMetadata;
 
 var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
@@ -12,6 +13,12 @@ var architecture = builder.Configuration["HostSilo:Architecture"] ?? System.Runt
 var pgConnectionString = builder.Configuration["Database:ConnectionString"]
     ?? builder.Configuration.GetConnectionString("DefaultConnection")
     ?? "Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner";
+
+// DocumentDB (PostgreSQL) — for grain projections
+builder.Services.AddRunnerRunnerDocumentStore(pgConnectionString);
+
+// Host registration service
+builder.Services.AddHostedService<RunnerRunner.HostSilo.HostRegistrationService>();
 
 // Orleans silo (headless — no web UI)
 builder.UseOrleans(silo =>
