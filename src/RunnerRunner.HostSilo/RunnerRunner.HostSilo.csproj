@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-RunnerRunner.HostSilo-f49fab38-c186-4e29-a84e-48f7d435a51d</UserSecretsId>
+    <!-- Prevent content file conflicts from Server project reference -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +24,10 @@
   <ItemGroup>
     <ProjectReference Include="..\RunnerRunner.Core\RunnerRunner.Core.csproj" />
     <ProjectReference Include="..\RunnerRunner.ServiceDefaults\RunnerRunner.ServiceDefaults.csproj" />
-    <ProjectReference Include="..\RunnerRunner.Server\RunnerRunner.Server.csproj" />
+    <ProjectReference Include="..\RunnerRunner.Server\RunnerRunner.Server.csproj">
+      <Private>true</Private>
+      <ExcludeAssets>contentfiles;native</ExcludeAssets>
+      <CopyLocal>true</CopyLocal>
+    </ProjectReference>
   </ItemGroup>
 </Project>

@@ -101,7 +101,7 @@ docker build --platform "${DOCKER_PLATFORM}" -t "${SERVER_IMAGE}" \
 step "Building host-silo image (${DOCKER_PLATFORM})..."
 docker build --platform "${DOCKER_PLATFORM}" -t "${HOST_SILO_IMAGE}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/Dockerfile" \
-    "${PROJECT_ROOT}/src" --quiet
+    "${PROJECT_ROOT}" --quiet
 
 success "Images built"
 
