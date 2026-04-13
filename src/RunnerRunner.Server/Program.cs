@@ -33,6 +33,15 @@ builder.Services.AddSignalR();
 // HTTP client for provider APIs
 builder.Services.AddHttpClient();
 
+// Orleans silo (co-hosted with Blazor server)
+builder.UseOrleans(silo =>
+{
+    silo.UseLocalhostClustering();
+    silo.AddMemoryGrainStorage("Default");
+    silo.AddMemoryGrainStorage("PersistentStore");
+    silo.UseInMemoryReminderService();
+});
+
 // Runner providers
 builder.Services.AddSingleton<IRunnerProviderPlugin, GitHubActionsProvider>();
 builder.Services.AddSingleton<IRunnerProviderPlugin, GiteaActionsProvider>();
