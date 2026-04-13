@@ -91,6 +91,7 @@ log "Phase 1: Building Docker images"
 
 SERVER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/server:latest"
 AGENT_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/agent:latest"
+HOST_SILO_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/host-silo:latest"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 step "Building server image (${DOCKER_PLATFORM})..."
@@ -102,6 +103,11 @@ step "Building agent image (${DOCKER_PLATFORM})..."
 docker build --platform "${DOCKER_PLATFORM}" -t "${AGENT_IMAGE}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.Agent/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
+
+step "Building host-silo image (${DOCKER_PLATFORM})..."
+docker build --platform "${DOCKER_PLATFORM}" -t "${HOST_SILO_IMAGE}" \
+    -f "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/Dockerfile" \
+    "${PROJECT_ROOT}/src" --quiet | tail -1
 
 success "Images built"
 
@@ -115,6 +121,10 @@ docker push "${SERVER_IMAGE}" --quiet
 
 step "Pushing agent image..."
 docker push "${AGENT_IMAGE}" --quiet
+
+step "Pushing host-silo image..."
+docker push "${HOST_SILO_IMAGE}" --quiet
+echo "${HOST_SILO_IMAGE}"
 
 success "Images pushed to registry"
 
@@ -180,6 +190,22 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - server
+    restart: unless-stopped
+
+  host-silo:
+    image: ${HOST_SILO_IMAGE}
+    container_name: runnerrunner-host-silo
+    environment:
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
+      - HostSilo__HostId=linux-host-${LINUX_HOST}
+      - HostSilo__HostName=linux-host-${LINUX_HOST}
+      - HostSilo__Platform=Linux
+      - DOTNET_ENVIRONMENT=Production
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
@@ -251,6 +277,7 @@ echo ""
 echo "  Server:       http://${LINUX_HOST}:${SERVER_PORT}"
 echo "  Server:       https://r2.jjagd.net (via NPM)"
 echo "  Linux Agent:  Docker container on ${LINUX_HOST}"
+echo "  Host Silo:    Docker container on ${LINUX_HOST}"
 echo "  macOS Agent:  launchd service on ${MACOS_HOST}"
 echo ""
 echo "  Redeploy:     ./deploy/deploy-all.sh"
