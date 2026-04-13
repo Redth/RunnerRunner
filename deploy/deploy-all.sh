@@ -174,12 +174,6 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   server-data:
