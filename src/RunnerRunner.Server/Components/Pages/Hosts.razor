@@ -138,10 +138,94 @@
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td>
                     <a href="/logs?source=agent:@host.Name" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
+                    <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleConfigure(host)" title="Configure labels & resources">
+                        <i class="bi bi-gear"></i> Configure
+                    </button>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">  <i class="bi bi-link-45deg"></i> Assign</button>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndRemoveHost(host)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
             </tr>
+            @if (configureHostId == host.Id)
+            {
+                <tr>
+                    <td colspan="6" class="p-0">
+                        <div class="card m-2">
+                            <div class="card-body">
+                                <div class="row">
+                                    @* Labels Section *@
+                                    <div class="col-md-7">
+                                        <h6><i class="bi bi-tags me-1"></i>Labels</h6>
+                                        @{
+                                            var autoLabels = GetAutoLabels(host);
+                                        }
+                                        @if (autoLabels.Any())
+                                        {
+                                            <div class="d-flex flex-wrap gap-1 mb-2">
+                                                @foreach (var label in autoLabels)
+                                                {
+                                                    <span class="host-chip arch-chip" title="Auto-detected (read-only)">
+                                                        <i class="bi bi-lock-fill me-1"></i>@label.Key=@label.Value
+                                                    </span>
+                                                }
+                                            </div>
+                                        }
+                                        <div class="d-flex flex-wrap gap-1 mb-2">
+                                            @foreach (var label in host.Labels)
+                                            {
+                                                <span class="host-chip cap-chip">
+                                                    @label.Key=@label.Value
+                                                    <button type="button" class="btn-close btn-close-sm ms-1" style="font-size: 0.5rem;"
+                                                            @onclick="() => RemoveLabel(host, label.Key)"></button>
+                                                </span>
+                                            }
+                                        </div>
+                                        <div class="input-group input-group-sm" style="max-width: 400px;">
+                                            <input class="form-control" @bind="newLabelKey" placeholder="key" />
+                                            <input class="form-control" @bind="newLabelValue" placeholder="value" />
+                                            <button class="btn btn-outline-primary" @onclick="() => AddLabel(host)">
+                                                <i class="bi bi-plus-lg"></i> Add
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    @* Resource Limits Section *@
+                                    <div class="col-md-5">
+                                        <h6><i class="bi bi-speedometer2 me-1"></i>Resource Limits</h6>
+                                        <div class="mb-2">
+                                            <label class="form-label form-label-sm mb-0">Max Docker Containers</label>
+                                            <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
+                                                   @bind="host.MaxDockerContainers" min="0" />
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label form-label-sm mb-0">Max Tart VMs</label>
+                                            <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
+                                                   @bind="host.MaxTartVMs" min="0" />
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label form-label-sm mb-0">Max Native Processes</label>
+                                            <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
+                                                   @bind="host.MaxNativeProcesses" min="0" />
+                                        </div>
+                                        <div class="mb-2">
+                                            <label class="form-label form-label-sm mb-0">Group ID</label>
+                                            <input type="text" class="form-control form-control-sm" style="max-width: 200px;"
+                                                   @bind="host.GroupId" placeholder="e.g., build-farm-1" />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <button class="btn btn-success btn-sm" @onclick="() => SaveConfiguration(host)">
+                                        <i class="bi bi-check-lg me-1"></i>Save
+                                    </button>
+                                    <button class="btn btn-outline-secondary btn-sm ms-1" @onclick="() => configureHostId = null">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            }
         }
     </tbody>
 </table>
@@ -277,6 +361,52 @@
     // Rename
     private string? renamingHostId;
     private string renameValue = "";
+
+    // Configure panel
+    private string? configureHostId;
+    private string newLabelKey = "";
+    private string newLabelValue = "";
+
+    private void ToggleConfigure(Host host)
+    {
+        configureHostId = configureHostId == host.Id ? null : host.Id;
+        newLabelKey = "";
+        newLabelValue = "";
+    }
+
+    private Dictionary<string, string> GetAutoLabels(Host host)
+    {
+        var labels = new Dictionary<string, string>();
+        if (!string.IsNullOrEmpty(host.Architecture))
+            labels["arch"] = host.Architecture;
+        if (host.Platform != default)
+            labels["os"] = host.Platform.ToString().ToLowerInvariant();
+        foreach (var cap in host.Capabilities)
+            labels[cap] = "true";
+        return labels;
+    }
+
+    private void AddLabel(Host host)
+    {
+        var key = newLabelKey?.Trim();
+        var value = newLabelValue?.Trim();
+        if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(value)) return;
+        host.Labels[key] = value;
+        newLabelKey = "";
+        newLabelValue = "";
+    }
+
+    private void RemoveLabel(Host host, string key)
+    {
+        host.Labels.Remove(key);
+    }
+
+    private async Task SaveConfiguration(Host host)
+    {
+        host.UpdatedAt = DateTime.UtcNow;
+        await Store.Update(host);
+        configureHostId = null;
+    }
 
     private void StartRename(Host host)
     {

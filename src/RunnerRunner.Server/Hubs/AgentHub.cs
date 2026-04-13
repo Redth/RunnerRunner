@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
 using System.Collections.Concurrent;
 using Host = RunnerRunner.Core.Models.Host;
 
@@ -12,11 +13,13 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
     private static readonly ConcurrentDictionary<string, ConnectedAgent> ConnectedAgents = new();
     private readonly ILogger<AgentHub> _logger;
     private readonly IDocumentStore _store;
+    private readonly IGrainFactory _grainFactory;
 
-    public AgentHub(ILogger<AgentHub> logger, IDocumentStore store)
+    public AgentHub(ILogger<AgentHub> logger, IDocumentStore store, IGrainFactory grainFactory)
     {
         _logger = logger;
         _store = store;
+        _grainFactory = grainFactory;
     }
 
     public override async Task OnConnectedAsync()
@@ -41,6 +44,20 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
                 host.AgentStatus = AgentStatus.Offline;
                 host.UpdatedAt = DateTime.UtcNow;
                 await _store.Update(host);
+            }
+
+            // Sync with Orleans grains
+            try
+            {
+                var hostGrain = _grainFactory.GetGrain<IHostGrain>(agent.AgentInfo.AgentId);
+                await hostGrain.MarkOffline();
+
+                var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(0);
+                await scheduler.UnregisterHost(agent.AgentInfo.AgentId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to sync OnDisconnectedAsync with Orleans grains for {AgentId}", agentId);
             }
         }
 
@@ -93,6 +110,20 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             };
             await _store.Insert(host);
         }
+
+        // Sync with Orleans grains
+        try
+        {
+            var hostGrain = _grainFactory.GetGrain<IHostGrain>(agentInfo.AgentId);
+            await hostGrain.Register(agentInfo.Name, agentInfo.Platform, agentInfo.Architecture, agentInfo.AgentVersion ?? "");
+
+            var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(0);
+            await scheduler.RegisterHost(agentInfo.AgentId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync AgentConnected with Orleans grains for {AgentId}", agentInfo.AgentId);
+        }
     }
 
     public Task AgentDisconnected(string agentId)
@@ -114,6 +145,17 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             instance.StartedAt = DateTime.UtcNow;
             await _store.Update(instance);
         }
+
+        // Sync with Orleans grains
+        try
+        {
+            var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+            await runnerGrain.MarkRunning(evt.InstanceHandle);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync RunnerStarted with Orleans grains for {InstanceId}", evt.InstanceId);
+        }
     }
 
     public async Task RunnerStopped(RunnerStoppedEvent evt)
@@ -130,6 +172,20 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             instance.StoppedAt = DateTime.UtcNow;
             await _store.Update(instance);
         }
+
+        // Sync with Orleans grains
+        try
+        {
+            var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+            if (evt.Reason == "crashed")
+                await runnerGrain.MarkCrashed(evt.Reason);
+            else
+                await runnerGrain.MarkStopped();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync RunnerStopped with Orleans grains for {InstanceId}", evt.InstanceId);
+        }
     }
 
     public async Task RunnerHealthUpdate(RunnerHealthUpdateEvent evt)
@@ -144,6 +200,17 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             if (!string.IsNullOrEmpty(evt.StatusMessage))
                 instance.StatusMessage = evt.StatusMessage;
             await _store.Update(instance);
+        }
+
+        // Sync with Orleans grains
+        try
+        {
+            var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+            await runnerGrain.UpdateHealth(evt.StatusMessage);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync RunnerHealthUpdate with Orleans grains for {InstanceId}", evt.InstanceId);
         }
     }
 
@@ -160,6 +227,17 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
                 host.LastHeartbeat = DateTime.UtcNow;
                 await _store.Update(host);
             }
+        }
+
+        // Sync with Orleans grains
+        try
+        {
+            var hostGrain = _grainFactory.GetGrain<IHostGrain>(evt.AgentId);
+            await hostGrain.RecordHeartbeat(Context.ConnectionId, evt.RunningInstanceCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync Heartbeat with Orleans grains for {AgentId}", evt.AgentId);
         }
     }
 

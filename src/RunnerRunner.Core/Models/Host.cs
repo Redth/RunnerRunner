@@ -41,6 +41,20 @@ public class Host
     /// </summary>
     public Dictionary<string, string> ReportedEnvironment { get; set; } = new();
 
+    /// <summary>
+    /// Capability labels for matching (key=value pairs).
+    /// e.g., os=linux, arch=x64, docker=true, pool=build-farm
+    /// </summary>
+    public Dictionary<string, string> Labels { get; set; } = new();
+
+    /// <summary>Resource limits per execution backend.</summary>
+    public int MaxDockerContainers { get; set; } = 10;
+    public int MaxTartVMs { get; set; } = 3;
+    public int MaxNativeProcesses { get; set; } = 5;
+
+    /// <summary>Host group ID for logical grouping.</summary>
+    public string? GroupId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
