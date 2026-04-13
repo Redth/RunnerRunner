@@ -8,6 +8,7 @@
 @inject IDocumentStore Store
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject IJSRuntime JS
+@inject IGrainFactory GrainFactory
 
 <PageTitle>Runner Instances - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -323,4 +324,14 @@ else
         RunnerInstanceStatus.Crashed => "bg-danger",
         _ => "bg-secondary"
     };
+
+    private async Task<RunnerInstanceGrainState?> GetRunnerGrainState(string instanceId)
+    {
+        try
+        {
+            var grain = GrainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
+            return await grain.GetState();
+        }
+        catch { return null; }
+    }
 }

@@ -8,6 +8,7 @@
 @inject IDocumentStore Store
 @inject IJSRuntime JS
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject IGrainFactory GrainFactory
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -613,6 +614,16 @@
         HostPlatform.Windows => "bi-windows",
         _ => "bi-pc-display"
     };
+
+    private async Task<HostGrainState?> GetHostGrainState(string hostId)
+    {
+        try
+        {
+            var grain = GrainFactory.GetGrain<IHostGrain>(hostId);
+            return await grain.GetState();
+        }
+        catch { return null; }
+    }
 }
 
 @* Chip styles are in app.css *@
