@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-RunnerRunner.HostSilo-f49fab38-c186-4e29-a84e-48f7d435a51d</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Docker.DotNet" Version="3.125.15" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.0.1" />
+    <PackageReference Include="Npgsql" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RunnerRunner.Core\RunnerRunner.Core.csproj" />
+    <ProjectReference Include="..\RunnerRunner.ServiceDefaults\RunnerRunner.ServiceDefaults.csproj" />
+  </ItemGroup>
+</Project>

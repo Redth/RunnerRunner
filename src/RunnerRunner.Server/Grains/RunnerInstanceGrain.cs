@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans;
 using Orleans.Streams;
@@ -5,6 +6,7 @@ using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
+using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
 
@@ -12,6 +14,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 {
     private readonly IPersistentState<RunnerInstanceGrainState> _state;
     private readonly ILogger<RunnerInstanceGrain> _logger;
+    private readonly IServiceProvider _serviceProvider;
 
     private IGrainTimer? _pendingTimer;
     private IGrainTimer? _registrationTimer;
@@ -22,10 +25,12 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
     public RunnerInstanceGrain(
         [PersistentState("runner", "PersistentStore")]
         IPersistentState<RunnerInstanceGrainState> state,
-        ILogger<RunnerInstanceGrain> logger)
+        ILogger<RunnerInstanceGrain> logger,
+        IServiceProvider serviceProvider)
     {
         _state = state;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     public Task<RunnerInstanceGrainState> GetState() => Task.FromResult(_state.State);
@@ -93,6 +98,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
         _logger.LogInformation("Runner instance {InstanceId} running", this.GetPrimaryKeyString());
         await PublishStatusChange();
+        await SyncToDocumentDb();
 
         CancelTimer(ref _registrationTimer);
 
@@ -124,6 +130,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         CancelAllTimers();
         await NotifyHostDecrement();
         await PublishStatusChange();
+        await SyncToDocumentDb();
     }
 
     public async Task MarkFailed(string error)
@@ -137,6 +144,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         CancelAllTimers();
         await NotifyHostDecrement();
         await PublishStatusChange();
+        await SyncToDocumentDb();
     }
 
     public async Task MarkCrashed(string reason)
@@ -150,6 +158,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         CancelAllTimers();
         await NotifyHostDecrement();
         await PublishStatusChange();
+        await SyncToDocumentDb();
     }
 
     public async Task UpdateHealth(string? statusMessage = null)
@@ -163,6 +172,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         // Reset health check timer
         CancelTimer(ref _healthTimer);
         StartHealthCheckTimer();
+        await SyncToDocumentDb();
     }
 
     public async Task UpdateStatusMessage(string message)
@@ -323,6 +333,37 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
     private bool IsDynamic() =>
         _state.State.ProvisioningMode.Equals("dynamic", StringComparison.OrdinalIgnoreCase)
         || _state.State.ProvisioningMode.Equals("webhook", StringComparison.OrdinalIgnoreCase);
+
+    private async Task SyncToDocumentDb()
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+
+            var instanceId = this.GetPrimaryKeyString();
+            var existing = await store.Get<RunnerInstance>(instanceId);
+
+            if (existing != null)
+            {
+                existing.Status = _state.State.Status;
+                existing.StatusMessage = _state.State.StatusMessage;
+                existing.ContainerId = _state.State.ContainerId;
+                existing.VmName = _state.State.VmName;
+                existing.ProcessId = _state.State.ProcessId;
+                existing.ErrorMessage = _state.State.ErrorMessage;
+                existing.DeployedAt = _state.State.DeployedAt;
+                existing.StartedAt = _state.State.StartedAt;
+                existing.StoppedAt = _state.State.StoppedAt;
+                existing.LastHealthCheck = _state.State.LastHealthCheck;
+                await store.Update(existing);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync RunnerInstance to DocumentDB");
+        }
+    }
 
     private async Task NotifyHostDecrement()
     {

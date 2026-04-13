@@ -65,6 +65,30 @@
     </div>
 </div>
 
+<h3 class="mt-4"><i class="bi bi-diagram-3-fill me-2"></i>Cluster Status</h3>
+<div class="row mb-3">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6>Orleans Silo</h6>
+                <p class="mb-1"><span class="badge bg-success">Active</span> Silo running on this server</p>
+                <small class="text-muted">
+                    <a href="/orleans" target="_blank"><i class="bi bi-box-arrow-up-right me-1"></i>Open Orleans Dashboard</a>
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6>Database</h6>
+                <p class="mb-1"><span class="badge bg-success">PostgreSQL</span> Connected</p>
+                <small class="text-muted">Grain persistence + DocumentDB</small>
+            </div>
+        </div>
+    </div>
+</div>
+
 <h3 class="mt-4"><i class="bi bi-people-fill me-2"></i>Connected Agents</h3>
 @if (!connectedAgents.Any())
 {

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
 using Orleans.Streams;
@@ -5,6 +6,7 @@ using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
+using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
 
@@ -12,15 +14,18 @@ public class HostGrain : Grain, IHostGrain
 {
     private readonly IPersistentState<HostGrainState> _state;
     private readonly ILogger<HostGrain> _logger;
+    private readonly IServiceProvider _serviceProvider;
     private IGrainTimer? _heartbeatTimer;
 
     public HostGrain(
         [PersistentState("host", "PersistentStore")]
         IPersistentState<HostGrainState> state,
-        ILogger<HostGrain> logger)
+        ILogger<HostGrain> logger,
+        IServiceProvider serviceProvider)
     {
         _state = state;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     public async Task Register(string name, HostPlatform platform, string? architecture, string agentVersion)
@@ -76,6 +81,7 @@ public class HostGrain : Grain, IHostGrain
 
         StartHeartbeatTimer();
         await PublishHostStatusChange();
+        await SyncToDocumentDb();
     }
 
     public async Task MarkOffline()
@@ -86,6 +92,7 @@ public class HostGrain : Grain, IHostGrain
 
         _logger.LogWarning("Host {HostId} marked offline", this.GetPrimaryKeyString());
         await PublishHostStatusChange();
+        await SyncToDocumentDb();
     }
 
     public Task<bool> CanAcceptRunner(ExecutionBackend backend)
@@ -166,5 +173,29 @@ public class HostGrain : Grain, IHostGrain
 
         _heartbeatTimer?.Dispose();
         _heartbeatTimer = null;
+    }
+
+    private async Task SyncToDocumentDb()
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+
+            var hostId = this.GetPrimaryKeyString();
+            var existing = await store.Get<Core.Models.Host>(hostId);
+
+            if (existing != null)
+            {
+                existing.AgentStatus = _state.State.Status;
+                existing.LastHeartbeat = _state.State.LastHeartbeat;
+                existing.Labels = new Dictionary<string, string>(_state.State.Labels);
+                await store.Update(existing);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to sync Host to DocumentDB");
+        }
     }
 }

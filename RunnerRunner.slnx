@@ -3,6 +3,7 @@
     <Project Path="src/RunnerRunner.Agent/RunnerRunner.Agent.csproj" />
     <Project Path="src/RunnerRunner.AppHost/RunnerRunner.AppHost.csproj" />
     <Project Path="src/RunnerRunner.Core/RunnerRunner.Core.csproj" />
+    <Project Path="src/RunnerRunner.HostSilo/RunnerRunner.HostSilo.csproj" />
     <Project Path="src/RunnerRunner.Server/RunnerRunner.Server.csproj" />
     <Project Path="src/RunnerRunner.ServiceDefaults/RunnerRunner.ServiceDefaults.csproj" />
   </Folder>
