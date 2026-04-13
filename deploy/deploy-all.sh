@@ -166,6 +166,7 @@ services:
       - ASPNETCORE_URLS=http://+:${SERVER_PORT}
       - OTEL_SERVICE_NAME=runnerrunner-server
       - DOTNET_ENVIRONMENT=Production
+      - Orleans__AdvertisedIPAddress=${LINUX_HOST}
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=${SERVER_PORT}"
@@ -230,6 +231,9 @@ cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
   },
   "Database": {
     "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
+  },
+  "Orleans": {
+    "AdvertisedIPAddress": "${MACOS_HOST}"
   },
   "DOTNET_ENVIRONMENT": "Production"
 }

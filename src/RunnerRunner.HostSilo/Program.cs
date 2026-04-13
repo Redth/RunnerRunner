@@ -58,6 +58,13 @@ builder.UseOrleans(silo =>
             options.Invariant = "Npgsql";
             options.ConnectionString = pgConnectionString;
         });
+
+        // Advertise external IP so silos on other machines can reach us
+        var advertisedIp = builder.Configuration["Orleans:AdvertisedIPAddress"];
+        if (!string.IsNullOrEmpty(advertisedIp) && System.Net.IPAddress.TryParse(advertisedIp, out var ip))
+        {
+            silo.ConfigureEndpoints(ip, siloPort: 11111, gatewayPort: 30000);
+        }
     }
 
     silo.AddMemoryStreams("RunnerEvents");
