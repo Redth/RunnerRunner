@@ -67,11 +67,16 @@ builder.UseOrleans(silo =>
             options.ConnectionString = orleansConnString;
         });
 
-        // Advertise external IP so silos on other machines can reach us
+        // Advertise external IP so silos on other machines can reach us via mapped ports
         var advertisedIp = builder.Configuration["Orleans:AdvertisedIPAddress"];
         if (!string.IsNullOrEmpty(advertisedIp) && System.Net.IPAddress.TryParse(advertisedIp, out var ip))
         {
-            silo.ConfigureEndpoints(ip, siloPort: 11111, gatewayPort: 30000);
+            silo.Configure<Orleans.Configuration.EndpointOptions>(options =>
+            {
+                options.AdvertisedIPAddress = ip;
+                options.SiloPort = 11111;
+                options.GatewayPort = 30000;
+            });
         }
     }
 
