@@ -137,6 +137,7 @@ services:
       - POSTGRES_PASSWORD=runnerrunner
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U runnerrunner"]
@@ -185,6 +186,12 @@ step "Copying docker-compose.yml to ${LINUX_HOST}..."
 remote_scp "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
     "${COMPOSE_FILE}" "${LINUX_DEPLOY_DIR}/docker-compose.yml"
 rm "${COMPOSE_FILE}"
+
+step "Copying PostgreSQL init scripts..."
+remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
+    "mkdir -p ${LINUX_DEPLOY_DIR}/postgres-init"
+remote_scp "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
+    "${SCRIPT_DIR}/postgres-init/" "${LINUX_DEPLOY_DIR}/postgres-init/"
 
 step "Pulling images on remote host..."
 remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
