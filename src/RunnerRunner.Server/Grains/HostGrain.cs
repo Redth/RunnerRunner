@@ -10,6 +10,13 @@ using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
 
+// TODO: Add host-affinity grain placement so this grain activates on the silo
+// whose "hostId" metadata matches the grain's primary key. Orleans 10 supports
+// SiloMetadata (already configured in HostSilo/Program.cs). Options:
+//   1. [SiloMetadataPlacement("hostId")] attribute if available
+//   2. Custom IPlacementDirector that reads ISiloMetadataCache
+// For now, grains can activate on any silo; the HostSilo will naturally host
+// them once per-host silo deployment is in place.
 public class HostGrain : Grain, IHostGrain
 {
     private readonly IPersistentState<HostGrainState> _state;

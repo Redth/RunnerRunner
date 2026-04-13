@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Orleans;
 using Orleans.Streams;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Core.Hub;
 using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
@@ -10,6 +11,10 @@ using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
 
+// TODO: Add host-affinity grain placement so this grain activates on the silo
+// whose "hostId" metadata matches the runner's assigned host. This enables
+// local backend execution (Docker/Tart/Native) without SignalR round-trips.
+// See HostGrain.cs for placement strategy options.
 public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 {
     private readonly IPersistentState<RunnerInstanceGrainState> _state;
@@ -179,6 +184,19 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
     {
         _state.State.StatusMessage = message;
         await _state.WriteStateAsync();
+    }
+
+    public async Task DeployLocally(DeployRunnerCommand command)
+    {
+        _logger.LogInformation(
+            "TODO: Local deployment of runner {Name} on host {Host} (backend: {Backend})",
+            _state.State.RunnerName, _state.State.HostId, command.Backend);
+
+        // In the future, this will call the local DockerBackend/TartBackend/NativeBackend
+        // directly from the grain (when host-affinity placement is active).
+        // For now, the existing Agent + SignalR path handles actual deployment.
+
+        await MarkStarting("Deploying locally...");
     }
 
     // --- Timer callbacks ---

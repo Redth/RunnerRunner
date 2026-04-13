@@ -1,3 +1,4 @@
+using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.State;
 
@@ -52,6 +53,7 @@ public interface IRunnerInstanceGrain : IGrainWithStringKey
     Task MarkCrashed(string reason);
     Task UpdateHealth(string? statusMessage = null);
     Task UpdateStatusMessage(string message);
+    Task DeployLocally(DeployRunnerCommand command);
 }
 
 /// <summary>
