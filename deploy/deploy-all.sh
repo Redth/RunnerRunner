@@ -140,7 +140,7 @@ services:
       - POSTGRES_USER=runnerrunner
       - POSTGRES_PASSWORD=runnerrunner
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
@@ -242,7 +242,7 @@ cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
     "Architecture": "Arm64"
   },
   "Database": {
-    "ConnectionString": "Host=${LINUX_HOST};Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
+    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
   },
   "DOTNET_ENVIRONMENT": "Production"
 }
