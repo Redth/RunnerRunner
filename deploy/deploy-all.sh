@@ -156,13 +156,16 @@ services:
     container_name: runnerrunner-server
     ports:
       - "${SERVER_PORT}:${SERVER_PORT}"
+      - "11111:11111"
+      - "30000:30000"
     volumes:
       - server-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - ASPNETCORE_URLS=http://+:${SERVER_PORT}
       - OTEL_SERVICE_NAME=runnerrunner-server
-      - OTEL_EXPORTER_OTLP_ENDPOINT=\${OTEL_ENDPOINT:-}
+      - DOTNET_ENVIRONMENT=Production
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=${SERVER_PORT}"
@@ -171,16 +174,6 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-
-  host-silo:
-    image: ${HOST_SILO_IMAGE}
-    container_name: runnerrunner-host-silo
-    environment:
-      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
-      - HostSilo__HostId=linux-host-${LINUX_HOST}
-      - HostSilo__HostName=linux-host-${LINUX_HOST}
-      - HostSilo__Platform=Linux
-      - DOTNET_ENVIRONMENT=Production
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:

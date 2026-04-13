@@ -99,6 +99,7 @@ builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
 builder.Services.AddHostedService<StreamSubscriptionService>();
+builder.Services.AddHostedService<ServerHostRegistrationService>();
 // builder.Services.AddHostedService<ReconciliationService>();    // → HostGrain + RunnerInstanceGrain
 // builder.Services.AddHostedService<RunnerTimeoutService>();     // → RunnerInstanceGrain timers
 
