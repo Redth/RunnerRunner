@@ -128,6 +128,22 @@ step "Generating docker-compose.yml..."
 COMPOSE_FILE=$(mktemp)
 cat > "${COMPOSE_FILE}" <<COMPOSE_EOF
 services:
+  postgres:
+    image: postgres:17
+    container_name: runnerrunner-postgres
+    environment:
+      - POSTGRES_DB=runnerrunner
+      - POSTGRES_USER=runnerrunner
+      - POSTGRES_PASSWORD=runnerrunner
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runnerrunner"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   server:
     image: ${SERVER_IMAGE}
     container_name: runnerrunner-server
@@ -136,12 +152,15 @@ services:
     volumes:
       - server-data:/app/data
     environment:
-      - Database__Path=/app/data/runnerrunner.db
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - ASPNETCORE_URLS=http://+:${SERVER_PORT}
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=${SERVER_PORT}"
       - "npm.proxy.ssl.force=true"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   agent:
@@ -159,6 +178,7 @@ services:
 
 volumes:
   server-data:
+  postgres-data:
 COMPOSE_EOF
 
 step "Copying docker-compose.yml to ${LINUX_HOST}..."

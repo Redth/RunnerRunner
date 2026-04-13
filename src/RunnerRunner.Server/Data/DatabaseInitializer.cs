@@ -28,6 +28,9 @@ public static class DatabaseInitializer
         await EnsureTable<RegistryCredential>(store, () => new RegistryCredential { Id = "__init__", Name = "__init__", RegistryUrl = "__init__" });
         await EnsureTable<AgentImage>(store, () => new AgentImage { Id = "__init__", HostId = "__init__", Repository = "__init__" });
         await EnsureTable<AuditLogEntry>(store, () => new AuditLogEntry { Id = "__init__", Action = "__init__", EntityType = "__init__" });
+        await EnsureTable<WebhookEvent>(store, () => new WebhookEvent { Id = "__init__" });
+        await EnsureTable<WebhookBinding>(store, () => new WebhookBinding { Id = "__init__", Name = "__init__" });
+        await EnsureTable<ProvisioningRule>(store, () => new ProvisioningRule { Id = "__init__", Name = "__init__" });
     }
 
     private static async Task EnsureTable<T>(IDocumentStore store, Func<T> createSentinel) where T : class

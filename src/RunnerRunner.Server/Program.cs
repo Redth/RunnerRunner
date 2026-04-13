@@ -11,21 +11,11 @@ var builder = WebApplication.CreateBuilder(args);
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
 builder.AddServiceDefaults();
 
-// Document store (Shiny DocumentDB with SQLite)
-var dbPath = builder.Configuration.GetValue<string>("Database:Path");
-if (string.IsNullOrEmpty(dbPath))
-{
-    var dataDir = Path.Combine(builder.Environment.ContentRootPath, ".db");
-    Directory.CreateDirectory(dataDir);
-    dbPath = Path.Combine(dataDir, "runnerrunner.db");
-}
-else
-{
-    var dir = Path.GetDirectoryName(dbPath);
-    if (!string.IsNullOrEmpty(dir))
-        Directory.CreateDirectory(dir);
-}
-builder.Services.AddRunnerRunnerDocumentStore($"Data Source={dbPath}");
+// Document store (Shiny DocumentDB with PostgreSQL)
+var pgConnectionString = builder.Configuration.GetValue<string>("Database:ConnectionString")
+    ?? builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? "Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner";
+builder.Services.AddRunnerRunnerDocumentStore(pgConnectionString);
 
 // SignalR for agent communication
 builder.Services.AddSignalR();
@@ -36,12 +26,53 @@ builder.Services.AddHttpClient();
 // Orleans silo (co-hosted with Blazor server)
 builder.UseOrleans(silo =>
 {
-    silo.UseLocalhostClustering();
-    silo.AddMemoryGrainStorage("Default");
-    silo.AddMemoryGrainStorage("PersistentStore");
-    silo.AddMemoryGrainStorage("PubSubStore");
-    silo.UseInMemoryReminderService();
+    var orleansConnString = pgConnectionString;
+
+    if (builder.Environment.IsDevelopment())
+    {
+        // Dev: localhost clustering + in-memory storage
+        silo.UseLocalhostClustering();
+        silo.AddMemoryGrainStorage("Default");
+        silo.AddMemoryGrainStorage("PersistentStore");
+        silo.AddMemoryGrainStorage("PubSubStore");
+        silo.UseInMemoryReminderService();
+    }
+    else
+    {
+        // Production: PostgreSQL for clustering, persistence, reminders
+        silo.UseAdoNetClustering(options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansConnString;
+        });
+        silo.AddAdoNetGrainStorage("Default", options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansConnString;
+        });
+        silo.AddAdoNetGrainStorage("PersistentStore", options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansConnString;
+        });
+        silo.AddAdoNetGrainStorage("PubSubStore", options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansConnString;
+        });
+        silo.UseAdoNetReminderService(options =>
+        {
+            options.Invariant = "Npgsql";
+            options.ConnectionString = orleansConnString;
+        });
+    }
+
     silo.AddMemoryStreams("RunnerEvents");
+    silo.UseDashboard(options =>
+    {
+        options.BasePath = "/orleans";
+        options.HideTrace = true;
+    });
 });
 
 // Runner providers

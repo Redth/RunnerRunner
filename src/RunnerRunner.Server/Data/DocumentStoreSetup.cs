@@ -1,5 +1,5 @@
 using Shiny.DocumentDb;
-using Shiny.DocumentDb.Sqlite;
+using Shiny.DocumentDb.PostgreSql;
 using HostModel = RunnerRunner.Core.Models.Host;
 using RunnerRunner.Core.Models;
 
@@ -9,11 +9,11 @@ public static class DocumentStoreSetup
 {
     public static IServiceCollection AddRunnerRunnerDocumentStore(
         this IServiceCollection services,
-        string connectionString = "Data Source=runnerrunner.db")
+        string connectionString)
     {
-        services.AddSqliteDocumentStore(opts =>
+        services.AddPostgreSqlDocumentStore(opts =>
         {
-            opts.DatabaseProvider = new SqliteDatabaseProvider(connectionString);
+            opts.DatabaseProvider = new PostgreSqlDatabaseProvider(connectionString);
 
             // Give each entity type its own table for cleaner organization
             opts.MapTypeToTable<HostModel>("hosts");
@@ -26,6 +26,9 @@ public static class DocumentStoreSetup
             opts.MapTypeToTable<RegistryCredential>("registry_credentials");
             opts.MapTypeToTable<AgentImage>("agent_images");
             opts.MapTypeToTable<AuditLogEntry>("audit_log");
+            opts.MapTypeToTable<WebhookEvent>("webhook_events");
+            opts.MapTypeToTable<WebhookBinding>("webhook_bindings");
+            opts.MapTypeToTable<ProvisioningRule>("provisioning_rules");
         });
 
         return services;
