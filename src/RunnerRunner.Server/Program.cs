@@ -5,6 +5,7 @@ using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
+using Orleans.Dashboard;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -68,11 +69,8 @@ builder.UseOrleans(silo =>
     }
 
     silo.AddMemoryStreams("RunnerEvents");
-    // silo.UseDashboard(options =>
-    // {
-    //     options.BasePath = "/orleans";
-    //     options.HideTrace = true;
-    // });
+    // Orleans built-in dashboard (Orleans 10+)
+    silo.AddDashboard();
 });
 
 // Runner providers
@@ -130,6 +128,9 @@ app.MapHub<AgentHub>("/hubs/agent");
 
 // Webhook endpoints for GitHub/Gitea workflow_job events
 app.MapWebhookEndpoints();
+
+// Orleans Dashboard
+app.MapOrleansDashboard("/orleans");
 
 // Aspire health check endpoints
 app.MapDefaultEndpoints();

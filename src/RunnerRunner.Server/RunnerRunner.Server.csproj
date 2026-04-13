@@ -7,14 +7,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Orleans.Dashboard" Version="10.0.1" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.0.1" />
     <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" Version="10.0.1" />
     <PackageReference Include="Microsoft.Orleans.Server" Version="10.0.1" />
     <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.0.1" />
     <PackageReference Include="Npgsql" Version="10.0.2" />
-    <PackageReference Include="OrleansDashboard" Version="8.2.0" />
     <PackageReference Include="Shiny.DocumentDb.PostgreSql" Version="3.2.0" />
-    <PackageReference Include="System.Data.SQLite" Version="2.0.3" />
   </ItemGroup>
 
   <PropertyGroup>
