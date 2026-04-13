@@ -8,6 +8,11 @@ using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Hubs;
 
+/// <summary>
+/// LEGACY: SignalR hub for agent communication.
+/// Being replaced by Orleans grain-to-grain communication via HostSilo.
+/// Kept for backward compatibility with macOS native agent deployments.
+/// </summary>
 public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
 {
     private static readonly ConcurrentDictionary<string, ConnectedAgent> ConnectedAgents = new();

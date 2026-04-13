@@ -2,7 +2,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RunnerRunner.Server\RunnerRunner.Server.csproj" />
-    <ProjectReference Include="..\RunnerRunner.Agent\RunnerRunner.Agent.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,8 +5,8 @@ set -euo pipefail
 # RunnerRunner — Full Stack Deploy
 #
 # Deploys everything in one shot:
-#   1. Server + Linux Agent → Docker Compose via SSH to Linux host
-#   2. macOS Agent → Native binary via SSH to macOS host
+#   1. Server + Host Silo → Docker Compose via SSH to Linux host
+#   2. macOS Agent → (legacy, commented out)
 #
 # Usage:
 #   ./deploy/deploy-all.sh            # deploy everything
@@ -90,18 +90,12 @@ if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "linux" ]]; then
 log "Phase 1: Building Docker images"
 
 SERVER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/server:latest"
-AGENT_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/agent:latest"
 HOST_SILO_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/host-silo:latest"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 step "Building server image (${DOCKER_PLATFORM})..."
 docker build --platform "${DOCKER_PLATFORM}" -t "${SERVER_IMAGE}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.Server/Dockerfile" \
-    "${PROJECT_ROOT}" --quiet
-
-step "Building agent image (${DOCKER_PLATFORM})..."
-docker build --platform "${DOCKER_PLATFORM}" -t "${AGENT_IMAGE}" \
-    -f "${PROJECT_ROOT}/src/RunnerRunner.Agent/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
 step "Building host-silo image (${DOCKER_PLATFORM})..."
@@ -118,9 +112,6 @@ log "Phase 2: Pushing images to ${REGISTRY_URL}"
 
 step "Pushing server image..."
 docker push "${SERVER_IMAGE}" --quiet
-
-step "Pushing agent image..."
-docker push "${AGENT_IMAGE}" --quiet
 
 step "Pushing host-silo image..."
 docker push "${HOST_SILO_IMAGE}" --quiet
@@ -179,19 +170,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  agent:
-    image: ${AGENT_IMAGE}
-    container_name: runnerrunner-agent
-    environment:
-      - RunnerRunner__ServerUrl=http://server:${SERVER_PORT}
-      - RunnerRunner__AgentName=linux-agent-${LINUX_HOST}
-      - RunnerRunner__AgentToken=
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - server
-    restart: unless-stopped
-
   host-silo:
     image: ${HOST_SILO_IMAGE}
     container_name: runnerrunner-host-silo
@@ -240,32 +218,38 @@ fi # end linux
 
 if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "macos" ]]; then
 
-# ============================================================
-# PHASE 4: Deploy native agent to macOS host
-# ============================================================
-log "Phase 4: Deploying native agent to macOS (${MACOS_USER}@${MACOS_HOST})"
+# === LEGACY: macOS native agent deploy ===
+# Replaced by HostSilo. To deploy macOS HostSilo, build and deploy
+# RunnerRunner.HostSilo as a self-contained binary instead.
+#
+# # ============================================================
+# # PHASE 4: Deploy native agent to macOS host
+# # ============================================================
+# log "Phase 4: Deploying native agent to macOS (${MACOS_USER}@${MACOS_HOST})"
+#
+# MACOS_DEPLOY="${SCRIPT_DIR}/macos/deploy-agent.sh"
+# if [[ ! -x "${MACOS_DEPLOY}" ]]; then
+#     echo "  ⚠️  macOS deploy script not found at ${MACOS_DEPLOY}"
+#     echo "      Skipping macOS agent deployment."
+# else
+#     # Ensure agent.env exists with the correct server URL
+#     MACOS_ENV="${SCRIPT_DIR}/macos/agent.env"
+#     step "Writing agent.env with server URL http://${LINUX_HOST}:${SERVER_PORT}..."
+#     cat > "${MACOS_ENV}" <<ENV_EOF
+# RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:${SERVER_PORT}
+# RUNNERRUNNER_AGENT_NAME=mac-agent-${MACOS_HOST}
+# RUNNERRUNNER_AGENT_TOKEN=
+# RUNNERRUNNER_AGENT_ID=
+# ENV_EOF
+#
+#     # Pass password through to the macOS deploy script
+#     export SSH_USER="${MACOS_USER}"
+#     export SSHPASS="${MACOS_PASSWORD}"
+#     "${MACOS_DEPLOY}" "${MACOS_HOST}"
+#     success "macOS agent deployed"
+# fi
 
-MACOS_DEPLOY="${SCRIPT_DIR}/macos/deploy-agent.sh"
-if [[ ! -x "${MACOS_DEPLOY}" ]]; then
-    echo "  ⚠️  macOS deploy script not found at ${MACOS_DEPLOY}"
-    echo "      Skipping macOS agent deployment."
-else
-    # Ensure agent.env exists with the correct server URL
-    MACOS_ENV="${SCRIPT_DIR}/macos/agent.env"
-    step "Writing agent.env with server URL http://${LINUX_HOST}:${SERVER_PORT}..."
-    cat > "${MACOS_ENV}" <<ENV_EOF
-RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:${SERVER_PORT}
-RUNNERRUNNER_AGENT_NAME=mac-agent-${MACOS_HOST}
-RUNNERRUNNER_AGENT_TOKEN=
-RUNNERRUNNER_AGENT_ID=
-ENV_EOF
-
-    # Pass password through to the macOS deploy script
-    export SSH_USER="${MACOS_USER}"
-    export SSHPASS="${MACOS_PASSWORD}"
-    "${MACOS_DEPLOY}" "${MACOS_HOST}"
-    success "macOS agent deployed"
-fi
+log "Phase 4: macOS agent deploy (skipped — legacy, replaced by HostSilo)"
 
 fi # end macos
 
@@ -276,9 +260,8 @@ log "Deploy complete!"
 echo ""
 echo "  Server:       http://${LINUX_HOST}:${SERVER_PORT}"
 echo "  Server:       https://r2.jjagd.net (via NPM)"
-echo "  Linux Agent:  Docker container on ${LINUX_HOST}"
 echo "  Host Silo:    Docker container on ${LINUX_HOST}"
-echo "  macOS Agent:  launchd service on ${MACOS_HOST}"
+echo "  macOS Agent:  launchd service on ${MACOS_HOST} (legacy)"
 echo ""
 echo "  Redeploy:     ./deploy/deploy-all.sh"
 echo "  Linux logs:   ssh ${LINUX_USER}@${LINUX_HOST} 'cd ${LINUX_DEPLOY_DIR} && docker compose logs -f'"
