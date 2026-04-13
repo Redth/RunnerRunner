@@ -1,8 +1,11 @@
 @page "/"
 @using RunnerRunner.Server.Hubs
+@using RunnerRunner.Server.Grains.Events
+@using RunnerRunner.Server.Services
 @using Shiny.DocumentDb
 @inject IGrainFactory GrainFactory
 @rendermode InteractiveServer
+@implements IDisposable
 
 <PageTitle>Dashboard - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -150,6 +153,29 @@ else
     [Inject] IDocumentStore Store { get; set; } = default!;
 
     protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        StreamSubscriptionService.OnRunnerStatusChanged += OnStreamRunnerStatusChanged;
+        StreamSubscriptionService.OnHostStatusChanged += OnStreamHostStatusChanged;
+    }
+
+    private void OnStreamRunnerStatusChanged(RunnerStatusChangedEvent evt)
+    {
+        InvokeAsync(async () => { await LoadData(); StateHasChanged(); });
+    }
+
+    private void OnStreamHostStatusChanged(HostStatusChangedEvent evt)
+    {
+        InvokeAsync(async () => { await LoadData(); StateHasChanged(); });
+    }
+
+    public void Dispose()
+    {
+        StreamSubscriptionService.OnRunnerStatusChanged -= OnStreamRunnerStatusChanged;
+        StreamSubscriptionService.OnHostStatusChanged -= OnStreamHostStatusChanged;
+    }
+
+    private async Task LoadData()
     {
         connectedAgents = AgentHub.GetConnectedAgents();
         connectedHostCount = connectedAgents.Count;

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using Orleans;
+using Orleans.Streams;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
 
@@ -62,6 +64,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
         CancelTimer(ref _pendingTimer);
         StartRegistrationTimer();
+        await PublishStatusChange();
     }
 
     public async Task MarkStarting(string? statusMessage = null)
@@ -73,6 +76,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         await _state.WriteStateAsync();
 
         _logger.LogInformation("Runner instance {InstanceId} starting", this.GetPrimaryKeyString());
+        await PublishStatusChange();
     }
 
     public async Task MarkRunning(string? containerId = null, string? vmName = null, int? processId = null, string? statusMessage = null)
@@ -88,6 +92,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         await _state.WriteStateAsync();
 
         _logger.LogInformation("Runner instance {InstanceId} running", this.GetPrimaryKeyString());
+        await PublishStatusChange();
 
         CancelTimer(ref _registrationTimer);
 
@@ -118,6 +123,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
         CancelAllTimers();
         await NotifyHostDecrement();
+        await PublishStatusChange();
     }
 
     public async Task MarkFailed(string error)
@@ -130,6 +136,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
         CancelAllTimers();
         await NotifyHostDecrement();
+        await PublishStatusChange();
     }
 
     public async Task MarkCrashed(string reason)
@@ -142,6 +149,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
         CancelAllTimers();
         await NotifyHostDecrement();
+        await PublishStatusChange();
     }
 
     public async Task UpdateHealth(string? statusMessage = null)
@@ -293,6 +301,21 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         CancelTimer(ref _dynamicTimer);
         CancelTimer(ref _stopTimer);
         CancelTimer(ref _healthTimer);
+    }
+
+    private async Task PublishStatusChange()
+    {
+        var streamProvider = this.GetStreamProvider("RunnerEvents");
+        var streamId = StreamId.Create("RunnerStatus", "all");
+        var stream = streamProvider.GetStream<RunnerStatusChangedEvent>(streamId);
+        await stream.OnNextAsync(new RunnerStatusChangedEvent
+        {
+            InstanceId = this.GetPrimaryKeyString(),
+            RunnerName = _state.State.RunnerName,
+            HostId = _state.State.HostId,
+            Status = _state.State.Status,
+            StatusMessage = _state.State.StatusMessage
+        });
     }
 
     // --- Helpers ---

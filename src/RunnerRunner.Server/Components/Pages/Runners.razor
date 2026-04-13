@@ -5,10 +5,13 @@
 @using Microsoft.AspNetCore.SignalR
 @using RunnerRunner.Server.Hubs
 @using RunnerRunner.Core.Hub
+@using RunnerRunner.Server.Grains.Events
+@using RunnerRunner.Server.Services
 @inject IDocumentStore Store
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
+@implements IDisposable
 
 <PageTitle>Runner Instances - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -186,7 +189,21 @@ else
 
     private HashSet<string> expandedHosts = new();
 
-    protected override async Task OnInitializedAsync() => await Refresh();
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+        StreamSubscriptionService.OnRunnerStatusChanged += OnStreamRunnerStatusChanged;
+    }
+
+    private void OnStreamRunnerStatusChanged(RunnerStatusChangedEvent evt)
+    {
+        InvokeAsync(async () => { await Refresh(); StateHasChanged(); });
+    }
+
+    public void Dispose()
+    {
+        StreamSubscriptionService.OnRunnerStatusChanged -= OnStreamRunnerStatusChanged;
+    }
 
     private async Task Refresh()
     {

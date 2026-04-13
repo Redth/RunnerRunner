@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using Orleans.Runtime;
+using Orleans.Streams;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
 
@@ -73,6 +75,7 @@ public class HostGrain : Grain, IHostGrain
         await _state.WriteStateAsync();
 
         StartHeartbeatTimer();
+        await PublishHostStatusChange();
     }
 
     public async Task MarkOffline()
@@ -82,6 +85,7 @@ public class HostGrain : Grain, IHostGrain
         await _state.WriteStateAsync();
 
         _logger.LogWarning("Host {HostId} marked offline", this.GetPrimaryKeyString());
+        await PublishHostStatusChange();
     }
 
     public Task<bool> CanAcceptRunner(ExecutionBackend backend)
@@ -127,6 +131,19 @@ public class HostGrain : Grain, IHostGrain
     public Task<string?> GetConnectionId() => Task.FromResult(_state.State.ConnectionId);
 
     public Task<HostGrainState> GetState() => Task.FromResult(_state.State);
+
+    private async Task PublishHostStatusChange()
+    {
+        var streamProvider = this.GetStreamProvider("RunnerEvents");
+        var streamId = StreamId.Create("HostStatus", "all");
+        var stream = streamProvider.GetStream<HostStatusChangedEvent>(streamId);
+        await stream.OnNextAsync(new HostStatusChangedEvent
+        {
+            HostId = this.GetPrimaryKeyString(),
+            HostName = _state.State.Name,
+            Status = _state.State.Status
+        });
+    }
 
     private void StartHeartbeatTimer()
     {

@@ -40,6 +40,7 @@ builder.UseOrleans(silo =>
     silo.AddMemoryGrainStorage("Default");
     silo.AddMemoryGrainStorage("PersistentStore");
     silo.UseInMemoryReminderService();
+    silo.AddMemoryStreams("RunnerEvents");
 });
 
 // Runner providers
@@ -51,12 +52,23 @@ builder.Services.AddSingleton<IRunnerProviderPlugin, AzDoAgentProvider>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<JitConfigService>();
 
+// === Orleans Grain Architecture (Phase 5) ===
+// The following legacy services are replaced by Orleans grains:
+//   RunnerTimeoutService → RunnerInstanceGrain (grain timers)
+//   ReconciliationService → HostGrain (heartbeat) + agent reconciliation loop
+//
+// These services are still active during the migration:
+//   OrchestrationEngine → will be replaced by ProvisioningRuleGrain
+//   DynamicProvisioningService → will be replaced by ProvisioningRuleGrain + WebhookProcessorGrain
+//   VersionCheckService → no grain equivalent yet
+
 // Background services
 builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
-builder.Services.AddHostedService<ReconciliationService>();
-builder.Services.AddHostedService<RunnerTimeoutService>();
+builder.Services.AddHostedService<StreamSubscriptionService>();
+// builder.Services.AddHostedService<ReconciliationService>();    // → HostGrain + RunnerInstanceGrain
+// builder.Services.AddHostedService<RunnerTimeoutService>();     // → RunnerInstanceGrain timers
 
 // Blazor
 builder.Services.AddRazorComponents()
