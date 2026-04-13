@@ -5,29 +5,255 @@ RunnerRunner is a self-hosted CI/CD runner orchestration platform that manages G
 ## System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     RunnerRunner Server                         │
-│                                                                 │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────────────────────┐ │
-│  │ Blazor   │  │  SignalR Hub  │  │     Orleans Silo          │ │
-│  │ Web UI   │  │  (AgentHub)   │  │  ┌─────────────────────┐  │ │
-│  │          │  │               │  │  │ HostGrain            │  │ │
-│  │ 12 pages │  │ Agent events  │  │  │ RunnerInstanceGrain  │  │ │
-│  │          │◄─┤ → grain calls │  │  │ ProfileGrain         │  │ │
-│  │          │  │               │  │  │ ProvisioningRuleGrain│  │ │
-│  │          │  │ Commands ←    │  │  │ SchedulerGrain       │  │ │
-│  │          │  │   from grains │  │  │ WebhookProcessorGrain│  │ │
-│  └──────────┘  └───────┬──────┘  │  │ HostGroupGrain       │  │ │
-│                        │         │  └─────────────────────┘  │ │
-│  ┌──────────────────┐  │         │  ┌─────────────────────┐  │ │
-│  │ Shiny DocumentDB │  │         │  │ Orleans Streams     │  │ │
-│  │ (SQLite)         │  │         │  │ → real-time UI      │  │ │
-│  └──────────────────┘  │         │  └─────────────────────┘  │ │
-│                        │         └───────────────────────────┘ │
-│  ┌──────────────────┐  │                                       │
-│  │ Webhook Endpoints│  │    POST /api/webhooks/github          │
-│  │ (ASP.NET)        │──┤    POST /api/webhooks/gitea           │
-│  └──────────────────┘  │                                       │
+                          +----------------+
+                          |  PostgreSQL 17 |
+                          |  (shared DB)   |
+                          +-------+--------+
+                                  |
+              +-------------------+-------------------+
+              |                   |                   |
+   +----------v-----------+  +---v-----------+  +---v-----------+
+   |    Server Silo        |  |  Host Silo    |  |  Host Silo    |
+   |                       |  |  (Linux)      |  |  (macOS)      |
+   | +-------------------+ |  |               |  |               |
+   | | Blazor Web UI     | |  | +-----------+ |  | +-----------+ |
+   | | (14 pages)        | |  | | Docker    | |  | | Tart      | |
+   | +-------------------+ |  | | Backend   | |  | | Backend   | |
+   | | Webhook API       | |  | +-----------+ |  | +-----------+ |
+   | | Orleans Dashboard | |  | | Native    | |  | | Native    | |
+   | +-------------------+ |  | | Backend   | |  | | Backend   | |
+   | | Orleans Grains    | |  | +-----------+ |  | +-----------+ |
+   | | SchedulerGrain    | |  |               |  |               |
+   | | WebhookProcessor  | |  | Orleans Silo  |  | Orleans Silo  |
+   | | ProfileGrain      | |  | (cluster      |  | (cluster      |
+   | | ProvisioningRule  | |  |  member)      |  |  member)      |
+   | +-------------------+ |  +---------+-----+  +------+--------+
+   |                       |            |                |
+   | +-------------------+ |     +------v--------+      |
+   | | SignalR Hub       |<+-----| Legacy Agent  |      |
+   | | (AgentHub)        | |     | (migration)   |      |
+   | +-------------------+ |     +---------------+      |
+   |                       |                             |
+   | Shiny DocumentDB     |                             |
+   | (PostgreSQL)         |                             |
+   +----------+------------+                             |
+              |                                          |
+              +------------------------------------------+
+              All silos join one Orleans cluster via PostgreSQL
+```
+
+## Projects
+
+| Project | Purpose |
+|---------|---------|
+| **RunnerRunner.Core** | Shared domain models, hub contracts, interfaces |
+| **RunnerRunner.Server** | Blazor web UI, Orleans silo, SignalR hub, webhook endpoints, Orleans Dashboard |
+| **RunnerRunner.HostSilo** | Headless Orleans silo deployed on each host machine (future replacement for Agent) |
+| **RunnerRunner.Agent** | Legacy worker service on each host (SignalR client, being replaced by HostSilo) |
+| **RunnerRunner.AppHost** | .NET Aspire orchestrator for local development |
+| **RunnerRunner.ServiceDefaults** | OpenTelemetry, health checks, service discovery |
+
+## Domain Model
+
+### Core Concepts
+
+- **Runner Profile** ("WHAT") — Defines the runner configuration: CI provider (GitHub/Gitea/AzDO), execution backend (Docker/Tart/Native), container/VM images, environment variables, labels.
+
+- **Provisioning Rule** ("HOW") — Unified model defining how profiles get provisioned:
+  - **Static** — Maintain a fixed number of runner instances
+  - **ScaleSet** — Auto-scale between `MinReady` (warm pool) and `MaxInstances` with cooldown
+  - **Webhook** — React to GitHub/Gitea `workflow_job` events with JIT provisioning. Can also maintain a warm pool.
+  - **Scheduled** — Cron-based provisioning (future)
+
+- **Host** — A physical or virtual machine. Declares capabilities via labels (`os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`) and resource limits (max Docker containers, Tart VMs, native processes).
+
+- **Host Group** — Logical grouping of hosts with shared labels for organizational convenience.
+
+- **Runner Instance** — An actual running/stopped runner with full lifecycle tracking, timestamps, and status messages.
+
+### Key Models (`RunnerRunner.Core/Models/`)
+
+| Model | Description |
+|-------|-------------|
+| `RunnerProfile` | Runner config: provider, backend, images, env vars, labels |
+| `ProvisioningRule` | Unified provisioning (Static/ScaleSet/Webhook/Scheduled) |
+| `Host` | Machine with labels, capabilities, resource limits, group membership |
+| `RunnerInstance` | Lifecycle-tracked runner with DeployedAt, StatusMessage, health tracking |
+| `ProviderCredential` | GitHub/Gitea/AzDO authentication credentials |
+| `EnvironmentVariableSet` | Reusable env var collections composable into profiles |
+| `WebhookEvent` | Audit log for received webhook events |
+
+## Orleans Architecture
+
+RunnerRunner uses Microsoft Orleans 10.0.1 for resilient, distributed state management. All silos form a single cluster connected via PostgreSQL.
+
+### Cluster Topology
+
+- **Server Silo** — Co-hosted with Blazor. Runs UI-facing grains and webhook processing.
+- **Host Silos** — One per physical host. Declares silo metadata (hostId, platform, architecture). Will run HostGrain and RunnerInstanceGrain locally for direct backend execution.
+- All silos share PostgreSQL for clustering, grain persistence, and reminders.
+
+### Grains (7 types)
+
+| Grain | Key Type | Responsibilities |
+|-------|----------|-----------------|
+| **HostGrain** | String (host ID) | Labels, resource tracking, heartbeat timeout (90s), DocumentDB sync |
+| **HostGroupGrain** | String (group ID) | Member host list, shared labels |
+| **RunnerInstanceGrain** | String (instance ID) | Lifecycle state machine with 5 grain timers, DocumentDB sync, stream publishing |
+| **ProfileGrain** | String (profile ID) | Config storage, env var composition with caching |
+| **ProvisioningRuleGrain** | String (rule ID) | Reconciliation (30s timer), warm pool management, webhook routing |
+| **SchedulerGrain** | Integer (singleton=0) | Label-based host selection, capacity checking, load balancing |
+| **WebhookProcessorGrain** | Integer (StatelessWorker x4) | Parallel webhook HMAC validation, event parsing, routing |
+
+### Runner Instance Lifecycle
+
+```
+Pending --> Starting --> Running --> Stopping --> Stopped
+   |            |           |            |
+   |            |           |            +--> Failed (stop timeout 5m)
+   |            |           |
+   |            |           +--> Failed (dynamic timeout 2h)
+   |            |           +--> Crashed (health stale 3m)
+   |            |
+   |            +--> Failed (registration timeout 5m)
+   |
+   +--> Failed (deploy timeout 2m)
+```
+
+Each transition is a grain method (atomic). Timeouts are grain timers.
+
+### Dual-Write Architecture
+
+Grains maintain two views of state:
+1. **Orleans grain state** (PostgreSQL ADO.NET) — source of truth for lifecycle, timers, activation
+2. **Shiny DocumentDB** (PostgreSQL) — queryable read projection for UI LINQ queries
+
+Grains call `SyncToDocumentDb()` after state changes. UI reads from DocumentDB for fast queries; grain methods handle lifecycle operations.
+
+### Orleans Streams
+
+- `RunnerStatusChangedEvent` — published by RunnerInstanceGrain on status transitions
+- `HostStatusChangedEvent` — published by HostGrain on online/offline changes
+- `StreamSubscriptionService` bridges streams to Blazor for auto-refresh (Dashboard, Runners pages)
+
+### Observability
+
+- **Orleans Dashboard** — Built-in at `/orleans`. Grain stats, silo health, call chains.
+- **OpenTelemetry** — Activity propagation across grain calls. OTLP export configurable via `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+## Execution Backends
+
+| Backend | Platform | How it works |
+|---------|----------|-------------|
+| **Docker** | Linux | `docker run` with labels. JIT: inspects image entrypoint, overrides with `--jitconfig` using detected shell |
+| **Tart** | macOS | Clones VM, SSHs in (via `sshpass` + stdin piping), downloads runner, configures/JIT |
+| **Native** | Any | Downloads runner binary, runs as process. `rr.pid` for tracking, output to `runner.log` |
+
+## Webhook / JIT Provisioning
+
+```
+GitHub/Gitea --> POST /api/webhooks/{provider}
+                       |
+             1. HMAC-SHA256 signature validation
+             2. Match binding by signature + scope
+             3. queued    --> label match --> JIT config --> deploy
+             4. in_progress --> confirm runner executing
+             5. completed --> stop + cleanup + remove record
+```
+
+JIT config generated via GitHub `generate-jitconfig` API or Gitea registration token. Tries repo-level first, then org-level.
+
+## Environment Variable Composition
+
+5 layers (later overrides earlier):
+1. RR_* auto-injected from provider credentials
+2. Environment Variable Sets (ordered by priority)
+3. Profile-level overrides
+4. Host-level overrides
+5. Instance-level (RR_INSTANCE_ID, RR_RUNNER_NAME, etc.)
+
+Then `$VAR` / `${VAR}` expansion runs (3-pass chaining).
+
+## Web UI (14 pages)
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| Dashboard | `/` | Overview cards, cluster status, connected agents |
+| Hosts | `/hosts` | Host management, labels, resource limits |
+| Runners | `/runners` | Runner instances grouped by host, auto-refresh via streams |
+| Profiles | `/profiles` | Runner profile CRUD with env var composition |
+| Provisioning Rules | `/provisioning-rules` | Unified Static/ScaleSet/Webhook/Scheduled rules |
+| Images | `/images` | Docker/Tart image management per host (split pane) |
+| Logs | `/logs` | xterm.js terminal with agent/runner log viewing (split pane) |
+| Env Variables | `/envvarsets` | Reusable environment variable sets |
+| Webhooks | `/webhooks` | Webhook bindings (legacy, see Provisioning Rules) |
+| Webhook Events | `/webhook-events` | Audit log of received webhook events |
+| Settings | `/settings` | Provider credentials, registry credentials |
+| Orleans Dashboard | `/orleans` | Built-in Orleans grain/silo monitoring |
+
+### UI Features
+
+- Light/dark theme with localStorage persistence
+- Collapsible sidebar (persisted state)
+- Resizable table columns and split panes
+- Mobile responsive with hamburger menu overlay
+- Platform chips with icons (Linux/macOS/Windows)
+- xterm.js terminal with ANSI color support and search
+- Real-time updates via Orleans streams (no polling)
+- Confirmation dialogs on all destructive operations
+- Orphaned runner detection and cleanup
+
+## Data Storage
+
+Single PostgreSQL 17 instance:
+
+| Layer | Provider | Purpose |
+|-------|----------|---------|
+| Orleans Clustering | ADO.NET (Npgsql) | Silo membership, failure detection |
+| Orleans Grain State | ADO.NET (Npgsql) | Persistent grain state |
+| Orleans Reminders | ADO.NET (Npgsql) | Durable reminder scheduling |
+| Orleans Streams | In-memory | Real-time UI events |
+| Shiny DocumentDB | PostgreSQL | Queryable read projections for UI |
+
+## Deployment
+
+### Linux (Docker Compose)
+
+```bash
+./deploy/deploy-all.sh linux
+```
+
+4 containers: `postgres`, `server` (Blazor + Orleans silo), `host-silo` (headless Orleans silo), `agent` (legacy).
+
+### macOS (Native Binary)
+
+```bash
+./deploy/deploy-all.sh macos
+```
+
+Agent binary deployed via SCP, codesigned, started with nohup.
+
+### Both
+
+```bash
+./deploy/deploy-all.sh all
+```
+
+## Migration Status
+
+| Component | Legacy | Orleans | Status |
+|-----------|--------|---------|--------|
+| Host state | AgentHub dict | HostGrain | **Dual-write** |
+| Runner lifecycle | ~~RunnerTimeoutService~~ | RunnerInstanceGrain | **Grain active** |
+| ~~Reconciliation~~ | ~~ReconciliationService~~ | HostGrain heartbeat | **Grain active** |
+| Static provisioning | OrchestrationEngine | ProvisioningRuleGrain | Legacy active |
+| Dynamic provisioning | DynamicProvisioningService | ProvisioningRuleGrain | Legacy active |
+| Host selection | Inline in services | SchedulerGrain | Available |
+| Webhook processing | WebhookEndpoints | WebhookProcessorGrain | Legacy active |
+| UI real-time | Static events | Orleans Streams | **Streams active** |
+| Backend execution | Agent (SignalR) | HostSilo (local) | Agent active, HostSilo in cluster |
+
+**Next**: Wire HostSilo for local backend execution via grain placement, then remove Agent and SignalR hub.
 └────────────────────────┼───────────────────────────────────────┘
                          │ SignalR WebSocket
             ┌────────────┼────────────┐
