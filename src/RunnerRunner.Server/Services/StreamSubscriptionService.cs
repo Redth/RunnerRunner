@@ -21,27 +21,41 @@ public class StreamSubscriptionService : IHostedService
 
     public async Task StartAsync(CancellationToken ct)
     {
-        var streamProvider = _client.GetStreamProvider("RunnerEvents");
-
-        var runnerStream = streamProvider.GetStream<RunnerStatusChangedEvent>(
-            StreamId.Create("RunnerStatus", "all"));
-        _runnerSub = await runnerStream.SubscribeAsync((evt, token) =>
+        // Wait for Orleans silo to be fully started before subscribing to streams
+        for (int attempt = 0; attempt < 30; attempt++)
         {
-            _logger.LogDebug("Stream: Runner {Name} -> {Status}", evt.RunnerName, evt.Status);
-            OnRunnerStatusChanged?.Invoke(evt);
-            return Task.CompletedTask;
-        });
+            try
+            {
+                await Task.Delay(2000, ct);
 
-        var hostStream = streamProvider.GetStream<HostStatusChangedEvent>(
-            StreamId.Create("HostStatus", "all"));
-        _hostSub = await hostStream.SubscribeAsync((evt, token) =>
-        {
-            _logger.LogDebug("Stream: Host {Name} -> {Status}", evt.HostName, evt.Status);
-            OnHostStatusChanged?.Invoke(evt);
-            return Task.CompletedTask;
-        });
+                var streamProvider = _client.GetStreamProvider("RunnerEvents");
 
-        _logger.LogInformation("StreamSubscriptionService started");
+                var runnerStream = streamProvider.GetStream<RunnerStatusChangedEvent>(
+                    StreamId.Create("RunnerStatus", "all"));
+                _runnerSub = await runnerStream.SubscribeAsync((evt, token) =>
+                {
+                    OnRunnerStatusChanged?.Invoke(evt);
+                    return Task.CompletedTask;
+                });
+
+                var hostStream = streamProvider.GetStream<HostStatusChangedEvent>(
+                    StreamId.Create("HostStatus", "all"));
+                _hostSub = await hostStream.SubscribeAsync((evt, token) =>
+                {
+                    OnHostStatusChanged?.Invoke(evt);
+                    return Task.CompletedTask;
+                });
+
+                _logger.LogInformation("StreamSubscriptionService started (attempt {Attempt})", attempt + 1);
+                return;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("Stream subscription attempt {Attempt} failed: {Error}", attempt + 1, ex.Message);
+            }
+        }
+
+        _logger.LogError("StreamSubscriptionService failed to start after 30 attempts");
     }
 
     public async Task StopAsync(CancellationToken ct)
