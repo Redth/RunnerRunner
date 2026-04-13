@@ -190,8 +190,10 @@ rm "${COMPOSE_FILE}"
 step "Copying PostgreSQL init scripts..."
 remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
     "mkdir -p ${LINUX_DEPLOY_DIR}/postgres-init"
-remote_scp "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
-    "${SCRIPT_DIR}/postgres-init/" "${LINUX_DEPLOY_DIR}/postgres-init/"
+for sqlfile in "${SCRIPT_DIR}/postgres-init/"*.sql; do
+    remote_scp "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
+        "${sqlfile}" "${LINUX_DEPLOY_DIR}/postgres-init/$(basename "${sqlfile}")"
+done
 
 step "Pulling images on remote host..."
 remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \

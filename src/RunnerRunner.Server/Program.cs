@@ -68,11 +68,11 @@ builder.UseOrleans(silo =>
     }
 
     silo.AddMemoryStreams("RunnerEvents");
-    silo.UseDashboard(options =>
-    {
-        options.BasePath = "/orleans";
-        options.HideTrace = true;
-    });
+    // silo.UseDashboard(options =>
+    // {
+    //     options.BasePath = "/orleans";
+    //     options.HideTrace = true;
+    // });
 });
 
 // Runner providers
