@@ -39,6 +39,7 @@ builder.UseOrleans(silo =>
     silo.UseLocalhostClustering();
     silo.AddMemoryGrainStorage("Default");
     silo.AddMemoryGrainStorage("PersistentStore");
+    silo.AddMemoryGrainStorage("PubSubStore");
     silo.UseInMemoryReminderService();
     silo.AddMemoryStreams("RunnerEvents");
 });
