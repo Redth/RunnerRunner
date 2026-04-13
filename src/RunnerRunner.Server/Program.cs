@@ -74,6 +74,8 @@ builder.UseOrleans(silo =>
             silo.Configure<Orleans.Configuration.EndpointOptions>(options =>
             {
                 options.AdvertisedIPAddress = ip;
+                options.SiloListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 11111);
+                options.GatewayListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 30000);
                 options.SiloPort = 11111;
                 options.GatewayPort = 30000;
             });
