@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:17
+    container_name: runnerrunner-postgres
+    environment:
+      - POSTGRES_DB=runnerrunner
+      - POSTGRES_USER=runnerrunner
+      - POSTGRES_PASSWORD=runnerrunner
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runnerrunner"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   server:
     build:
       context: .
@@ -9,29 +27,35 @@ services:
     volumes:
       - server-data:/app/data
     environment:
-      - Database__Path=/app/data/runnerrunner.db
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - ASPNETCORE_URLS=http://+:4779
     labels:
       - "npm.proxy.domain=runnerrunner.jjagd.net"
       - "npm.proxy.port=4779"
       - "npm.proxy.ssl.force=true"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
-  # Example: local agent running on the same Docker host
-  agent-local:
+  host-silo:
     build:
       context: .
-      dockerfile: src/RunnerRunner.Agent/Dockerfile
-    container_name: runnerrunner-agent
+      dockerfile: src/RunnerRunner.HostSilo/Dockerfile
+    container_name: runnerrunner-host-silo
     environment:
-      - RunnerRunner__ServerUrl=http://server:4779
-      - RunnerRunner__AgentName=local-docker-host
-      - RunnerRunner__AgentToken=changeme
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
+      - HostSilo__HostId=local-docker-host
+      - HostSilo__HostName=local-docker-host
+      - HostSilo__Platform=Linux
+      - DOTNET_ENVIRONMENT=Production
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - server
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   server-data:
+  postgres-data:

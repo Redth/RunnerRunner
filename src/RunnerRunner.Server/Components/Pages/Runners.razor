@@ -174,6 +174,7 @@ else
 @code {
     private List<RunnerInstance> instances = [];
     private Dictionary<string, string> hostNames = new();
+    // LEGACY: Maps host IDs to agent names for AgentHub lookups. Will be removed when using HostGrain.
     private Dictionary<string, string> hostAgentNames = new();
     private HashSet<string> validHostIds = new();
     private Dictionary<string, string> profileNames = new();
@@ -288,6 +289,7 @@ else
             expandedHosts.Add(hostId);
     }
 
+    // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
     private async Task StopInstance(RunnerInstance inst)
     {
         var agents = AgentHub.GetConnectedAgents();

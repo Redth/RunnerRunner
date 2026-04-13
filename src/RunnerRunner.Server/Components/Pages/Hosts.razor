@@ -26,7 +26,7 @@
     {
         <div class="alert alert-success mt-2">
             <strong>Enrollment Token:</strong> <code>@newToken</code>
-            <br /><small>Use this token when starting a new agent to register it with this server.</small>
+            <br /><small>Use this token when starting a new host agent to register it with this server.</small>
         </div>
     }
 </div>
@@ -561,6 +561,7 @@
         await ReloadData();
     }
 
+    // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
     private async Task StopRunnersForHost(string hostId)
     {
         var host = hosts.FirstOrDefault(h => h.Id == hostId);
@@ -580,6 +581,7 @@
             });
     }
 
+    // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
     private async Task StopRunnersForHostProfile(string hostId, string profileId)
     {
         var host = hosts.FirstOrDefault(h => h.Id == hostId);

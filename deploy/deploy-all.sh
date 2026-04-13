@@ -6,12 +6,12 @@ set -euo pipefail
 #
 # Deploys everything in one shot:
 #   1. Server + Host Silo → Docker Compose via SSH to Linux host
-#   2. macOS Agent → (legacy, commented out)
+#   2. HostSilo → native binary via SSH to macOS host
 #
 # Usage:
 #   ./deploy/deploy-all.sh            # deploy everything
 #   ./deploy/deploy-all.sh linux      # deploy Linux stack only
-#   ./deploy/deploy-all.sh macos      # deploy macOS agent only
+#   ./deploy/deploy-all.sh macos      # deploy macOS HostSilo only
 #
 # Configuration:
 #   Copy deploy/.env.example to deploy/.env and fill in passwords.
@@ -139,6 +139,8 @@ services:
       - POSTGRES_DB=runnerrunner
       - POSTGRES_USER=runnerrunner
       - POSTGRES_PASSWORD=runnerrunner
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
@@ -218,38 +220,60 @@ fi # end linux
 
 if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "macos" ]]; then
 
-# === LEGACY: macOS native agent deploy ===
-# Replaced by HostSilo. To deploy macOS HostSilo, build and deploy
-# RunnerRunner.HostSilo as a self-contained binary instead.
-#
-# # ============================================================
-# # PHASE 4: Deploy native agent to macOS host
-# # ============================================================
-# log "Phase 4: Deploying native agent to macOS (${MACOS_USER}@${MACOS_HOST})"
-#
-# MACOS_DEPLOY="${SCRIPT_DIR}/macos/deploy-agent.sh"
-# if [[ ! -x "${MACOS_DEPLOY}" ]]; then
-#     echo "  ⚠️  macOS deploy script not found at ${MACOS_DEPLOY}"
-#     echo "      Skipping macOS agent deployment."
-# else
-#     # Ensure agent.env exists with the correct server URL
-#     MACOS_ENV="${SCRIPT_DIR}/macos/agent.env"
-#     step "Writing agent.env with server URL http://${LINUX_HOST}:${SERVER_PORT}..."
-#     cat > "${MACOS_ENV}" <<ENV_EOF
-# RUNNERRUNNER_SERVER_URL=http://${LINUX_HOST}:${SERVER_PORT}
-# RUNNERRUNNER_AGENT_NAME=mac-agent-${MACOS_HOST}
-# RUNNERRUNNER_AGENT_TOKEN=
-# RUNNERRUNNER_AGENT_ID=
-# ENV_EOF
-#
-#     # Pass password through to the macOS deploy script
-#     export SSH_USER="${MACOS_USER}"
-#     export SSHPASS="${MACOS_PASSWORD}"
-#     "${MACOS_DEPLOY}" "${MACOS_HOST}"
-#     success "macOS agent deployed"
-# fi
+# ============================================================
+# PHASE 4: Deploy HostSilo to macOS host
+# ============================================================
+log "Phase 4: Deploying HostSilo to macOS (${MACOS_USER}@${MACOS_HOST})"
 
-log "Phase 4: macOS agent deploy (skipped — legacy, replaced by HostSilo)"
+# Publish HostSilo for macOS ARM64
+step "Publishing RunnerRunner.HostSilo (osx-arm64, self-contained)..."
+PUBLISH_DIR="${PROJECT_ROOT}/artifacts/macos-hostsilo"
+dotnet publish "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/RunnerRunner.HostSilo.csproj" \
+    -c Release -r osx-arm64 --self-contained \
+    -o "${PUBLISH_DIR}" -v quiet
+
+step "Generating appsettings.Production.json..."
+cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
+{
+  "HostSilo": {
+    "HostId": "mac-host-${MACOS_HOST}",
+    "HostName": "mac-host-${MACOS_HOST}",
+    "Platform": "MacOS",
+    "Architecture": "Arm64"
+  },
+  "Database": {
+    "ConnectionString": "Host=${LINUX_HOST};Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
+  },
+  "DOTNET_ENVIRONMENT": "Production"
+}
+SETTINGS_EOF
+
+# Stop existing process
+step "Stopping existing HostSilo..."
+remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
+    "pkill -f RunnerRunner.HostSilo 2>/dev/null || true"
+sleep 2
+
+# Copy binary
+step "Copying HostSilo to ${MACOS_HOST}:/opt/runnerrunner/..."
+remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
+    "mkdir -p /opt/runnerrunner"
+for f in "${PUBLISH_DIR}"/*; do
+    remote_scp "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
+        "$f" "/opt/runnerrunner/$(basename "$f")"
+done
+
+# Codesign (Gatekeeper fix)
+step "Codesigning binary..."
+remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
+    "codesign --force -s - /opt/runnerrunner/RunnerRunner.HostSilo"
+
+# Start via nohup
+step "Starting HostSilo..."
+remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
+    "cd /opt/runnerrunner && DOTNET_ENVIRONMENT=Production nohup ./RunnerRunner.HostSilo > /tmp/runnerrunner-hostsilo.log 2>&1 & sleep 1"
+
+success "macOS HostSilo deployed"
 
 fi # end macos
 
@@ -260,10 +284,10 @@ log "Deploy complete!"
 echo ""
 echo "  Server:       http://${LINUX_HOST}:${SERVER_PORT}"
 echo "  Server:       https://r2.jjagd.net (via NPM)"
-echo "  Host Silo:    Docker container on ${LINUX_HOST}"
-echo "  macOS Agent:  launchd service on ${MACOS_HOST} (legacy)"
+echo "  Linux Host Silo: Docker container on ${LINUX_HOST}"
+echo "  macOS Host Silo: Native binary on ${MACOS_HOST}"
 echo ""
 echo "  Redeploy:     ./deploy/deploy-all.sh"
 echo "  Linux logs:   ssh ${LINUX_USER}@${LINUX_HOST} 'cd ${LINUX_DEPLOY_DIR} && docker compose logs -f'"
-echo "  macOS logs:   ssh ${MACOS_USER}@${MACOS_HOST} 'tail -f /var/log/runnerrunner-agent.log'"
+echo "  macOS logs:   ssh ${MACOS_USER}@${MACOS_HOST} 'tail -f /tmp/runnerrunner-hostsilo.log'"
 echo ""

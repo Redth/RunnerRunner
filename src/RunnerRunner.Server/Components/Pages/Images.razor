@@ -14,7 +14,7 @@
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-box-seam-fill"></i> Images</h1>
-        <span class="page-desc">Manage Docker and Tart images across agents.</span>
+        <span class="page-desc">Manage Docker and Tart images across hosts.</span>
     </div>
 </SectionContent>
 
@@ -32,7 +32,7 @@
                 <div class="d-flex align-items-center">
                     <i class="bi @GetPlatformIcon(h.Platform) me-2"></i>
                     <span class="text-truncate">@h.Label</span>
-                    <span class="badge ms-auto @GetAgentStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
+                    <span class="badge ms-auto @GetStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
                 </div>
                 @if (!string.IsNullOrWhiteSpace(h.DisplayName))
                 {
@@ -316,6 +316,7 @@
         hosts = (await Store.Query<Host>().ToList()).ToList();
         registries = (await Store.Query<RegistryCredential>().ToList()).ToList();
 
+        // TODO: Replace AgentHub static events with Orleans stream subscriptions
         AgentHub.OnImagePullProgressReceived += HandlePullProgress;
         AgentHub.OnImagePullCompleteReceived += HandlePullComplete;
         AgentHub.OnImageDeletedReceived += HandleImageDeleted;
@@ -526,7 +527,7 @@
         _ => "bi-pc-display"
     };
 
-    private string GetAgentStatusBadge(AgentStatus status) => status switch
+    private string GetStatusBadge(AgentStatus status) => status switch
     {
         AgentStatus.Online => "bg-success",
         AgentStatus.Connecting => "bg-warning",

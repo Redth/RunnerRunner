@@ -1,5 +1,4 @@
 @page "/"
-@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Server.Grains.Events
 @using RunnerRunner.Server.Services
 @using Shiny.DocumentDb
@@ -89,10 +88,10 @@
     </div>
 </div>
 
-<h3 class="mt-4"><i class="bi bi-people-fill me-2"></i>Connected Agents</h3>
-@if (!connectedAgents.Any())
+<h3 class="mt-4"><i class="bi bi-hdd-rack me-2"></i>Hosts</h3>
+@if (!hosts.Any())
 {
-    <div class="alert alert-secondary">No agents connected. Deploy an agent on your host machines to get started.</div>
+    <div class="alert alert-secondary">No hosts registered. Deploy a HostSilo on your machines to get started.</div>
 }
 else
 {
@@ -103,58 +102,31 @@ else
                 <th>Name</th>
                 <th>Status</th>
                 <th>Platform</th>
-                <th>Assignments</th>
                 <th>Last Heartbeat</th>
             </tr>
         </thead>
         <tbody>
-            @foreach (var agent in connectedAgents)
+            @foreach (var host in hosts)
             {
-                var host = hosts.FirstOrDefault(h => h.Name == agent.Value.AgentInfo.Name);
-                var label = host?.Label ?? agent.Value.AgentInfo.Name;
-                var agentName = agent.Value.AgentInfo.Name;
-                var hostAssignments = host != null ? assignments.Where(a => a.HostId == host.Id).ToList() : new();
                 <tr>
                     <td>
-                        <span>@label</span>
-                        @if (host != null && !string.IsNullOrWhiteSpace(host.DisplayName))
+                        <span>@host.Label</span>
+                        @if (!string.IsNullOrWhiteSpace(host.DisplayName))
                         {
-                            <br/><small class="text-muted">@agentName</small>
+                            <br/><small class="text-muted">@host.Name</small>
                         }
                     </td>
-                    <td><span class="badge bg-success">Online</span></td>
+                    <td><span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span></td>
                     <td>
                         <div class="d-flex flex-wrap gap-1">
-                            <span class="host-chip platform-chip"><i class="bi @GetPlatformIcon(agent.Value.AgentInfo.Platform) me-1"></i>@agent.Value.AgentInfo.Platform</span>
-                            @if (!string.IsNullOrEmpty(agent.Value.AgentInfo.Architecture))
+                            <span class="host-chip platform-chip"><i class="bi @GetPlatformIcon(host.Platform) me-1"></i>@host.Platform</span>
+                            @if (!string.IsNullOrEmpty(host.Architecture))
                             {
-                                <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@agent.Value.AgentInfo.Architecture</span>
+                                <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@host.Architecture</span>
                             }
                         </div>
-                        @if (agent.Value.AgentInfo.Capabilities.Any())
-                        {
-                            <div class="d-flex flex-wrap gap-1 mt-1">
-                                @foreach (var cap in agent.Value.AgentInfo.Capabilities)
-                                {
-                                    <span class="host-chip cap-chip">@cap</span>
-                                }
-                            </div>
-                        }
                     </td>
-                    <td>
-                        @if (hostAssignments.Any())
-                        {
-                            @foreach (var a in hostAssignments)
-                            {
-                                <span class="badge bg-info me-1">@(profileNames.GetValueOrDefault(a.ProfileId, "?")) ×@a.DesiredCount</span>
-                            }
-                        }
-                        else
-                        {
-                            <span class="text-muted">None</span>
-                        }
-                    </td>
-                    <td>@(agent.Value.LastHeartbeat?.ToString("HH:mm:ss") ?? "—")</td>
+                    <td>@(host.LastHeartbeat?.ToString("HH:mm:ss") ?? "—")</td>
                 </tr>
             }
         </tbody>
@@ -169,7 +141,6 @@ else
     private int envVarSetCount;
     private int dynamicRunnerCount;
     private int recentWebhookEventCount;
-    private IReadOnlyDictionary<string, ConnectedAgent> connectedAgents = new Dictionary<string, ConnectedAgent>();
     private List<RunnerRunner.Core.Models.Host> hosts = [];
     private List<RunnerRunner.Core.Models.RunnerAssignment> assignments = [];
     private Dictionary<string, string> profileNames = new();
@@ -201,14 +172,13 @@ else
 
     private async Task LoadData()
     {
-        connectedAgents = AgentHub.GetConnectedAgents();
-        connectedHostCount = connectedAgents.Count;
+        hosts = (await Store.Query<RunnerRunner.Core.Models.Host>().ToList()).ToList();
+        connectedHostCount = hosts.Count(h => h.AgentStatus == RunnerRunner.Core.Models.AgentStatus.Online);
 
         var profiles = (await Store.Query<RunnerRunner.Core.Models.RunnerProfile>().ToList()).ToList();
         profileCount = profiles.Count;
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         envVarSetCount = (await Store.Query<RunnerRunner.Core.Models.EnvironmentVariableSet>().ToList()).Count;
-        hosts = (await Store.Query<RunnerRunner.Core.Models.Host>().ToList()).ToList();
         assignments = (await Store.Query<RunnerRunner.Core.Models.RunnerAssignment>().ToList()).ToList();
 
         var allInstances = (await Store.Query<RunnerRunner.Core.Models.RunnerInstance>().ToList()).ToList();
@@ -233,5 +203,12 @@ else
         RunnerRunner.Core.Models.HostPlatform.MacOS => "bi-apple",
         RunnerRunner.Core.Models.HostPlatform.Windows => "bi-windows",
         _ => "bi-pc-display"
+    };
+
+    private string GetStatusBadge(RunnerRunner.Core.Models.AgentStatus status) => status switch
+    {
+        RunnerRunner.Core.Models.AgentStatus.Online => "bg-success",
+        RunnerRunner.Core.Models.AgentStatus.Connecting => "bg-warning",
+        _ => "bg-secondary"
     };
 }

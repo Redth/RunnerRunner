@@ -35,7 +35,7 @@
 
         @* Agents section *@
         <div class="sidebar-section-header mt-2">
-            <i class="bi bi-pc-display me-1"></i> Agents
+            <i class="bi bi-pc-display me-1"></i> Hosts
             <span class="badge bg-secondary ms-auto">@hosts.Count</span>
         </div>
         @foreach (var h in hosts)
@@ -46,7 +46,7 @@
                 <div class="d-flex align-items-center">
                     <i class="bi @GetPlatformIcon(h.Platform) me-2"></i>
                     <span class="text-truncate">@h.Label</span>
-                    <span class="badge ms-auto @GetAgentStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
+                    <span class="badge ms-auto @GetStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
                 </div>
                 @if (!string.IsNullOrWhiteSpace(h.DisplayName))
                 {
@@ -312,11 +312,12 @@
         var host = hosts.FirstOrDefault(h => h.Id == instance.HostId);
         if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
+        // LEGACY: Checks AgentHub for connection state. Will use HostGrain status instead.
         var agent = AgentHub.GetConnectedAgents().Values
             .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
 
         if (agent == null)
-            return $"\x1b[33mAgent for host '{host.Label}' is not connected.\x1b[0m";
+            return $"\x1b[33mHost '{host.Label}' is not connected.\x1b[0m";
 
         var handle = instance.ContainerId ?? instance.RunnerName;
         _runnerLogsTcs = new TaskCompletionSource<string>();
@@ -328,7 +329,7 @@
         if (completedTask == _runnerLogsTcs.Task)
             return await _runnerLogsTcs.Task;
 
-        return $"\x1b[33mTimeout waiting for logs from agent.\x1b[0m";
+        return $"\x1b[33mTimeout waiting for logs from host.\x1b[0m";
     }
 
     private void OnRunnerLogsReceived(RunnerLogsEvent evt)
@@ -344,8 +345,9 @@
         lines.Add($"\x1b[90mTimestamp: {DateTime.UtcNow:u}\x1b[0m");
         lines.Add("");
 
+        // LEGACY: Checks AgentHub for connection state. Will use HostGrain status instead.
         var connectedAgents = AgentHub.GetConnectedAgents();
-        lines.Add($"\x1b[1mConnected agents:\x1b[0m {connectedAgents.Count}");
+        lines.Add($"\x1b[1mConnected hosts:\x1b[0m {connectedAgents.Count}");
         foreach (var agent in connectedAgents.Values)
         {
             var lastHb = agent.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
@@ -355,7 +357,7 @@
         }
 
         if (!connectedAgents.Any())
-            lines.Add("  \x1b[33mNo agents connected\x1b[0m");
+            lines.Add("  \x1b[33mNo hosts connected\x1b[0m");
 
         lines.Add("");
         lines.Add("\x1b[90mFor full server container logs:\x1b[0m");
@@ -369,14 +371,15 @@
         var host = hosts.FirstOrDefault(h => h.Name == hostName);
         if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
+        // LEGACY: Checks AgentHub for connection state. Will use HostGrain status instead.
         var agent = AgentHub.GetConnectedAgents().Values
             .FirstOrDefault(a => a.AgentInfo.Name == hostName);
 
         if (agent == null)
-            return $"\x1b[33mAgent '{host.Label}' is not connected.\x1b[0m\n\n\x1b[90mCheck logs manually:\n  ssh <user>@<host> 'tail -{tailLines} /tmp/runnerrunner-agent.log'\x1b[0m";
+            return $"\x1b[33mHost '{host.Label}' is not connected.\x1b[0m\n\n\x1b[90mCheck logs manually:\n  ssh <user>@<host> 'tail -{tailLines} /tmp/runnerrunner-agent.log'\x1b[0m";
 
         var lines = new List<string>();
-        lines.Add($"\x1b[1;36m=== Agent: {host.Label} ===\x1b[0m");
+        lines.Add($"\x1b[1;36m=== Host: {host.Label} ===\x1b[0m");
         lines.Add($"\x1b[90mPlatform: {host.Platform} {host.Architecture}\x1b[0m");
         lines.Add($"Status: \x1b[32m{host.AgentStatus}\x1b[0m");
         lines.Add($"Last heartbeat: {host.LastHeartbeat?.ToString("u") ?? "never"}");
@@ -406,7 +409,7 @@
         }
 
         lines.Add("");
-        lines.Add("\x1b[90mFor full agent logs:\x1b[0m");
+        lines.Add("\x1b[90mFor full host logs:\x1b[0m");
         if (host.Platform == HostPlatform.Linux)
             lines.Add("\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs agent --tail 100'\x1b[0m");
         else
@@ -423,7 +426,7 @@
         _ => "bi-pc-display"
     };
 
-    private string GetAgentStatusBadge(AgentStatus status) => status switch
+    private string GetStatusBadge(AgentStatus status) => status switch
     {
         AgentStatus.Online => "bg-success",
         AgentStatus.Connecting => "bg-warning",
