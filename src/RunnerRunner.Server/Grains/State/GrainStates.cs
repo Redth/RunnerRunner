@@ -70,6 +70,8 @@ public class RunnerInstanceGrainState
 
     // Recent log lines (bounded buffer)
     [Id(18)] public List<string> RecentLogs { get; set; } = [];
+
+    [Id(19)] public ExecutionBackend Backend { get; set; }
 }
 
 [GenerateSerializer]
@@ -124,10 +126,8 @@ public class LabelMappingConfig
     [Id(2)] public int Priority { get; set; } = 0;
 }
 
-public enum ProvisioningType
+[GenerateSerializer]
+public class ProfileGrainStateWrapper
 {
-    Static,
-    ScaleSet,
-    Webhook,
-    Scheduled
+    [Id(0)] public RunnerProfile? Profile { get; set; }
 }
