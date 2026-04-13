@@ -18,6 +18,9 @@ set -euo pipefail
 #   Or set environment variables directly.
 # ============================================================
 
+# To enable OpenTelemetry monitoring, set OTEL_ENDPOINT in deploy/.env:
+#   OTEL_ENDPOINT=http://aspire-dashboard:18889
+# Then add an aspire-dashboard container to the compose stack.
 DEPLOY_TARGET="${1:-all}"  # all, linux, macos
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -155,6 +158,8 @@ services:
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - ASPNETCORE_URLS=http://+:${SERVER_PORT}
+      - OTEL_SERVICE_NAME=runnerrunner-server
+      - OTEL_EXPORTER_OTLP_ENDPOINT=\${OTEL_ENDPOINT:-}
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=${SERVER_PORT}"

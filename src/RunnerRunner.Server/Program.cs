@@ -69,6 +69,8 @@ builder.UseOrleans(silo =>
     }
 
     silo.AddMemoryStreams("RunnerEvents");
+    // Propagate distributed traces through grain calls for OTEL
+    silo.AddActivityPropagation();
     // Orleans built-in dashboard (Orleans 10+)
     silo.AddDashboard();
 });
