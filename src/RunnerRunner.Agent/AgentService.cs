@@ -71,6 +71,30 @@ public class AgentService : BackgroundService
         _signalR.OnCleanupOrphan += HandleCleanupOrphan;
         _signalR.OnReconnected += RegisterWithServer;
 
+        // Wire up container exit detection — immediately notify server when a runner dies
+        _lifecycleManager.OnRunnerExited += (instanceId, exitCode, reason) =>
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    _logger.LogWarning("Runner {InstanceId} exited (code {ExitCode}): {Reason}",
+                        instanceId, exitCode, reason);
+
+                    await _signalR.SendRunnerStopped(new RunnerStoppedEvent
+                    {
+                        InstanceId = instanceId,
+                        Reason = exitCode == 0 ? "completed" : "crashed",
+                        ErrorMessage = reason
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to report runner exit for {InstanceId}", instanceId);
+                }
+            });
+        };
+
         // Connect to server
         await _signalR.ConnectAsync(stoppingToken);
 
@@ -85,16 +109,48 @@ public class AgentService : BackgroundService
                 var metrics = _healthReporter.CollectMetrics(_agentId);
                 await _signalR.SendHeartbeat(metrics);
 
-                // Send per-runner health updates
+                // Send per-runner health updates with actual container/VM/process status
+                var deadRunners = new List<string>();
                 foreach (var runner in _lifecycleManager.RunningInstances.Values)
                 {
-                    await _signalR.SendRunnerHealthUpdate(new RunnerHealthUpdateEvent
+                    var health = await _lifecycleManager.CheckHealthAsync(runner.InstanceId);
+                    if (health != null && health.IsRunning)
                     {
-                        InstanceId = runner.InstanceId,
-                        Status = RunnerInstanceStatus.Running,
-                        CheckedAt = DateTime.UtcNow,
-                        StatusMessage = "Running"
-                    });
+                        await _signalR.SendRunnerHealthUpdate(new RunnerHealthUpdateEvent
+                        {
+                            InstanceId = runner.InstanceId,
+                            Status = RunnerInstanceStatus.Running,
+                            CheckedAt = DateTime.UtcNow,
+                            StatusMessage = $"Running ({health.Status})"
+                        });
+                    }
+                    else
+                    {
+                        // Container/VM/process is gone — report stopped
+                        _logger.LogWarning(
+                            "Runner {RunnerName} ({InstanceId}) is no longer running (status: {Status}), reporting stopped",
+                            runner.RunnerName, runner.InstanceId, health?.Status ?? "not_found");
+                        deadRunners.Add(runner.InstanceId);
+                    }
+                }
+
+                // Report dead runners and remove from tracking
+                foreach (var deadId in deadRunners)
+                {
+                    try
+                    {
+                        await _signalR.SendRunnerStopped(new RunnerStoppedEvent
+                        {
+                            InstanceId = deadId,
+                            Reason = "crashed",
+                            ErrorMessage = "Container/process exited unexpectedly (detected during health check)"
+                        });
+                        await _lifecycleManager.StopRunnerAsync(deadId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to report dead runner {InstanceId}", deadId);
+                    }
                 }
                 // Reconciliation: report actual state to server
                 try

@@ -365,15 +365,28 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
             if (existing != null)
             {
                 existing.Status = _state.State.Status;
-                existing.StatusMessage = _state.State.StatusMessage;
-                existing.ContainerId = _state.State.ContainerId;
-                existing.VmName = _state.State.VmName;
-                existing.ProcessId = _state.State.ProcessId;
-                existing.ErrorMessage = _state.State.ErrorMessage;
-                existing.DeployedAt = _state.State.DeployedAt;
-                existing.StartedAt = _state.State.StartedAt;
-                existing.StoppedAt = _state.State.StoppedAt;
-                existing.LastHealthCheck = _state.State.LastHealthCheck;
+
+                // Only overwrite fields that the grain has actually set,
+                // to avoid an uninitialized grain clobbering DocumentDB records.
+                if (!string.IsNullOrEmpty(_state.State.StatusMessage))
+                    existing.StatusMessage = _state.State.StatusMessage;
+                if (!string.IsNullOrEmpty(_state.State.ContainerId))
+                    existing.ContainerId = _state.State.ContainerId;
+                if (!string.IsNullOrEmpty(_state.State.VmName))
+                    existing.VmName = _state.State.VmName;
+                if (_state.State.ProcessId.HasValue)
+                    existing.ProcessId = _state.State.ProcessId;
+                if (!string.IsNullOrEmpty(_state.State.ErrorMessage))
+                    existing.ErrorMessage = _state.State.ErrorMessage;
+                if (_state.State.DeployedAt.HasValue)
+                    existing.DeployedAt = _state.State.DeployedAt;
+                if (_state.State.StartedAt.HasValue)
+                    existing.StartedAt = _state.State.StartedAt;
+                if (_state.State.StoppedAt.HasValue)
+                    existing.StoppedAt = _state.State.StoppedAt;
+                if (_state.State.LastHealthCheck.HasValue)
+                    existing.LastHealthCheck = _state.State.LastHealthCheck;
+
                 await store.Update(existing);
             }
         }
