@@ -24,6 +24,14 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
     public async Task<WebhookProcessResult> ProcessWebhook(string provider, string body, string? signatureHeader)
     {
+        // Map HMAC provider key to RunnerProvider enum name for storage
+        var providerName = provider switch
+        {
+            "github" => nameof(RunnerProvider.GitHubActions),
+            "gitea" => nameof(RunnerProvider.GiteaActions),
+            _ => provider
+        };
+
         using var scope = _serviceProvider.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
 
@@ -79,7 +87,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
             await store.Insert(new WebhookEvent
             {
-                Provider = provider,
+                Provider = providerName,
                 Action = action,
                 JobId = jobId,
                 RunId = runId,
@@ -113,7 +121,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             await store.Insert(new WebhookEvent
             {
                 BindingId = matchedRule.Id,
-                Provider = provider,
+                Provider = providerName,
                 Action = action,
                 JobId = jobId,
                 RunId = runId,
@@ -152,7 +160,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             await store.Insert(new WebhookEvent
             {
                 BindingId = matchedRule.Id,
-                Provider = provider,
+                Provider = providerName,
                 Action = action,
                 JobId = jobId,
                 RunId = runId,
@@ -180,7 +188,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             await store.Insert(new WebhookEvent
             {
                 BindingId = matchedRule.Id,
-                Provider = provider,
+                Provider = providerName,
                 Action = action,
                 JobId = jobId,
                 RunId = runId,
@@ -211,7 +219,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 await store.Insert(new WebhookEvent
                 {
                     BindingId = matchedRule.Id,
-                    Provider = provider,
+                    Provider = providerName,
                     Action = action,
                     JobId = jobId,
                     RunId = runId,
@@ -232,7 +240,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             var webhookEvent = new WebhookEvent
             {
                 BindingId = matchedRule.Id,
-                Provider = provider,
+                Provider = providerName,
                 Action = action,
                 JobId = jobId,
                 RunId = runId,
@@ -264,7 +272,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         await store.Insert(new WebhookEvent
         {
             BindingId = matchedRule.Id,
-            Provider = provider,
+            Provider = providerName,
             Action = action,
             JobId = jobId,
             RunId = runId,
