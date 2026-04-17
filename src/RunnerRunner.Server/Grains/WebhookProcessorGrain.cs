@@ -264,7 +264,8 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 Success = true,
                 Status = "provisioned",
                 Message = "Provisioning requested",
-                ProfileId = profileId
+                ProfileId = profileId,
+                EventId = webhookEvent.Id
             };
         }
 

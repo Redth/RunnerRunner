@@ -60,35 +60,21 @@ public static class WebhookEndpoints
         logger.LogInformation("Webhook processed: {Status} - {Message}", result.Status, result.Message);
 
         // Fire events for DynamicProvisioningService integration
-        if (result.Status == "provisioned" && result.ProfileId != null)
+        if (result.Status == "provisioned" && result.ProfileId != null && result.EventId != null)
         {
-            // Parse minimal fields for the event
             try
             {
-                var json = JsonDocument.Parse(body).RootElement;
-                var action = json.GetProperty("action").GetString() ?? "";
-                var workflowJob = json.GetProperty("workflow_job");
-                var jobId = workflowJob.GetProperty("id").GetInt64().ToString();
-                var runId = workflowJob.GetProperty("run_id").GetInt64().ToString();
-                var labels = workflowJob.GetProperty("labels").EnumerateArray()
-                    .Select(l => l.GetString() ?? "").Where(l => l.Length > 0).ToList();
-                var workflowName = workflowJob.TryGetProperty("workflow_name", out var wn)
-                    ? wn.GetString() ?? "" : "";
-                var repo = json.GetProperty("repository").GetProperty("full_name").GetString() ?? "";
-
-                var webhookEvent = new WebhookEvent
+                using var scope = ctx.RequestServices.CreateScope();
+                var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+                var webhookEvent = await store.Get<WebhookEvent>(result.EventId);
+                if (webhookEvent != null)
                 {
-                    Provider = provider.ToString(),
-                    Action = action,
-                    JobId = jobId,
-                    RunId = runId,
-                    Repository = repo,
-                    WorkflowName = workflowName,
-                    Labels = labels,
-                    MatchedProfileId = result.ProfileId,
-                    Status = "provisioned"
-                };
-                OnJobQueued?.Invoke(webhookEvent, result.ProfileId);
+                    OnJobQueued?.Invoke(webhookEvent, result.ProfileId);
+                }
+                else
+                {
+                    logger.LogWarning("Grain returned EventId {EventId} but event not found in store", result.EventId);
+                }
             }
             catch (Exception ex)
             {

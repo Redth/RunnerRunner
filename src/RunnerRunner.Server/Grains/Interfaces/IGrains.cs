@@ -110,4 +110,5 @@ public class WebhookProcessResult
     [Id(2)] public string? Message { get; set; }
     [Id(3)] public string? ProfileId { get; set; }
     [Id(4)] public string? InstanceId { get; set; }
+    [Id(5)] public string? EventId { get; set; }
 }
