@@ -13,6 +13,12 @@ public class RunnerLifecycleManager
     private readonly ILogger<RunnerLifecycleManager> _logger;
     private readonly ConcurrentDictionary<string, ManagedRunner> _runners = new();
 
+    /// <summary>
+    /// Fired when a runner exits unexpectedly (container/VM/process died).
+    /// Parameters: (instanceId, exitCode, reason)
+    /// </summary>
+    public event Action<string, long, string>? OnRunnerExited;
+
     public RunnerLifecycleManager(ILogger<RunnerLifecycleManager> logger)
     {
         _logger = logger;
@@ -63,6 +69,12 @@ public class RunnerLifecycleManager
         _logger.LogInformation("Runner {RunnerName} started (handle: {Handle})",
             info.RunnerName, info.InstanceHandle);
 
+        // Start background exit monitor for Docker containers
+        if (backend is Backends.DockerBackend docker)
+        {
+            _ = MonitorContainerExitAsync(docker, command.InstanceId, info.InstanceHandle, info.RunnerName);
+        }
+
         return info;
     }
 
@@ -85,6 +97,44 @@ public class RunnerLifecycleManager
             return null;
 
         return await runner.Backend.GetHealthAsync(runner.InstanceHandle, ct);
+    }
+
+    private async Task MonitorContainerExitAsync(
+        Backends.DockerBackend docker, string instanceId, string containerId, string runnerName)
+    {
+        try
+        {
+            var (exitCode, error) = await docker.WaitForExitAsync(containerId);
+
+            // Only fire if we still consider this runner active
+            if (_runners.TryRemove(instanceId, out _))
+            {
+                var reason = exitCode switch
+                {
+                    0 => "Runner exited cleanly (job completed or ephemeral exit)",
+                    137 => "Container killed by OOM or SIGKILL (exit code 137)",
+                    143 => "Container received SIGTERM (exit code 143)",
+                    _ => $"Container exited with code {exitCode}"
+                };
+
+                if (!string.IsNullOrEmpty(error))
+                    reason += $": {error}";
+
+                _logger.LogWarning(
+                    "Runner {RunnerName} ({InstanceId}) container exited: code={ExitCode}, reason={Reason}",
+                    runnerName, instanceId, exitCode, reason);
+
+                OnRunnerExited?.Invoke(instanceId, exitCode, reason);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Agent shutting down, ignore
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error monitoring container exit for runner {RunnerName}", runnerName);
+        }
     }
 }
 

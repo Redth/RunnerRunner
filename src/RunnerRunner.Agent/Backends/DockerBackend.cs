@@ -186,6 +186,30 @@ public class DockerBackend : IRunnerBackend
     }
 
     /// <summary>
+    /// Waits for a container to exit and returns the exit code.
+    /// Uses Docker's WaitContainer API for immediate notification.
+    /// </summary>
+    public async Task<(long ExitCode, string? Error)> WaitForExitAsync(string containerId, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _client.Containers.WaitContainerAsync(containerId, ct);
+            var error = response.Error?.Message;
+            _logger.LogInformation("Container {ContainerId} exited with code {ExitCode}{Error}",
+                containerId[..Math.Min(12, containerId.Length)],
+                response.StatusCode,
+                string.IsNullOrEmpty(error) ? "" : $": {error}");
+            return (response.StatusCode, error);
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            _logger.LogWarning("Container {ContainerId} not found while waiting for exit (already removed)",
+                containerId[..Math.Min(12, containerId.Length)]);
+            return (-1, "Container not found (already removed)");
+        }
+    }
+
+    /// <summary>
     /// Discovers all RunnerRunner-managed containers currently on this host.
     /// Used on agent startup to reconcile state with the server.
     /// </summary>

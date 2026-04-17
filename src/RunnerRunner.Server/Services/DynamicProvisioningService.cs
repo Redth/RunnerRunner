@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Hubs;
 using RunnerRunner.Server.Webhooks;
 using Host = RunnerRunner.Core.Models.Host;
@@ -18,17 +19,20 @@ public class DynamicProvisioningService : IHostedService
     private readonly IServiceProvider _services;
     private readonly JitConfigService _jitConfigService;
     private readonly IHubContext<AgentHub, IAgentHubClient> _hubContext;
+    private readonly IGrainFactory _grainFactory;
 
     public DynamicProvisioningService(
         ILogger<DynamicProvisioningService> logger,
         IServiceProvider services,
         JitConfigService jitConfigService,
-        IHubContext<AgentHub, IAgentHubClient> hubContext)
+        IHubContext<AgentHub, IAgentHubClient> hubContext,
+        IGrainFactory grainFactory)
     {
         _logger = logger;
         _services = services;
         _jitConfigService = jitConfigService;
         _hubContext = hubContext;
+        _grainFactory = grainFactory;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -190,6 +194,19 @@ public class DynamicProvisioningService : IHostedService
             Status = RunnerInstanceStatus.Pending
         };
         await store.Insert(instance);
+
+        // Initialize the corresponding Orleans grain so it has the correct state
+        // (ProvisioningMode, HostId, etc.) — prevents IsDynamic() from returning false
+        try
+        {
+            var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id);
+            await runnerGrain.Initialize(
+                selectedHost.Id, profileId, runnerName, "dynamic", evt.JobId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to initialize Orleans grain for dynamic runner {RunnerName}", runnerName);
+        }
 
         // Now set the actual instance ID in env vars
         envVars["RR_INSTANCE_ID"] = instance.Id;
