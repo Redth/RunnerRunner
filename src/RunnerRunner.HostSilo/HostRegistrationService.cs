@@ -38,55 +38,67 @@ public class HostRegistrationService : BackgroundService
         _logger.LogInformation("Registering host grain: {HostId} ({HostName}, {Platform} {Architecture})",
             hostId, hostName, platform, architecture);
 
-        try
+        // Retry registration with backoff — the cluster may still be reorganizing after deploy
+        var registered = false;
+        for (var attempt = 1; attempt <= 10 && !stoppingToken.IsCancellationRequested; attempt++)
         {
-            // Activate and register the HostGrain
-            var hostGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
-            await hostGrain.Register(hostName, platform, architecture, agentVersion);
-
-            // Set default labels based on platform capabilities
-            var labels = new Dictionary<string, string>
+            try
             {
-                ["os"] = platform.ToString().ToLowerInvariant(),
-                ["arch"] = architecture.ToLowerInvariant(),
-                ["native"] = "true"
-            };
+                var hostGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
+                await hostGrain.Register(hostName, platform, architecture, agentVersion);
 
-            // Detect Docker availability
-            if (await IsDockerAvailable())
-                labels["docker"] = "true";
+                var labels = new Dictionary<string, string>
+                {
+                    ["os"] = platform.ToString().ToLowerInvariant(),
+                    ["arch"] = architecture.ToLowerInvariant(),
+                    ["native"] = "true"
+                };
 
-            // Detect Tart availability (macOS only)
-            if (platform == HostPlatform.MacOS && await IsTartAvailable())
-                labels["tart"] = "true";
+                if (await IsDockerAvailable())
+                    labels["docker"] = "true";
 
-            await hostGrain.UpdateLabels(labels);
+                if (platform == HostPlatform.MacOS && await IsTartAvailable())
+                    labels["tart"] = "true";
 
-            // Register with the scheduler
-            var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(0);
-            await scheduler.RegisterHost(hostId);
+                await hostGrain.UpdateLabels(labels);
 
-            _logger.LogInformation("Host {HostId} registered successfully with labels: {Labels}",
-                hostId, string.Join(", ", labels.Select(kv => $"{kv.Key}={kv.Value}")));
+                var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(0);
+                await scheduler.RegisterHost(hostId);
 
-            // Heartbeat loop
-            while (!stoppingToken.IsCancellationRequested)
+                _logger.LogInformation("Host {HostId} registered successfully with labels: {Labels}",
+                    hostId, string.Join(", ", labels.Select(kv => $"{kv.Key}={kv.Value}")));
+
+                registered = true;
+                break;
+            }
+            catch (Exception ex)
             {
-                try
-                {
-                    await hostGrain.RecordHeartbeat("local-silo", 0);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to send heartbeat for host {HostId}", hostId);
-                }
-
-                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+                _logger.LogWarning(ex, "Registration attempt {Attempt}/10 failed for host {HostId}, retrying...",
+                    attempt, hostId);
+                await Task.Delay(TimeSpan.FromSeconds(attempt * 5), stoppingToken);
             }
         }
-        catch (Exception ex)
+
+        if (!registered)
         {
-            _logger.LogError(ex, "Failed to register host {HostId}", hostId);
+            _logger.LogError("Failed to register host {HostId} after 10 attempts", hostId);
+            return;
+        }
+
+        // Heartbeat loop
+        var hostHeartbeatGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await hostHeartbeatGrain.RecordHeartbeat("local-silo", 0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send heartbeat for host {HostId}", hostId);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
         }
     }
 
