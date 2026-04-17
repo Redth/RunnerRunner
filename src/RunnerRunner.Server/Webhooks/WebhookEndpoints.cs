@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
 using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Webhooks;
@@ -30,7 +31,6 @@ public static class WebhookEndpoints
     {
         var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
             .CreateLogger("RunnerRunner.Webhooks");
-        var store = ctx.RequestServices.GetRequiredService<IDocumentStore>();
 
         // Read raw body for signature validation
         ctx.Request.EnableBuffering();
@@ -45,330 +45,75 @@ public static class WebhookEndpoints
         if (eventType != "workflow_job")
             return Results.Ok(new { message = $"Ignored event type: {eventType}" });
 
-        // Parse body
-        JsonElement json;
-        try
-        {
-            json = JsonDocument.Parse(body).RootElement;
-        }
-        catch (JsonException)
-        {
-            return Results.BadRequest(new { error = "Invalid JSON body" });
-        }
-
-        var action = json.GetProperty("action").GetString() ?? "";
-        var workflowJob = json.GetProperty("workflow_job");
-        var jobId = workflowJob.GetProperty("id").GetInt64().ToString();
-        var runId = workflowJob.GetProperty("run_id").GetInt64().ToString();
-        var labels = workflowJob.GetProperty("labels").EnumerateArray()
-            .Select(l => l.GetString() ?? "").Where(l => l.Length > 0).ToList();
-        var workflowName = workflowJob.TryGetProperty("workflow_name", out var wn)
-            ? wn.GetString() ?? "" : "";
-        var repo = json.GetProperty("repository").GetProperty("full_name").GetString() ?? "";
-
-        // Find matching binding
-        var providerName = provider.ToString();
-        var bindings = (await store.Query<WebhookBinding>().ToList())
-            .Where(b => b.Provider == provider && b.Enabled)
-            .ToList();
-
-        var org = repo.Contains('/') ? repo.Split('/')[0] : "";
-        WebhookBinding? binding = null;
-
-        // Try all matching bindings — validate signature for each to find the right one
-        var candidateBindings = new List<WebhookBinding>();
-        foreach (var b in bindings)
-        {
-            var repoMatch = b.AllowedRepos.Any(r =>
-                r.Equals(repo, StringComparison.OrdinalIgnoreCase));
-            var orgMatch = b.AllowedOrgs.Any(o =>
-                o.Equals(org, StringComparison.OrdinalIgnoreCase));
-
-            if (repoMatch || orgMatch ||
-                (b.AllowedRepos.Count == 0 && b.AllowedOrgs.Count == 0))
-            {
-                candidateBindings.Add(b);
-            }
-        }
-
-        // Validate signature against each candidate — pick the one that matches
         var signature = provider == RunnerProvider.GitHubActions
             ? ctx.Request.Headers["X-Hub-Signature-256"].FirstOrDefault()
             : ctx.Request.Headers["X-Gitea-Signature"].FirstOrDefault();
 
-        foreach (var candidate in candidateBindings)
+        // Delegate to the WebhookProcessorGrain for matching and provisioning
+        var providerString = provider == RunnerProvider.GitHubActions ? "github" : "gitea";
+        var grainFactory = ctx.RequestServices.GetRequiredService<IGrainFactory>();
+        var processorGrain = grainFactory.GetGrain<IWebhookProcessorGrain>(0);
+        var result = await processorGrain.ProcessWebhook(providerString, body, signature);
+
+        logger.LogInformation("Webhook processed: {Status} - {Message}", result.Status, result.Message);
+
+        // Fire events for DynamicProvisioningService integration
+        if (result.Status == "provisioned" && result.ProfileId != null)
         {
-            if (string.IsNullOrEmpty(candidate.WebhookSecret) ||
-                ValidateSignature(body, candidate.WebhookSecret, signature, provider))
+            // Parse minimal fields for the event
+            try
             {
-                binding = candidate;
-                break;
+                var json = JsonDocument.Parse(body).RootElement;
+                var action = json.GetProperty("action").GetString() ?? "";
+                var workflowJob = json.GetProperty("workflow_job");
+                var jobId = workflowJob.GetProperty("id").GetInt64().ToString();
+                var runId = workflowJob.GetProperty("run_id").GetInt64().ToString();
+                var labels = workflowJob.GetProperty("labels").EnumerateArray()
+                    .Select(l => l.GetString() ?? "").Where(l => l.Length > 0).ToList();
+                var workflowName = workflowJob.TryGetProperty("workflow_name", out var wn)
+                    ? wn.GetString() ?? "" : "";
+                var repo = json.GetProperty("repository").GetProperty("full_name").GetString() ?? "";
+
+                var webhookEvent = new WebhookEvent
+                {
+                    Provider = provider.ToString(),
+                    Action = action,
+                    JobId = jobId,
+                    RunId = runId,
+                    Repository = repo,
+                    WorkflowName = workflowName,
+                    Labels = labels,
+                    MatchedProfileId = result.ProfileId,
+                    Status = "provisioned"
+                };
+                OnJobQueued?.Invoke(webhookEvent, result.ProfileId);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to fire OnJobQueued event");
+            }
+        }
+        else if (result.Status == "completed")
+        {
+            try
+            {
+                var json = JsonDocument.Parse(body).RootElement;
+                var jobId = json.GetProperty("workflow_job").GetProperty("id").GetInt64().ToString();
+                var conclusion = "";
+                if (json.TryGetProperty("workflow_job", out var wfJob2) &&
+                    wfJob2.TryGetProperty("conclusion", out var conclusionProp))
+                    conclusion = conclusionProp.GetString() ?? "";
+                OnJobCompleted?.Invoke(jobId, conclusion);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to fire OnJobCompleted event");
             }
         }
 
-        if (binding == null && candidateBindings.Count > 0)
-        {
-            // Had scope matches but all signatures failed
-            logger.LogWarning("Webhook from {Repo} matched {Count} binding(s) but all signature validations failed",
-                repo, candidateBindings.Count);
-
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = candidateBindings[0].Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "rejected",
-                Error = "Signature validation failed"
-            });
-
+        if (result.Status == "rejected")
             return Results.Unauthorized();
-        }
 
-        if (binding == null)
-        {
-            logger.LogInformation("No binding found for {Provider} repo {Repo}", providerName, repo);
-
-            await store.Insert(new WebhookEvent
-            {
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "no_match"
-            });
-
-            return Results.Ok(new { message = "No matching binding" });
-        }
-
-        // Handle "in_progress" — confirm dynamic runner is active
-        if (action == "in_progress")
-        {
-            // Find the dynamic runner for this job and confirm it's running
-            var dynamicInstances = (await store.Query<RunnerInstance>().ToList())
-                .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
-                .ToList();
-
-            foreach (var inst in dynamicInstances)
-            {
-                inst.Status = RunnerInstanceStatus.Running;
-                inst.StatusMessage = "Job in progress";
-                inst.LastHealthCheck = DateTime.UtcNow;
-                await store.Update(inst);
-            }
-
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = binding.Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "in_progress",
-                MatchedProfileId = dynamicInstances.FirstOrDefault()?.ProfileId,
-                InstanceId = dynamicInstances.FirstOrDefault()?.Id
-            });
-
-            logger.LogInformation("Job {JobId} in progress, runner confirmed active", jobId);
-            return Results.Ok(new { message = "Job in progress acknowledged" });
-        }
-
-        // Handle "completed" — trigger cleanup of dynamic runners
-        if (action == "completed")
-        {
-            // Extract conclusion (success, failure, cancelled, etc.)
-            var conclusion = "";
-            if (json.TryGetProperty("workflow_job", out var wfJob2) &&
-                wfJob2.TryGetProperty("conclusion", out var conclusionProp))
-            {
-                conclusion = conclusionProp.GetString() ?? "";
-            }
-
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = binding.Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "completed"
-            });
-
-            logger.LogInformation("Job {JobId} completed ({Conclusion}), triggering cleanup", jobId, conclusion);
-            OnJobCompleted?.Invoke(jobId, conclusion);
-
-            return Results.Ok(new { message = $"Job completed ({conclusion}), cleanup triggered" });
-        }
-
-        // Other non-queued actions — just log
-        if (action != "queued")
-        {
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = binding.Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "ignored"
-            });
-
-            return Results.Ok(new { message = $"Action '{action}' ignored (not queued)" });
-        }
-
-        // Rate limiting: count active dynamic instances for this binding
-        var activeInstances = (await store.Query<RunnerInstance>().ToList())
-            .Where(i => i.ProvisioningMode == "dynamic"
-                && i.Status is RunnerInstanceStatus.Running
-                    or RunnerInstanceStatus.Starting
-                    or RunnerInstanceStatus.Pending)
-            .ToList();
-
-        // Filter to instances linked to events for this binding
-        var bindingEventIds = (await store.Query<WebhookEvent>().ToList())
-            .Where(e => e.BindingId == binding.Id)
-            .Select(e => e.Id)
-            .ToHashSet();
-
-        var activeCount = activeInstances
-            .Count(i => i.WebhookEventId != null && bindingEventIds.Contains(i.WebhookEventId));
-
-        if (activeCount >= binding.MaxConcurrentJobs)
-        {
-            logger.LogWarning("Rate limited: {Count}/{Max} active for binding {BindingName}",
-                activeCount, binding.MaxConcurrentJobs, binding.Name);
-
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = binding.Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "rate_limited"
-            });
-
-            return Results.Ok(new { message = "Rate limited", status = "rate_limited" });
-        }
-
-        // Label matching: find profile from mappings
-        string? profileId = null;
-        var sortedMappings = binding.Mappings.OrderByDescending(m => m.Priority);
-
-        foreach (var mapping in sortedMappings)
-        {
-            if (mapping.RequiredLabels.All(required =>
-                labels.Any(l => l.Equals(required, StringComparison.OrdinalIgnoreCase))))
-            {
-                profileId = mapping.ProfileId;
-                break;
-            }
-        }
-
-        profileId ??= binding.DefaultProfileId;
-
-        if (string.IsNullOrEmpty(profileId))
-        {
-            logger.LogInformation("No profile match for labels [{Labels}] in binding {BindingName}",
-                string.Join(", ", labels), binding.Name);
-
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = binding.Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "no_match"
-            });
-
-            return Results.Ok(new { message = "No profile matched" });
-        }
-
-        // Resolve profile name for audit
-        var profile = await store.Get<RunnerProfile>(profileId);
-        var profileName = profile?.Name;
-
-        // Create audit event
-        var webhookEvent = new WebhookEvent
-        {
-            BindingId = binding.Id,
-            Provider = providerName,
-            Action = action,
-            JobId = jobId,
-            RunId = runId,
-            Repository = repo,
-            WorkflowName = workflowName,
-            Labels = labels,
-            MatchedProfileId = profileId,
-            MatchedProfileName = profileName,
-            Status = "provisioned"
-        };
-
-        await store.Insert(webhookEvent);
-
-        // Fire provisioning event
-        logger.LogInformation(
-            "Webhook matched: {Repo} job {JobId} -> profile {ProfileName} ({ProfileId})",
-            repo, jobId, profileName ?? "unknown", profileId);
-
-        OnJobQueued?.Invoke(webhookEvent, profileId);
-
-        return Results.Ok(new { message = "Provisioning requested", profileId, status = "provisioned" });
-    }
-
-    private static bool ValidateSignature(
-        string body, string secret, string? signatureHeader, RunnerProvider provider)
-    {
-        if (string.IsNullOrEmpty(signatureHeader))
-            return false;
-
-        var keyBytes = Encoding.UTF8.GetBytes(secret);
-        var bodyBytes = Encoding.UTF8.GetBytes(body);
-
-        using var hmac = new HMACSHA256(keyBytes);
-        var hash = hmac.ComputeHash(bodyBytes);
-        var computed = Convert.ToHexStringLower(hash);
-
-        // GitHub sends "sha256=<hex>", Gitea sends just "<hex>"
-        var expected = provider == RunnerProvider.GitHubActions
-            ? signatureHeader.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase)
-                ? signatureHeader["sha256=".Length..]
-                : signatureHeader
-            : signatureHeader;
-
-        var match = CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(computed),
-            Encoding.UTF8.GetBytes(expected.ToLowerInvariant()));
-
-        if (!match)
-        {
-            // Debug: log lengths and first/last chars to help diagnose
-            Console.WriteLine($"[Webhook] Signature mismatch: computed={computed[..8]}... ({computed.Length} chars), expected={expected[..Math.Min(8, expected.Length)]}... ({expected.Length} chars), secret length={secret.Length}, body length={body.Length}");
-        }
-
-        return match;
+        return Results.Ok(new { message = result.Message, status = result.Status, profileId = result.ProfileId });
     }
 }

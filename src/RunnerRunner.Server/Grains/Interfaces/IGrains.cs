@@ -102,11 +102,12 @@ public interface IWebhookProcessorGrain : IGrainWithIntegerKey
     Task<WebhookProcessResult> ProcessWebhook(string provider, string body, string? signatureHeader);
 }
 
+[GenerateSerializer]
 public class WebhookProcessResult
 {
-    public bool Success { get; set; }
-    public string Status { get; set; } = "";
-    public string? Message { get; set; }
-    public string? ProfileId { get; set; }
-    public string? InstanceId { get; set; }
+    [Id(0)] public bool Success { get; set; }
+    [Id(1)] public string Status { get; set; } = "";
+    [Id(2)] public string? Message { get; set; }
+    [Id(3)] public string? ProfileId { get; set; }
+    [Id(4)] public string? InstanceId { get; set; }
 }
