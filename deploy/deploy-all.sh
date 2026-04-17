@@ -176,6 +176,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  host-silo:
+    image: ${HOST_SILO_IMAGE}
+    container_name: runnerrunner-host-silo
+    environment:
+      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
+      - HostSilo__HostId=linux-host-${LINUX_HOST}
+      - HostSilo__HostName=linux-host-${LINUX_HOST}
+      - HostSilo__Platform=Linux
+      - DOTNET_ENVIRONMENT=Production
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   server-data:
   postgres-data:
