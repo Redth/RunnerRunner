@@ -7,7 +7,7 @@ services:
       - POSTGRES_USER=runnerrunner
       - POSTGRES_PASSWORD=runnerrunner
     ports:
-      - "5432:5432"
+      - "${LINUX_BIND_IP:-0.0.0.0}:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -23,14 +23,17 @@ services:
       dockerfile: src/RunnerRunner.Server/Dockerfile
     container_name: runnerrunner-server
     ports:
-      - "4779:4779"
+      - "${LINUX_BIND_IP:-0.0.0.0}:4779:4779"
+      - "${LINUX_BIND_IP:-0.0.0.0}:11111:11111"
+      - "${LINUX_BIND_IP:-0.0.0.0}:30000:30000"
     volumes:
       - server-data:/app/data
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - ASPNETCORE_URLS=http://+:4779
+      - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP:-}
     labels:
-      - "npm.proxy.domain=runnerrunner.jjagd.net"
+      - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=4779"
       - "npm.proxy.ssl.force=true"
     depends_on:
@@ -43,17 +46,28 @@ services:
       context: .
       dockerfile: src/RunnerRunner.HostSilo/Dockerfile
     container_name: runnerrunner-host-silo
+    ports:
+      - "${LINUX_BIND_IP:-0.0.0.0}:11112:11112"
+      - "${LINUX_BIND_IP:-0.0.0.0}:30001:30001"
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - HostSilo__HostId=local-docker-host
       - HostSilo__HostName=local-docker-host
       - HostSilo__Platform=Linux
+      - RunnerRunner__AgentId=local-docker-host
+      - RunnerRunner__AgentName=local-docker-host
+      - RunnerRunner__ServerUrl=http://server:4779
+      - Orleans__AdvertisedIPAddress=${ORLEANS_HOST_SILO_IP:-}
+      - Orleans__SiloPort=11112
+      - Orleans__GatewayPort=30001
       - DOTNET_ENVIRONMENT=Production
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
+      server:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

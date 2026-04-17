@@ -1,5 +1,6 @@
 using Docker.DotNet;
 using Docker.DotNet.Models;
+using System.Runtime.InteropServices;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 
@@ -13,6 +14,11 @@ public class DockerBackend : IRunnerBackend
 {
     private readonly ILogger<DockerBackend> _logger;
     private readonly DockerClient _client;
+    private readonly Uri _endpoint;
+    private readonly bool _hasDockerHint;
+    private readonly TimeSpan _availabilityCacheWindow = TimeSpan.FromSeconds(30);
+    private DateTime _lastAvailabilityCheckUtc = DateTime.MinValue;
+    private bool _cachedAvailability;
 
     public ExecutionBackend BackendType => ExecutionBackend.Docker;
     public DockerClient GetClient() => _client;
@@ -20,20 +26,32 @@ public class DockerBackend : IRunnerBackend
     public DockerBackend(ILogger<DockerBackend> logger)
     {
         _logger = logger;
-        _client = new DockerClientConfiguration().CreateClient();
+        _hasDockerHint = HasDockerInstallHint();
+        _endpoint = ResolveDockerEndpoint();
+        _client = new DockerClientConfiguration(_endpoint).CreateClient();
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
+        if (!_hasDockerHint)
+            return false;
+
+        if (DateTime.UtcNow - _lastAvailabilityCheckUtc < _availabilityCacheWindow)
+            return _cachedAvailability;
+
         try
         {
             await _client.System.PingAsync(ct);
-            return true;
+            _cachedAvailability = true;
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            _cachedAvailability = false;
+            _logger.LogDebug("Docker backend unavailable at {Endpoint}: {Message}", _endpoint, ex.Message);
         }
+
+        _lastAvailabilityCheckUtc = DateTime.UtcNow;
+        return _cachedAvailability;
     }
 
     public async Task<RunnerInstanceInfo> StartRunnerAsync(RunnerStartRequest request, CancellationToken ct = default)
@@ -41,7 +59,8 @@ public class DockerBackend : IRunnerBackend
         var config = request.DockerConfig
             ?? throw new InvalidOperationException("DockerConfig is required for Docker backend");
 
-        var imageName = $"{config.RegistryUrl}/{config.ImageName}:{config.Tag}";
+        var imageName = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag);
+        var repository = ImageReference.BuildRepository(config.RegistryUrl, config.ImageName);
 
         // Pull image if needed
         if (config.PullPolicy == PullPolicy.Always ||
@@ -49,7 +68,7 @@ public class DockerBackend : IRunnerBackend
         {
             _logger.LogInformation("Pulling image {Image}", imageName);
             await _client.Images.CreateImageAsync(
-                new ImagesCreateParameters { FromImage = $"{config.RegistryUrl}/{config.ImageName}", Tag = config.Tag },
+                new ImagesCreateParameters { FromImage = repository, Tag = config.Tag },
                 null, new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)), ct);
         }
 
@@ -84,7 +103,9 @@ public class DockerBackend : IRunnerBackend
             },
             HostConfig = new HostConfig
             {
-                AutoRemove = request.Ephemeral,
+                // Keep managed containers until RunnerRunner explicitly removes them so
+                // reconciliation and logs can distinguish "exited" from "never existed".
+                AutoRemove = false,
                 RestartPolicy = request.Ephemeral
                     ? new RestartPolicy { Name = RestartPolicyKind.No }
                     : new RestartPolicy { Name = RestartPolicyKind.UnlessStopped }
@@ -99,39 +120,17 @@ public class DockerBackend : IRunnerBackend
             var originalEntrypoint = imageInspect.Config?.Entrypoint;
             var originalCmd = imageInspect.Config?.Cmd;
             var imageShell = imageInspect.Config?.Shell;
+            var isWindowsContainer = IsWindowsContainerImage(imageInspect.Os);
 
-            // Detect which shell the image uses
-            var shell = DetectShell(originalEntrypoint, originalCmd, imageShell);
-
-            // Build the exec chain to call after JIT setup
-            var execParts = new List<string>();
-            if (originalEntrypoint?.Count > 0)
-                execParts.AddRange(originalEntrypoint);
-            if (originalCmd?.Count > 0)
-                execParts.AddRange(originalCmd);
-
-            var execChain = execParts.Count > 0
-                ? "exec " + string.Join(" ", execParts.Select(p => $"\"{p}\""))
-                : $"exec {shell} -c 'echo No original entrypoint found; sleep infinity'";
-
-            // The wrapper script:
-            // 1. Finds run.sh in common locations
-            // 2. If found, runs with --jitconfig (runner exits after single job)
-            // 3. If not found, falls back to the original entrypoint (image handles RR_JIT_CONFIG env var)
-            var wrapperScript =
-                "RUN_SH=$(find / -name 'run.sh' -path '*/actions-runner/*' -o -name 'run.sh' -path '*/runner/*' 2>/dev/null | head -1); " +
-                "if [ -n \"$RUN_SH\" ] && [ -n \"$RR_JIT_CONFIG\" ]; then " +
-                "  echo \"[RunnerRunner] Starting JIT runner: $RUN_SH\"; " +
-                "  cd \"$(dirname \"$RUN_SH\")\" && exec \"$RUN_SH\" --jitconfig \"$RR_JIT_CONFIG\"; " +
-                "else " +
-                $"  echo \"[RunnerRunner] Falling back to original entrypoint\"; {execChain}; " +
-                "fi";
-
-            createParams.Entrypoint = new List<string> { shell, "-c", wrapperScript };
+            createParams.Entrypoint = BuildJitEntrypointOverride(
+                isWindowsContainer,
+                originalEntrypoint,
+                originalCmd,
+                imageShell);
             createParams.Cmd = new List<string>();
 
-            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} (shell: {Shell}, original: {Original})",
-                imageName, shell, string.Join(" ", execParts));
+            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} ({ContainerOs} container)",
+                imageName, isWindowsContainer ? "Windows" : "Linux");
         }
 
         var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
@@ -216,6 +215,9 @@ public class DockerBackend : IRunnerBackend
     public async Task<List<DiscoveredRunner>> DiscoverManagedContainersAsync(CancellationToken ct = default)
     {
         var result = new List<DiscoveredRunner>();
+        if (!await IsAvailableAsync(ct))
+            return result;
+
         try
         {
             var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
@@ -275,6 +277,88 @@ public class DockerBackend : IRunnerBackend
     /// Detect the shell available in the image by inspecting its SHELL config,
     /// entrypoint, and cmd. Prefers /bin/bash if the image uses it, falls back to /bin/sh.
     /// </summary>
+    internal static bool IsWindowsContainerImage(string? imageOs)
+        => string.Equals(imageOs, "windows", StringComparison.OrdinalIgnoreCase);
+
+    internal static List<string> BuildJitEntrypointOverride(
+        bool isWindowsContainer,
+        IList<string>? entrypoint,
+        IList<string>? cmd,
+        IList<string>? shell)
+        => isWindowsContainer
+            ? BuildWindowsJitEntrypointOverride(entrypoint, cmd)
+            : BuildLinuxJitEntrypointOverride(entrypoint, cmd, shell);
+
+    private static List<string> BuildLinuxJitEntrypointOverride(
+        IList<string>? entrypoint,
+        IList<string>? cmd,
+        IList<string>? shell)
+    {
+        var shellPath = DetectShell(entrypoint, cmd, shell);
+        var execParts = new List<string>();
+        if (entrypoint?.Count > 0)
+            execParts.AddRange(entrypoint);
+        if (cmd?.Count > 0)
+            execParts.AddRange(cmd);
+
+        var execChain = execParts.Count > 0
+            ? "exec " + string.Join(" ", execParts.Select(QuoteShellArgument))
+            : "exec sleep 3600";
+
+        var wrapperScript =
+            "set -e; " +
+            "runner_cmd=''; " +
+            "for candidate in /actions-runner/run.sh /runner/run.sh ./run.sh /home/*/actions-runner/run.sh /home/*/runner/run.sh; do " +
+            "  if [ -x \"$candidate\" ]; then runner_cmd=\"$candidate\"; break; fi; " +
+            "done; " +
+            "if [ -z \"$runner_cmd\" ]; then " +
+            "  runner_cmd=$(find /home /actions-runner /runner -maxdepth 4 -type f \\( -path '*/actions-runner/run.sh' -o -path '*/runner/run.sh' \\) 2>/dev/null | head -n 1 || true); " +
+            "fi; " +
+            "if [ -n \"$runner_cmd\" ] && [ -n \"${RR_JIT_CONFIG:-}\" ]; then " +
+            "  echo \"[RunnerRunner] Starting GitHub runner via JIT config: $runner_cmd\"; cd \"$(dirname \"$runner_cmd\")\"; exec \"$runner_cmd\" --jitconfig \"$RR_JIT_CONFIG\"; " +
+            "fi; " +
+            "echo '[RunnerRunner] ERROR: No GitHub JIT runner script was found in the container image'; " +
+            "echo '[RunnerRunner] Refusing to idle on the image entrypoint because this would consume capacity without registering a runner'; " +
+            "exit 91";
+
+        return [shellPath, "-lc", wrapperScript];
+    }
+
+    private static List<string> BuildWindowsJitEntrypointOverride(
+        IList<string>? entrypoint,
+        IList<string>? cmd)
+    {
+        var fallbackInvocation = BuildPowerShellFallbackInvocation(entrypoint, cmd);
+        var wrapperScript = string.Join("; ", new[]
+        {
+            "$ErrorActionPreference = 'Stop'",
+            "$candidates = @('C:\\actions-runner\\run.cmd', 'C:\\runner\\run.cmd', '.\\run.cmd')",
+            "$runCmd = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1",
+            "if (-not $runCmd) { $runCmd = Get-ChildItem -Path C:\\ -Filter 'run.cmd' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'actions-runner|runner' } | Select-Object -First 1 -ExpandProperty FullName }",
+            "if ($runCmd -and $env:RR_JIT_CONFIG) { Write-Host '[RunnerRunner] Starting Windows GitHub runner via JIT config'; Set-Location (Split-Path -Parent $runCmd); & $runCmd --jitconfig $env:RR_JIT_CONFIG; exit $LASTEXITCODE }",
+            "Write-Host '[RunnerRunner] ERROR: No Windows GitHub JIT runner script was found in the container image'",
+            "Write-Host '[RunnerRunner] Refusing to idle on the image entrypoint because this would consume capacity without registering a runner'",
+            "exit 91"
+        });
+
+        return ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", wrapperScript];
+    }
+
+    private static string BuildPowerShellFallbackInvocation(IList<string>? entrypoint, IList<string>? cmd)
+    {
+        var execParts = new List<string>();
+        if (entrypoint?.Count > 0)
+            execParts.AddRange(entrypoint);
+        if (cmd?.Count > 0)
+            execParts.AddRange(cmd);
+
+        if (execParts.Count == 0)
+            return "Start-Sleep -Seconds 3600";
+
+        return string.Join(" ", execParts.Select((part, index) =>
+            index == 0 ? $"& {QuotePowerShellArgument(part)}" : QuotePowerShellArgument(part)));
+    }
+
     private static string DetectShell(IList<string>? entrypoint, IList<string>? cmd, IList<string>? shell)
     {
         // 1. Check SHELL instruction from Dockerfile (most authoritative)
@@ -292,4 +376,50 @@ public class DockerBackend : IRunnerBackend
         // 3. Default to /bin/sh (POSIX, most portable)
         return "/bin/sh";
     }
+
+    private static bool HasDockerInstallHint()
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DOCKER_HOST")))
+            return true;
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return true;
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return File.Exists("/usr/bin/docker")
+            || File.Exists("/usr/local/bin/docker")
+            || File.Exists("/opt/homebrew/bin/docker")
+            || File.Exists("/var/run/docker.sock")
+            || File.Exists(Path.Combine(home, ".docker", "run", "docker.sock"));
+    }
+
+    private static Uri ResolveDockerEndpoint()
+    {
+        var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
+        if (!string.IsNullOrWhiteSpace(dockerHost)
+            && Uri.TryCreate(dockerHost, UriKind.Absolute, out var configuredEndpoint))
+        {
+            return configuredEndpoint;
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return new Uri("npipe://./pipe/docker_engine");
+
+        var userSocket = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".docker",
+            "run",
+            "docker.sock");
+
+        if (File.Exists(userSocket))
+            return new Uri($"unix://{userSocket}");
+
+        return new Uri("unix:///var/run/docker.sock");
+    }
+
+    private static string QuoteShellArgument(string value)
+        => "'" + value.Replace("'", "'\"'\"'") + "'";
+
+    private static string QuotePowerShellArgument(string value)
+        => "'" + value.Replace("'", "''") + "'";
 }

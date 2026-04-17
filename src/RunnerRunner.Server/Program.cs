@@ -23,6 +23,7 @@ builder.Services.AddSignalR();
 
 // HTTP client for provider APIs
 builder.Services.AddHttpClient();
+builder.Services.AddMemoryCache();
 
 // Orleans silo (co-hosted with Blazor server)
 builder.UseOrleans(silo =>
@@ -97,6 +98,9 @@ builder.Services.AddSingleton<IRunnerProviderPlugin, AzDoAgentProvider>();
 // Services
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<JitConfigService>();
+builder.Services.AddSingleton<RunnerRegistrationCleanupService>();
+builder.Services.AddSingleton<IRegistryCatalogService, RegistryCatalogService>();
+builder.Services.AddScoped<CapacityPlanningService>();
 
 // === Orleans Grain Architecture (Phase 5) ===
 // The following legacy services are replaced by Orleans grains:
@@ -114,8 +118,9 @@ builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
 builder.Services.AddHostedService<StreamSubscriptionService>();
 builder.Services.AddHostedService<ServerHostRegistrationService>();
-// builder.Services.AddHostedService<ReconciliationService>();    // → HostGrain + RunnerInstanceGrain
-// builder.Services.AddHostedService<RunnerTimeoutService>();     // → RunnerInstanceGrain timers
+builder.Services.AddHostedService<GitHubRunnerSweepService>();
+builder.Services.AddHostedService<ReconciliationService>();    // extra stale/orphan cleanup during migration
+builder.Services.AddHostedService<RunnerTimeoutService>();     // catches stuck pre-registration / stale instances
 
 // Blazor
 builder.Services.AddRazorComponents()

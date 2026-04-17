@@ -59,12 +59,22 @@
         {
             @* Toolbar *@
             <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-                <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages">
+                <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages" disabled="@refreshInProgress">
                     <i class="bi bi-arrow-clockwise"></i> Refresh
                 </button>
                 <button class="btn btn-primary btn-sm" @onclick="() => showPullForm = true">
                     <i class="bi bi-cloud-arrow-down"></i> Pull Image
                 </button>
+                @if (!string.IsNullOrWhiteSpace(refreshStatus))
+                {
+                    <span class="small @(refreshStatusIsError ? "text-danger" : refreshInProgress ? "text-muted" : "text-success")">
+                        @if (refreshInProgress)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                        }
+                        @refreshStatus
+                    </span>
+                }
             </div>
 
             @* Pull progress indicator *@
@@ -311,12 +321,18 @@
     private double pullProgress;
     private string pullStatus = "";
 
+    // Refresh progress
+    private bool refreshInProgress;
+    private bool refreshStatusIsError;
+    private string refreshStatus = "";
+
     protected override async Task OnInitializedAsync()
     {
         hosts = (await Store.Query<Host>().ToList()).ToList();
         registries = (await Store.Query<RegistryCredential>().ToList()).ToList();
 
         // TODO: Replace AgentHub static events with Orleans stream subscriptions
+        AgentHub.OnImageRefreshStatusReceived += HandleRefreshStatus;
         AgentHub.OnImagePullProgressReceived += HandlePullProgress;
         AgentHub.OnImagePullCompleteReceived += HandlePullComplete;
         AgentHub.OnImageDeletedReceived += HandleImageDeleted;
@@ -331,9 +347,12 @@
     private async Task SelectHost(string hostId)
     {
         selectedHostId = hostId;
+        refreshInProgress = false;
+        refreshStatusIsError = false;
+        refreshStatus = "";
         if (string.IsNullOrEmpty(selectedHostId)) return;
         await LoadImages();
-        await RequestImageRefresh();
+        await RefreshImages();
     }
 
     private async Task LoadImages()
@@ -346,19 +365,39 @@
 
     private async Task RefreshImages()
     {
+        if (string.IsNullOrEmpty(selectedHostId))
+            return;
+
+        refreshInProgress = true;
+        refreshStatusIsError = false;
+        var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
+        refreshStatus = host == null
+            ? "Requesting image refresh..."
+            : $"Requesting image refresh from {host.Label}...";
+
         await RequestImageRefresh();
-        await Task.Delay(2000); // Give agent time to respond
-        await LoadImages();
     }
 
     private async Task RequestImageRefresh()
     {
         var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
-        if (host == null) return;
+        if (host == null)
+        {
+            refreshInProgress = false;
+            refreshStatusIsError = true;
+            refreshStatus = "Select a host to refresh images.";
+            return;
+        }
 
         var agent = AgentHub.GetConnectedAgents().Values
             .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-        if (agent == null) return;
+        if (agent == null)
+        {
+            refreshInProgress = false;
+            refreshStatusIsError = true;
+            refreshStatus = $"{host.Label} is not currently connected.";
+            return;
+        }
 
         await HubContext.Clients.Client(agent.ConnectionId)
             .ListImages(new ListImagesCommand());
@@ -421,6 +460,7 @@
 
     private void HandlePullProgress(ImagePullProgressEvent evt)
     {
+        if (!IsSelectedHostEvent(evt.HostId)) return;
         pullProgress = evt.ProgressPercent;
         pullStatus = evt.Status ?? $"{FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}";
         InvokeAsync(StateHasChanged);
@@ -428,24 +468,47 @@
 
     private void HandlePullComplete(ImagePullCompleteEvent evt)
     {
+        if (!IsSelectedHostEvent(evt.HostId)) return;
         pullInProgress = false;
         pullStatus = evt.Success ? "Complete!" : $"Failed: {evt.Error}";
         InvokeAsync(async () =>
         {
-            await Task.Delay(1000);
-            await LoadImages();
+            await RefreshImages();
             StateHasChanged();
         });
     }
 
     private void HandleImageDeleted(ImageDeletedEvent evt)
     {
+        if (!IsSelectedHostEvent(evt.HostId)) return;
         InvokeAsync(async () =>
         {
-            await LoadImages();
+            await RefreshImages();
             StateHasChanged();
         });
     }
+
+    private void HandleRefreshStatus(ImageRefreshStatusEvent evt)
+    {
+        if (!IsSelectedHostEvent(evt.HostId)) return;
+
+        refreshInProgress = !evt.IsComplete;
+        refreshStatusIsError = !evt.Success;
+        refreshStatus = evt.Message;
+
+        InvokeAsync(async () =>
+        {
+            if (evt.IsComplete)
+                await LoadImages();
+
+            StateHasChanged();
+        });
+    }
+
+    private bool IsSelectedHostEvent(string? hostId) =>
+        !string.IsNullOrWhiteSpace(selectedHostId) &&
+        !string.IsNullOrWhiteSpace(hostId) &&
+        string.Equals(selectedHostId, hostId, StringComparison.OrdinalIgnoreCase);
 
     private static string FormatSize(long bytes)
     {
@@ -536,6 +599,7 @@
 
     public void Dispose()
     {
+        AgentHub.OnImageRefreshStatusReceived -= HandleRefreshStatus;
         AgentHub.OnImagePullProgressReceived -= HandlePullProgress;
         AgentHub.OnImagePullCompleteReceived -= HandlePullComplete;
         AgentHub.OnImageDeletedReceived -= HandleImageDeleted;

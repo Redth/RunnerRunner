@@ -2,9 +2,11 @@
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Services
 @inject IDocumentStore Store
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
+@inject CapacityPlanningService CapacityService
 
 <PageTitle>Provisioning Rules - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -14,7 +16,15 @@
     </div>
 </SectionContent>
 
-<button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Rule</button>
+<div class="mb-3 d-flex flex-wrap gap-2">
+    <button class="btn btn-primary" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Rule</button>
+    <a class="btn btn-outline-secondary" href="/webhook-events"><i class="bi bi-clock-history me-1"></i> View Event Audit</a>
+</div>
+
+<div class="alert alert-info py-2 d-flex align-items-center gap-2 mb-3" style="font-size: 0.9rem;">
+    <i class="bi bi-info-circle"></i>
+    <span>Static, scale-set, and webhook-triggered runners are all managed here. Effective dispatch follows <strong>FIFO → rule cap → profile per-host cap → host backend slots</strong>.</span>
+</div>
 
 @if (showForm)
 {
@@ -27,46 +37,41 @@
                     <label class="form-label">Name</label>
                     <input class="form-control" @bind="editRule.Name" />
                 </div>
-                <div class="col-md-4 mb-3">
+                <div class="col-md-5 mb-3">
                     <label class="form-label">Description</label>
                     <input class="form-control" @bind="editRule.Description" />
                 </div>
-                <div class="col-md-2 mb-3">
+                <div class="col-md-3 mb-3">
                     <label class="form-label">Type</label>
                     <select class="form-select" @bind="editRule.Type" @bind:after="OnTypeChanged">
-                        @foreach (var t in Enum.GetValues<ProvisioningType>())
+                        @foreach (var t in SupportedProvisioningTypes)
                         {
                             <option value="@t">@t</option>
                         }
                     </select>
                 </div>
-                <div class="col-md-2 mb-3">
-                    <label class="form-label">Profile</label>
-                    <select class="form-select" @bind="editRule.ProfileId">
-                        <option value="">— Select —</option>
-                        @foreach (var p in profiles)
-                        {
-                            <option value="@p.Id">@p.Name</option>
-                        }
-                    </select>
-                </div>
             </div>
+
+            @if (!string.IsNullOrWhiteSpace(formError))
+            {
+                <div class="alert alert-danger py-2">@formError</div>
+            }
 
             @* --- Static fields --- *@
             @if (editRule.Type == ProvisioningType.Static)
             {
                 <div class="row">
-                    <div class="col-md-3 mb-3">
+                    <div class="col-md-6 mb-3">
                         <label class="form-label">Desired Count</label>
                         <input type="number" class="form-control" @bind="editRule.DesiredCount" min="1" />
                     </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label">Target Host</label>
-                        <select class="form-select" @bind="editRule.TargetHostId">
-                            <option value="">Auto (by labels)</option>
-                            @foreach (var h in hosts)
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Runner Profile</label>
+                        <select class="form-select" @bind="editRule.ProfileId">
+                            <option value="">— Select —</option>
+                            @foreach (var p in profiles)
                             {
-                                <option value="@h.Id">@h.Label</option>
+                                <option value="@p.Id">@p.Name</option>
                             }
                         </select>
                     </div>
@@ -91,12 +96,12 @@
                         <input type="number" class="form-control" @bind="editRule.ScaleDownDelaySeconds" min="0" />
                     </div>
                     <div class="col-md-3 mb-3">
-                        <label class="form-label">Target Host</label>
-                        <select class="form-select" @bind="editRule.TargetHostId">
-                            <option value="">Auto (by labels)</option>
-                            @foreach (var h in hosts)
+                        <label class="form-label">Runner Profile</label>
+                        <select class="form-select" @bind="editRule.ProfileId">
+                            <option value="">— Select —</option>
+                            @foreach (var p in profiles)
                             {
-                                <option value="@h.Id">@h.Label</option>
+                                <option value="@p.Id">@p.Name</option>
                             }
                         </select>
                     </div>
@@ -149,16 +154,11 @@
                         <label class="form-label">Cooldown Seconds</label>
                         <input type="number" class="form-control" @bind="editRule.CooldownSeconds" min="0" />
                     </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Default Profile</label>
-                        <select class="form-select" @bind="editRule.DefaultProfileId">
-                            <option value="">— None —</option>
-                            @foreach (var p in profiles)
-                            {
-                                <option value="@p.Id">@p.Name</option>
-                            }
-                        </select>
-                    </div>
+                </div>
+
+                <div class="alert alert-secondary py-2">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Webhook rules now select runners <strong>only</strong> through the mappings below. Use <code>*</code> as a catch-all, or patterns like <code>mac*</code> to match labels such as <code>mac</code> and <code>macOS</code>.
                 </div>
 
                 @* Allowed Orgs *@
@@ -198,12 +198,12 @@
                 </div>
 
                 @* Label → Profile Mappings *@
-                <h6 class="mt-3">Label → Profile Mappings</h6>
-                <p class="text-muted small">Priority-ordered label-to-profile mappings. First match wins.</p>
+                <h6 class="mt-3">Job Label → Profile Mappings</h6>
+                <p class="text-muted small">Priority-ordered workflow-job label patterns. First matching row wins.</p>
                 <table class="table table-sm table-bordered">
                     <thead>
                         <tr>
-                            <th>Required Labels</th>
+                            <th>Required Job Labels</th>
                             <th>Profile</th>
                             <th style="width:100px;">Priority</th>
                             <th style="width:80px;"></th>
@@ -226,7 +226,7 @@
                                         }
                                     </div>
                                     <div class="input-group input-group-sm" style="max-width: 250px;">
-                                        <input class="form-control" placeholder="Add label..." @bind="mappingLabelInputs[idx]"
+                                        <input class="form-control" placeholder="Add label or pattern..." @bind="mappingLabelInputs[idx]"
                                                @onkeydown="(e) => OnMappingLabelKeyDown(e, idx)" />
                                         <button class="btn btn-outline-primary" type="button" @onclick="() => AddMappingLabel(idx)"><i class="bi bi-plus-lg"></i></button>
                                     </div>
@@ -254,40 +254,22 @@
 
                 <div class="alert alert-info py-2 d-flex align-items-center gap-2" style="font-size: 0.85rem;">
                     <i class="bi bi-link-45deg"></i>
-                    <span><strong>Webhook URL:</strong> <code>@(Navigation.BaseUri.TrimEnd('/'))api/webhooks/@(editRule.Provider.ToString().ToLowerInvariant())</code></span>
-                </div>
-            }
-
-            @* --- Scheduled fields --- *@
-            @if (editRule.Type == ProvisioningType.Scheduled)
-            {
-                <div class="row">
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label">Cron Expression</label>
-                        <input class="form-control" @bind="editRule.CronExpression" placeholder="0 */5 * * *" />
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Desired Count</label>
-                        <input type="number" class="form-control" @bind="editRule.DesiredCount" min="1" />
-                    </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label">Target Host</label>
-                        <select class="form-select" @bind="editRule.TargetHostId">
-                            <option value="">Auto (by labels)</option>
-                            @foreach (var h in hosts)
-                            {
-                                <option value="@h.Id">@h.Label</option>
-                            }
-                        </select>
-                    </div>
+                    @if (TryGetWebhookEndpoint(editRule.Provider, out var endpoint))
+                    {
+                        <span><strong>Webhook URL:</strong> <code>@endpoint</code></span>
+                    }
+                    else
+                    {
+                        <span><strong>Webhook ingress:</strong> not yet available for @editRule.Provider.</span>
+                    }
                 </div>
             }
 
             @* --- Common fields (all types) --- *@
-            <h6 class="mt-3">Host Targeting</h6>
+            <h6 class="mt-3">Host Capabilities</h6>
             <div class="row">
                 <div class="col-md-6 mb-3">
-                    <label class="form-label">Required Host Labels</label>
+                    <label class="form-label">Required Host Capabilities</label>
                     <div class="d-flex flex-wrap gap-1 mb-2">
                         @foreach (var kvp in editHostLabels)
                         {
@@ -299,7 +281,7 @@
                         }
                     </div>
                     <div class="input-group input-group-sm" style="max-width: 350px;">
-                        <input class="form-control" placeholder="key=value" @bind="newHostLabelInput" @onkeydown="OnHostLabelKeyDown" />
+                        <input class="form-control" placeholder="key=value capability" @bind="newHostLabelInput" @onkeydown="OnHostLabelKeyDown" />
                         <button class="btn btn-outline-secondary" type="button" @onclick="AddHostLabel"><i class="bi bi-plus-lg"></i></button>
                     </div>
                 </div>
@@ -323,61 +305,83 @@
 
             <div>
                 <button class="btn btn-success me-2" @onclick="SaveRule">Save</button>
-                <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
+                <button class="btn btn-secondary" @onclick="CancelEdit">Cancel</button>
             </div>
         </div>
     </div>
 }
 
-<div class="table-responsive">
-<table class="table table-striped resizable-table">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Profile</th>
-            <th>Scale</th>
-            <th>Target</th>
-            <th>Status</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        @foreach (var rule in rules)
-        {
+@if (!showForm)
+{
+    <div class="table-responsive">
+    <table class="table table-striped resizable-table">
+        <thead>
             <tr>
-                <td>
-                    <strong>@rule.Name</strong>
-                    @if (!string.IsNullOrWhiteSpace(rule.Description))
-                    {
-                        <br /><small class="text-muted">@rule.Description</small>
-                    }
-                </td>
-                <td>
-                    <span class="badge @GetTypeBadgeClass(rule.Type)">@rule.Type</span>
-                </td>
-                <td>@GetProfileName(rule.ProfileId)</td>
-                <td>@GetScaleDisplay(rule)</td>
-                <td>@GetTargetDisplay(rule)</td>
-                <td>
-                    @if (rule.Enabled)
-                    {
-                        <span class="badge bg-success">Enabled</span>
-                    }
-                    else
-                    {
-                        <span class="badge bg-danger">Disabled</span>
-                    }
-                </td>
-                <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditRule(rule)"><i class="bi bi-pencil-square"></i> Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteRule(rule)"><i class="bi bi-trash3"></i> Delete</button>
-                </td>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Profile(s)</th>
+                <th>Scale</th>
+                <th>Target</th>
+                <th>Status</th>
+                <th>Actions</th>
             </tr>
-        }
-    </tbody>
-</table>
-</div>
+        </thead>
+        <tbody>
+            @foreach (var rule in rules)
+            {
+                <tr>
+                    <td>
+                        <strong>@rule.Name</strong>
+                        @if (!string.IsNullOrWhiteSpace(rule.Description))
+                        {
+                            <br /><small class="text-muted">@rule.Description</small>
+                        }
+                    </td>
+                    <td>
+                        <span class="badge @GetTypeBadgeClass(rule.Type)">@rule.Type</span>
+                    </td>
+                    <td>
+                        @GetProfileDisplay(rule)
+                        @if (capacitySnapshot.Rules.TryGetValue(rule.Id, out var ruleCapacity) && ruleCapacity.MappedProfiles.Any())
+                        {
+                            <div class="small text-muted mt-1">
+                                @foreach (var mapped in ruleCapacity.MappedProfiles.Take(2))
+                                {
+                                    <div>@mapped.ProfileName: @mapped.ActiveNow active · @mapped.AvailableNow/@mapped.EffectivePoolLimit available now</div>
+                                }
+                            </div>
+                        }
+                    </td>
+                    <td>
+                        @GetScaleDisplay(rule)
+                        @if (capacitySnapshot.Rules.TryGetValue(rule.Id, out var liveCapacity))
+                        {
+                            <div class="small text-muted mt-1">
+                                Live: @liveCapacity.ActiveCount/@liveCapacity.ConfiguredLimit active · @liveCapacity.RemainingSlots slot(s) open
+                            </div>
+                        }
+                    </td>
+                    <td>@GetTargetDisplay(rule)</td>
+                    <td>
+                        @if (rule.Enabled)
+                        {
+                            <span class="badge bg-success">Enabled</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-danger">Disabled</span>
+                        }
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditRule(rule)"><i class="bi bi-pencil-square"></i> Edit</button>
+                        <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteRule(rule)"><i class="bi bi-trash3"></i> Delete</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    </div>
+}
 
 @code {
     private List<ProvisioningRule> rules = [];
@@ -385,10 +389,18 @@
     private List<Host> hosts = [];
     private List<ProviderCredential> credentials = [];
     private List<string> hostGroups = [];
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
 
     private ProvisioningRule editRule = new() { Name = "" };
     private bool showForm;
     private bool isEditing;
+    private string? formError;
+    private static readonly ProvisioningType[] SupportedProvisioningTypes =
+    [
+        ProvisioningType.Static,
+        ProvisioningType.ScaleSet,
+        ProvisioningType.Webhook
+    ];
 
     // Chip list state
     private List<string> editAllowedOrgs = [];
@@ -404,10 +416,16 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
         rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         hosts = (await Store.Query<Host>().ToList()).ToList();
         credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
+        capacitySnapshot = await CapacityService.GetSnapshotAsync();
 
         hostGroups = hosts
             .Where(h => !string.IsNullOrWhiteSpace(h.GroupId))
@@ -427,7 +445,7 @@
 
     private void EditRule(ProvisioningRule rule)
     {
-        editRule = rule;
+        editRule = CloneRule(rule);
         editAllowedOrgs = [.. rule.AllowedOrgs];
         editAllowedRepos = [.. rule.AllowedRepos];
         editHostLabels = new Dictionary<string, string>(rule.RequiredHostLabels);
@@ -447,6 +465,7 @@
 
     private void ResetFormState()
     {
+        formError = null;
         editAllowedOrgs = [];
         editAllowedRepos = [];
         editHostLabels = new();
@@ -459,10 +478,57 @@
 
     private async Task SaveRule()
     {
+        formError = null;
+        editRule.Name = (editRule.Name ?? "").Trim();
+        editRule.Description = string.IsNullOrWhiteSpace(editRule.Description) ? null : editRule.Description.Trim();
+
+        if (string.IsNullOrWhiteSpace(editRule.Name))
+        {
+            formError = "Rule name is required.";
+            return;
+        }
+
         editRule.AllowedOrgs = [.. editAllowedOrgs];
         editRule.AllowedRepos = [.. editAllowedRepos];
         editRule.RequiredHostLabels = new Dictionary<string, string>(editHostLabels);
-        editRule.LabelMappings = [.. editMappings];
+        editRule.TargetHostId = null;
+
+        if (editRule.Type == ProvisioningType.Webhook)
+        {
+            editRule.ProfileId = "";
+            editRule.DefaultProfileId = null;
+            editRule.LabelMappings = editMappings
+                .Where(m => !string.IsNullOrWhiteSpace(m.ProfileId)
+                    && m.RequiredLabels.Any(label => !string.IsNullOrWhiteSpace(label)))
+                .Select(m => new LabelProfileMapping
+                {
+                    ProfileId = m.ProfileId.Trim(),
+                    Priority = m.Priority,
+                    RequiredLabels = [.. m.RequiredLabels
+                        .Where(label => !string.IsNullOrWhiteSpace(label))
+                        .Select(label => label.Trim())]
+                })
+                .OrderByDescending(m => m.Priority)
+                .ToList();
+
+            if (editRule.LabelMappings.Count == 0)
+            {
+                formError = "Webhook rules require at least one label-to-profile mapping. Use '*' for a catch-all mapping.";
+                return;
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(editRule.ProfileId))
+            {
+                formError = "Please select a runner profile.";
+                return;
+            }
+
+            editRule.DefaultProfileId = null;
+            editRule.LabelMappings = [];
+        }
+
         editRule.UpdatedAt = DateTime.UtcNow;
 
         if (isEditing)
@@ -470,7 +536,7 @@
         else
             await Store.Insert(editRule);
 
-        rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+        await LoadDataAsync();
         showForm = false;
     }
 
@@ -480,11 +546,21 @@
         if (confirmed)
         {
             await Store.Remove<ProvisioningRule>(rule.Id);
-            rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+            await LoadDataAsync();
         }
     }
 
-    private void OnTypeChanged() => StateHasChanged();
+    private void CancelEdit()
+    {
+        showForm = false;
+        formError = null;
+    }
+
+    private void OnTypeChanged()
+    {
+        formError = null;
+        StateHasChanged();
+    }
     private void OnProviderChanged() => StateHasChanged();
 
     // --- Org chip helpers ---
@@ -590,6 +666,25 @@
     private string GetProfileName(string? profileId) =>
         profiles.FirstOrDefault(p => p.Id == profileId)?.Name ?? "—";
 
+    private string GetProfileDisplay(ProvisioningRule rule)
+    {
+        if (rule.Type != ProvisioningType.Webhook)
+            return GetProfileName(rule.ProfileId);
+
+        var mappedNames = rule.LabelMappings
+            .Select(m => GetProfileName(m.ProfileId))
+            .Where(name => name != "—")
+            .Distinct()
+            .ToList();
+
+        return mappedNames.Count switch
+        {
+            0 => "Mappings required",
+            <= 2 => string.Join(", ", mappedNames),
+            _ => $"{mappedNames.Count} mapped profiles"
+        };
+    }
+
     private string GetScaleDisplay(ProvisioningRule rule) => rule.Type switch
     {
         ProvisioningType.Static => $"×{rule.DesiredCount}",
@@ -603,13 +698,67 @@
 
     private string GetTargetDisplay(ProvisioningRule rule)
     {
+        var targetParts = new List<string>();
+
         if (!string.IsNullOrWhiteSpace(rule.TargetHostId))
         {
             var host = hosts.FirstOrDefault(h => h.Id == rule.TargetHostId);
-            return host?.Label ?? rule.TargetHostId;
+            targetParts.Add($"Host: {host?.Label ?? rule.TargetHostId}");
         }
+
         if (!string.IsNullOrWhiteSpace(rule.TargetGroupId))
-            return $"Group: {rule.TargetGroupId}";
-        return "Auto";
+            targetParts.Add($"Group: {rule.TargetGroupId}");
+
+        if (rule.RequiredHostLabels.Count > 0)
+            targetParts.Add(string.Join(", ", rule.RequiredHostLabels.Select(kvp => $"{kvp.Key}={kvp.Value}")));
+
+        return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Auto";
+    }
+
+    private static ProvisioningRule CloneRule(ProvisioningRule rule) => new()
+    {
+        Id = rule.Id,
+        Name = rule.Name,
+        Description = rule.Description,
+        ProfileId = rule.ProfileId,
+        Type = rule.Type,
+        Enabled = rule.Enabled,
+        DesiredCount = rule.DesiredCount,
+        TargetHostId = rule.TargetHostId,
+        MinReady = rule.MinReady,
+        MaxInstances = rule.MaxInstances,
+        ScaleDownDelaySeconds = rule.ScaleDownDelaySeconds,
+        WebhookSecret = rule.WebhookSecret,
+        AllowedOrgs = [.. rule.AllowedOrgs],
+        AllowedRepos = [.. rule.AllowedRepos],
+        LabelMappings = [.. rule.LabelMappings.Select(m => new LabelProfileMapping
+        {
+            RequiredLabels = [.. m.RequiredLabels],
+            ProfileId = m.ProfileId,
+            Priority = m.Priority
+        })],
+        DefaultProfileId = rule.DefaultProfileId,
+        MaxConcurrent = rule.MaxConcurrent,
+        CooldownSeconds = rule.CooldownSeconds,
+        Provider = rule.Provider,
+        ProviderCredentialId = rule.ProviderCredentialId,
+        RequiredHostLabels = new Dictionary<string, string>(rule.RequiredHostLabels),
+        TargetGroupId = rule.TargetGroupId,
+        CronExpression = rule.CronExpression,
+        CreatedAt = rule.CreatedAt,
+        UpdatedAt = rule.UpdatedAt
+    };
+
+    private bool TryGetWebhookEndpoint(RunnerProvider provider, out string endpoint)
+    {
+        var baseUri = Navigation.BaseUri.TrimEnd('/');
+        endpoint = provider switch
+        {
+            RunnerProvider.GitHubActions => $"{baseUri}/api/webhooks/github",
+            RunnerProvider.GiteaActions => $"{baseUri}/api/webhooks/gitea",
+            _ => ""
+        };
+
+        return !string.IsNullOrWhiteSpace(endpoint);
     }
 }

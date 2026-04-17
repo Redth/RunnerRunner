@@ -22,6 +22,7 @@ public class SignalRConnection : IAsyncDisposable
     public event Func<DeleteImageCommand, Task>? OnDeleteImage;
     public event Func<LoginRegistryCommand, Task>? OnLoginRegistry;
     public event Func<Task>? OnGetHostEnvironment;
+    public event Func<GetHostLogsCommand, Task>? OnGetHostLogs;
     public event Func<GetRunnerLogsCommand, Task>? OnGetRunnerLogs;
     public event Func<CleanupOrphanCommand, Task>? OnCleanupOrphan;
     public event Func<Task>? OnReconnected;
@@ -36,8 +37,12 @@ public class SignalRConnection : IAsyncDisposable
 
     public async Task ConnectAsync(CancellationToken ct)
     {
-        var serverUrl = _configuration["RunnerRunner:ServerUrl"]
-            ?? throw new InvalidOperationException("RunnerRunner:ServerUrl configuration is required");
+        var serverUrl = _configuration["RunnerRunner:ServerUrl"];
+        if (string.IsNullOrWhiteSpace(serverUrl))
+        {
+            _logger.LogWarning("RunnerRunner:ServerUrl is not configured; host execution bridge will stay offline");
+            return;
+        }
 
         var hubUrl = $"{serverUrl.TrimEnd('/')}/hubs/agent";
 
@@ -119,6 +124,11 @@ public class SignalRConnection : IAsyncDisposable
             if (OnGetHostEnvironment != null) await OnGetHostEnvironment();
         });
 
+        connection.On<GetHostLogsCommand>("GetHostLogs", async cmd =>
+        {
+            if (OnGetHostLogs != null) await OnGetHostLogs(cmd);
+        });
+
         connection.On<GetRunnerLogsCommand>("GetRunnerLogs", async cmd =>
         {
             if (OnGetRunnerLogs != null) await OnGetRunnerLogs(cmd);
@@ -186,6 +196,12 @@ public class SignalRConnection : IAsyncDisposable
             await _connection.InvokeAsync("ImageListResponse", evt);
     }
 
+    public async Task SendImageRefreshStatus(ImageRefreshStatusEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("ImageRefreshStatus", evt);
+    }
+
     public async Task SendImagePullProgress(ImagePullProgressEvent evt)
     {
         if (_connection is not null)
@@ -220,6 +236,12 @@ public class SignalRConnection : IAsyncDisposable
     {
         if (_connection is not null)
             await _connection.InvokeAsync("RunnerLogsResponse", evt);
+    }
+
+    public async Task SendHostLogs(HostLogsEvent evt)
+    {
+        if (_connection is not null)
+            await _connection.InvokeAsync("HostLogsResponse", evt);
     }
 
     public async Task SendReconciliation(ReconciliationReport report)

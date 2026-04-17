@@ -174,6 +174,22 @@ JIT config generated via GitHub `generate-jitconfig` API or Gitea registration t
 
 Then `$VAR` / `${VAR}` expansion runs (3-pass chaining).
 
+## Capacity and Limit Roll-up
+
+RunnerRunner applies concurrency and capacity limits in a fixed order so operators can predict why work is waiting:
+
+1. **FIFO queue fairness** — older queued webhook jobs in the same provisioning lane keep newer jobs from jumping ahead.
+2. **Provisioning rule capacity** — `MaxConcurrent` for webhook rules, `MaxInstances` for scale sets, and `DesiredCount` for static rules define the rule-level ceiling.
+3. **Runner profile capacity** — `RunnerProfile.MaxParallelPerHost` limits how many runners of that profile can run on any one host at the same time.
+4. **Host backend capacity** — `Host.MaxDockerContainers`, `Host.MaxTartVMs`, and `Host.MaxNativeProcesses` are the final per-host backend slot limits.
+
+The **effective available capacity** for a queued job is the smallest remaining slot count across all applicable layers after host matching is complete. In practice, a rule might allow 10 concurrent runners, but if the mapped profile is capped at 1 per host and only 3 matching hosts are available, the real ceiling is 3 until the host pool grows.
+
+Operational notes:
+
+- A host backend limit of **0** means that backend is disabled on that host.
+- The web UI now surfaces the current blocker as **FIFO**, **Rule**, **Profile**, or **Host** on the Events, Provisioning Rules, Hosts, Runners, and Profiles pages.
+
 ## Web UI (14 pages)
 
 | Page | Route | Purpose |

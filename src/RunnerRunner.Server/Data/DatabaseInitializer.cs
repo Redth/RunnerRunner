@@ -31,6 +31,9 @@ public static class DatabaseInitializer
         await EnsureTable<WebhookEvent>(store, () => new WebhookEvent { Id = "__init__" });
         await EnsureTable<WebhookBinding>(store, () => new WebhookBinding { Id = "__init__", Name = "__init__" });
         await EnsureTable<ProvisioningRule>(store, () => new ProvisioningRule { Id = "__init__", Name = "__init__" });
+
+        await MigrateLegacyWebhookBindings(store);
+        await CleanupLegacyRunnerInstances(store);
     }
 
     private static async Task EnsureTable<T>(IDocumentStore store, Func<T> createSentinel) where T : class
@@ -53,6 +56,69 @@ public static class DatabaseInitializer
             {
                 // Table might have been created by another instance
             }
+        }
+    }
+
+    private static async Task CleanupLegacyRunnerInstances(IDocumentStore store)
+    {
+        var staleInstances = (await store.Query<RunnerInstance>().ToList())
+            .Where(x =>
+                string.IsNullOrWhiteSpace(x.ProfileId) ||
+                string.IsNullOrWhiteSpace(x.HostId) ||
+                string.IsNullOrWhiteSpace(x.RunnerName))
+            .ToList();
+
+        foreach (var instance in staleInstances)
+            await store.Remove<RunnerInstance>(instance.Id);
+    }
+
+    private static async Task MigrateLegacyWebhookBindings(IDocumentStore store)
+    {
+        var legacyBindings = (await store.Query<WebhookBinding>().ToList()).ToList();
+        if (legacyBindings.Count == 0)
+            return;
+
+        var existingRules = (await store.Query<ProvisioningRule>().ToList()).ToList();
+
+        foreach (var binding in legacyBindings)
+        {
+            var alreadyMigrated = existingRules.Any(rule =>
+                rule.Type == ProvisioningType.Webhook &&
+                string.Equals(rule.Name, binding.Name, StringComparison.OrdinalIgnoreCase) &&
+                rule.Provider == binding.Provider &&
+                string.Equals(rule.ProviderCredentialId ?? "", binding.ProviderCredentialId ?? "", StringComparison.Ordinal));
+
+            if (alreadyMigrated)
+                continue;
+
+            var defaultProfileId = binding.DefaultProfileId
+                ?? binding.Mappings.OrderByDescending(x => x.Priority)
+                    .Select(x => x.ProfileId)
+                    .FirstOrDefault()
+                ?? "";
+
+            var migratedRule = new ProvisioningRule
+            {
+                Name = binding.Name,
+                Description = "Migrated from legacy webhook binding",
+                Type = ProvisioningType.Webhook,
+                ProfileId = defaultProfileId,
+                DefaultProfileId = binding.DefaultProfileId,
+                LabelMappings = [.. binding.Mappings],
+                AllowedOrgs = [.. binding.AllowedOrgs],
+                AllowedRepos = [.. binding.AllowedRepos],
+                WebhookSecret = binding.WebhookSecret,
+                MaxConcurrent = binding.MaxConcurrentJobs,
+                CooldownSeconds = binding.CooldownSeconds,
+                Provider = binding.Provider,
+                ProviderCredentialId = binding.ProviderCredentialId,
+                Enabled = binding.Enabled,
+                CreatedAt = binding.CreatedAt,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            await store.Insert(migratedRule);
+            existingRules.Add(migratedRule);
         }
     }
 }

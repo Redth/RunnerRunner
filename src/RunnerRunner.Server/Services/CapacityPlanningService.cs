@@ -1,0 +1,753 @@
+using RunnerRunner.Core.Models;
+using Shiny.DocumentDb;
+using Host = RunnerRunner.Core.Models.Host;
+
+namespace RunnerRunner.Server.Services;
+
+public enum CapacityBlockerKind
+{
+    None,
+    Fifo,
+    ProvisioningRule,
+    Profile,
+    Host,
+    Matching,
+    Configuration
+}
+
+public sealed class CapacityCounter
+{
+    public CapacityCounter(int used, int limit)
+    {
+        Used = Math.Max(0, used);
+        Limit = Math.Max(0, limit);
+    }
+
+    public int Used { get; }
+    public int Limit { get; }
+    public int Remaining => Math.Max(Limit - Used, 0);
+    public bool IsDisabled => Limit <= 0;
+    public bool IsSaturated => IsDisabled || Used >= Limit;
+    public string Summary => IsDisabled ? "disabled" : $"{Used}/{Limit}";
+}
+
+public sealed record ProfileHostUsage(
+    string HostId,
+    string HostLabel,
+    int Used,
+    int Limit)
+{
+    public int Remaining => Math.Max(Limit - Used, 0);
+    public bool IsSaturated => Used >= Limit;
+    public string Summary => $"{Used}/{Limit}";
+}
+
+public sealed record HostProfileUsage(
+    string ProfileId,
+    string ProfileName,
+    int Used,
+    int Limit)
+{
+    public int Remaining => Math.Max(Limit - Used, 0);
+    public bool IsSaturated => Used >= Limit;
+    public string Summary => $"{Used}/{Limit}";
+}
+
+public sealed class HostCapacityView
+{
+    public required string HostId { get; init; }
+    public required string HostLabel { get; init; }
+    public int ActiveInstances { get; init; }
+    public Dictionary<ExecutionBackend, CapacityCounter> BackendUsage { get; init; } = new();
+    public List<HostProfileUsage> ProfileUsage { get; init; } = [];
+}
+
+public sealed class RuleProfileCapacityView
+{
+    public required string ProfileId { get; init; }
+    public required string ProfileName { get; init; }
+    public int PerHostLimit { get; init; }
+    public int MatchingHosts { get; init; }
+    public int SaturatedHosts { get; init; }
+    public int EffectivePoolLimit { get; init; }
+    public int AvailableNow { get; init; }
+    public int ActiveNow { get; init; }
+}
+
+public sealed class RuleCapacityView
+{
+    public required string RuleId { get; init; }
+    public required string RuleName { get; init; }
+    public int ConfiguredLimit { get; init; }
+    public int ActiveCount { get; init; }
+    public int RemainingSlots { get; init; }
+    public List<RuleProfileCapacityView> MappedProfiles { get; init; } = [];
+}
+
+public sealed class ProfileCapacityView
+{
+    public required string ProfileId { get; init; }
+    public required string ProfileName { get; init; }
+    public int PerHostLimit { get; init; }
+    public int TotalActive { get; init; }
+    public List<ProfileHostUsage> HostUsage { get; init; } = [];
+    public int SaturatedHostCount => HostUsage.Count(h => h.IsSaturated);
+}
+
+public sealed class HostCandidateView
+{
+    public required string HostId { get; init; }
+    public required string HostLabel { get; init; }
+    public required CapacityCounter BackendCapacity { get; init; }
+    public required ProfileHostUsage ProfileUsage { get; init; }
+    public int TotalHostLoad { get; init; }
+    public bool CanRunNow { get; init; }
+    public CapacityBlockerKind BlockedBy { get; init; }
+    public string Detail { get; init; } = "";
+}
+
+public sealed class HostSelectionAnalysis
+{
+    public Host? SelectedHost { get; init; }
+    public bool CapacityBlocked { get; init; }
+    public CapacityBlockerKind BlockedBy { get; init; }
+    public string Reason { get; init; } = "";
+    public List<HostCandidateView> Candidates { get; init; } = [];
+}
+
+public sealed class EventCapacityView
+{
+    public CapacityBlockerKind BlockedBy { get; init; }
+    public string Summary { get; init; } = "";
+    public List<string> Details { get; init; } = [];
+}
+
+public sealed class CapacitySnapshot
+{
+    public static CapacitySnapshot Empty { get; } = new();
+
+    public Dictionary<string, HostCapacityView> Hosts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, RuleCapacityView> Rules { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, ProfileCapacityView> Profiles { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, EventCapacityView> Events { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class CapacityPlanningService
+{
+    private readonly IDocumentStore _store;
+
+    public CapacityPlanningService(IDocumentStore store)
+    {
+        _store = store;
+    }
+
+    public async Task<CapacitySnapshot> GetSnapshotAsync()
+    {
+        var hosts = (await _store.Query<Host>().ToList()).ToList();
+        var profiles = (await _store.Query<RunnerProfile>().ToList()).ToList();
+        var rules = (await _store.Query<ProvisioningRule>().ToList()).ToList();
+        var instances = (await _store.Query<RunnerInstance>().ToList()).ToList();
+        var events = (await _store.Query<WebhookEvent>().ToList()).ToList();
+
+        return BuildSnapshot(hosts, profiles, rules, instances, events);
+    }
+
+    public static CapacitySnapshot BuildSnapshot(
+        IReadOnlyCollection<Host> hosts,
+        IReadOnlyCollection<RunnerProfile> profiles,
+        IReadOnlyCollection<ProvisioningRule> rules,
+        IReadOnlyCollection<RunnerInstance> instances,
+        IReadOnlyCollection<WebhookEvent> events)
+    {
+        var profilesById = profiles.ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        var rulesById = rules.ToDictionary(r => r.Id, r => r, StringComparer.OrdinalIgnoreCase);
+        var activeInstances = instances.Where(IsCapacityConsuming).ToList();
+
+        var hostViews = hosts.ToDictionary(
+            host => host.Id,
+            host => BuildHostView(host, activeInstances, profilesById),
+            StringComparer.OrdinalIgnoreCase);
+
+        var profileViews = profiles.ToDictionary(
+            profile => profile.Id,
+            profile => BuildProfileView(profile, hosts, activeInstances),
+            StringComparer.OrdinalIgnoreCase);
+
+        var ruleViews = rules.ToDictionary(
+            rule => rule.Id,
+            rule => EvaluateRuleCapacity(rule, hosts, profilesById, activeInstances, events),
+            StringComparer.OrdinalIgnoreCase);
+
+        var eventViews = events.ToDictionary(
+            evt => evt.Id,
+            evt => ExplainEvent(evt, hosts, profilesById, rulesById, activeInstances, events),
+            StringComparer.OrdinalIgnoreCase);
+
+        return new CapacitySnapshot
+        {
+            Hosts = hostViews,
+            Profiles = profileViews,
+            Rules = ruleViews,
+            Events = eventViews
+        };
+    }
+
+    public static bool IsRunnerRunnerManaged(RunnerInstance instance)
+    {
+        if (instance.ManagedByRunnerRunner.HasValue)
+            return instance.ManagedByRunnerRunner.Value;
+
+        if (string.IsNullOrWhiteSpace(instance.RunnerName) || string.IsNullOrWhiteSpace(instance.HostId))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(instance.ContainerId)
+            || !string.IsNullOrWhiteSpace(instance.VmName))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(instance.WebhookEventId)
+            || !string.IsNullOrWhiteSpace(instance.JitConfig)
+            || string.Equals(instance.ProvisioningMode, "dynamic", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(instance.ProvisioningMode, "webhook", StringComparison.OrdinalIgnoreCase)
+            || instance.RunnerName.Contains("-jit-", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    public static bool IsCapacityConsuming(RunnerInstance instance) =>
+        IsRunnerRunnerManaged(instance)
+        && (instance.Status is RunnerInstanceStatus.Pending
+            or RunnerInstanceStatus.Starting
+            or RunnerInstanceStatus.Running
+            or RunnerInstanceStatus.Stopping);
+
+    public static RuleCapacityView EvaluateRuleCapacity(
+        ProvisioningRule rule,
+        IReadOnlyCollection<Host> hosts,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById,
+        IReadOnlyCollection<RunnerInstance> instances,
+        IReadOnlyCollection<WebhookEvent> events)
+    {
+        var profileIds = GetRuleProfileIds(rule)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var activeInstances = instances.Where(IsCapacityConsuming).ToList();
+        var relatedEventIds = events
+            .Where(e => string.Equals(e.BindingId, rule.Id, StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        int activeCount;
+        if (rule.Type == ProvisioningType.Webhook)
+        {
+            activeCount = activeInstances.Count(i =>
+                string.Equals(i.ProvisioningMode, "dynamic", StringComparison.OrdinalIgnoreCase)
+                && ((!string.IsNullOrWhiteSpace(i.WebhookEventId) && relatedEventIds.Contains(i.WebhookEventId))
+                    || (string.IsNullOrWhiteSpace(i.WebhookEventId) && profileIds.Contains(i.ProfileId))));
+        }
+        else
+        {
+            activeCount = activeInstances.Count(i =>
+                profileIds.Contains(i.ProfileId)
+                && hosts.Any(h =>
+                    string.Equals(h.Id, i.HostId, StringComparison.OrdinalIgnoreCase)
+                    && MatchesRuleHostRequirements(h, rule)));
+        }
+
+        var configuredLimit = rule.Type switch
+        {
+            ProvisioningType.Static => Math.Max(0, rule.DesiredCount),
+            ProvisioningType.ScaleSet => Math.Max(0, rule.MaxInstances),
+            ProvisioningType.Webhook => Math.Max(0, rule.MaxConcurrent),
+            _ => Math.Max(0, rule.DesiredCount)
+        };
+
+        var mappedProfiles = profileIds
+            .Select(id => profilesById.TryGetValue(id, out var profile) ? profile : null)
+            .Where(profile => profile != null)
+            .Select(profile => BuildRuleProfileView(profile!, rule, hosts, activeInstances, profilesById))
+            .OrderBy(view => view.ProfileName)
+            .ToList();
+
+        return new RuleCapacityView
+        {
+            RuleId = rule.Id,
+            RuleName = rule.Name,
+            ConfiguredLimit = configuredLimit,
+            ActiveCount = activeCount,
+            RemainingSlots = Math.Max(configuredLimit - activeCount, 0),
+            MappedProfiles = mappedProfiles
+        };
+    }
+
+    public static HostSelectionAnalysis AnalyzeHostSelection(
+        RunnerProfile profile,
+        ProvisioningRule? rule,
+        IReadOnlyCollection<Host> hosts,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById,
+        IReadOnlyCollection<RunnerInstance> instances)
+    {
+        var matchingHosts = hosts
+            .Where(host =>
+                host.Platform == profile.RequiredHostPlatform
+                && MatchesRuleHostRequirements(host, rule)
+                && MatchesProfileHostRequirements(host, profile))
+            .ToList();
+
+        if (matchingHosts.Count == 0)
+        {
+            return new HostSelectionAnalysis
+            {
+                CapacityBlocked = false,
+                BlockedBy = CapacityBlockerKind.Matching,
+                Reason = $"No host matches platform '{profile.RequiredHostPlatform}' and the rule target filters"
+            };
+        }
+
+        var candidates = matchingHosts
+            .Select(host =>
+            {
+                var hostInstances = instances
+                    .Where(i => string.Equals(i.HostId, host.Id, StringComparison.OrdinalIgnoreCase) && IsCapacityConsuming(i))
+                    .ToList();
+
+                var backendUsage = GetBackendUsage(host, profile.ExecutionBackend, hostInstances, profilesById);
+                var profileUsage = GetProfileUsage(host, profile, hostInstances);
+                var canRunNow = !backendUsage.IsSaturated && !profileUsage.IsSaturated;
+                var blockedBy = canRunNow
+                    ? CapacityBlockerKind.None
+                    : profileUsage.IsSaturated
+                        ? CapacityBlockerKind.Profile
+                        : CapacityBlockerKind.Host;
+
+                var detail = canRunNow
+                    ? $"Ready now: profile {profileUsage.Summary}, {profile.ExecutionBackend.ToString().ToLowerInvariant()} {backendUsage.Summary}"
+                    : blockedBy == CapacityBlockerKind.Profile
+                        ? $"Profile slots full: {profileUsage.Summary} on {host.Label}"
+                        : $"Host {profile.ExecutionBackend.ToString().ToLowerInvariant()} slots full: {backendUsage.Summary}";
+
+                return new HostCandidateView
+                {
+                    HostId = host.Id,
+                    HostLabel = host.Label,
+                    BackendCapacity = backendUsage,
+                    ProfileUsage = profileUsage,
+                    TotalHostLoad = hostInstances.Count,
+                    CanRunNow = canRunNow,
+                    BlockedBy = blockedBy,
+                    Detail = detail
+                };
+            })
+            .OrderBy(candidate => candidate.CanRunNow ? 0 : 1)
+            .ThenBy(candidate => candidate.TotalHostLoad)
+            .ThenBy(candidate => candidate.HostLabel, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var selectedCandidate = candidates.FirstOrDefault(c => c.CanRunNow);
+        if (selectedCandidate != null)
+        {
+            return new HostSelectionAnalysis
+            {
+                SelectedHost = matchingHosts.First(host => string.Equals(host.Id, selectedCandidate.HostId, StringComparison.OrdinalIgnoreCase)),
+                CapacityBlocked = false,
+                BlockedBy = CapacityBlockerKind.None,
+                Reason = $"Selected host '{selectedCandidate.HostLabel}'",
+                Candidates = candidates
+            };
+        }
+
+        var allProfileBlocked = candidates.All(c => c.BlockedBy == CapacityBlockerKind.Profile);
+        var blockedByKind = allProfileBlocked ? CapacityBlockerKind.Profile : CapacityBlockerKind.Host;
+        var reason = allProfileBlocked
+            ? $"Profile '{profile.Name}' has no remaining per-host slots across the matching host pool"
+            : $"All matching hosts are currently out of {profile.ExecutionBackend.ToString().ToLowerInvariant()} capacity";
+
+        return new HostSelectionAnalysis
+        {
+            CapacityBlocked = true,
+            BlockedBy = blockedByKind,
+            Reason = reason,
+            Candidates = candidates
+        };
+    }
+
+    public static bool HasEarlierQueuedWorkAhead(
+        WebhookEvent currentEvent,
+        ProvisioningRule? currentRule,
+        RunnerProfile currentProfile,
+        IReadOnlyCollection<WebhookEvent> allEvents,
+        IReadOnlyDictionary<string, ProvisioningRule> rulesById,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
+    {
+        var queuedEvents = allEvents
+            .Where(e =>
+                e.Action == "queued"
+                && e.Id != currentEvent.Id
+                && e.JobId != currentEvent.JobId
+                && e.Status is not "completed"
+                    and not "timed_out"
+                    and not "rejected"
+                    and not "ignored"
+                    and not "in_progress"
+                    and not "provisioned")
+            .OrderBy(e => e.ReceivedAt)
+            .ThenBy(e => e.Id, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var earlierEvent in queuedEvents)
+        {
+            var isEarlier =
+                earlierEvent.ReceivedAt < currentEvent.ReceivedAt
+                || (earlierEvent.ReceivedAt == currentEvent.ReceivedAt
+                    && string.CompareOrdinal(earlierEvent.Id, currentEvent.Id) < 0);
+
+            if (!isEarlier || earlierEvent.Status is "no_match" or "pending_config")
+                continue;
+
+            var (earlierRule, earlierProfile, _) = ResolveProvisioningMatch(
+                earlierEvent,
+                earlierEvent.MatchedProfileId,
+                rulesById.Values,
+                profilesById);
+
+            if (earlierProfile == null)
+                continue;
+
+            var sameRule = !string.IsNullOrWhiteSpace(currentRule?.Id)
+                && string.Equals(earlierRule?.Id, currentRule.Id, StringComparison.OrdinalIgnoreCase);
+
+            var sameCapacityLane =
+                earlierProfile.RequiredHostPlatform == currentProfile.RequiredHostPlatform
+                && earlierProfile.ExecutionBackend == currentProfile.ExecutionBackend;
+
+            if (sameRule || sameCapacityLane)
+                return true;
+        }
+
+        return false;
+    }
+
+    public static EventCapacityView ExplainEvent(
+        WebhookEvent evt,
+        IReadOnlyCollection<Host> hosts,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById,
+        IReadOnlyDictionary<string, ProvisioningRule> rulesById,
+        IReadOnlyCollection<RunnerInstance> instances,
+        IReadOnlyCollection<WebhookEvent> allEvents)
+    {
+        if (evt.Action != "queued")
+            return new EventCapacityView();
+
+        if (evt.Status == "pending_fifo")
+        {
+            return new EventCapacityView
+            {
+                BlockedBy = CapacityBlockerKind.Fifo,
+                Summary = "Waiting for older queued work in the same provisioning lane",
+                Details = []
+            };
+        }
+
+        if (evt.Status == "pending_config")
+        {
+            return new EventCapacityView
+            {
+                BlockedBy = CapacityBlockerKind.Configuration,
+                Summary = evt.Error ?? "Provisioning is waiting on a missing or invalid configuration dependency"
+            };
+        }
+
+        var (rule, profile, reason) = ResolveProvisioningMatch(evt, evt.MatchedProfileId, rulesById.Values, profilesById);
+        if (profile == null)
+        {
+            return new EventCapacityView
+            {
+                BlockedBy = CapacityBlockerKind.Matching,
+                Summary = reason
+            };
+        }
+
+        if (HasEarlierQueuedWorkAhead(evt, rule, profile, allEvents, rulesById, profilesById))
+        {
+            return new EventCapacityView
+            {
+                BlockedBy = CapacityBlockerKind.Fifo,
+                Summary = "Waiting for older queued work in the same provisioning lane"
+            };
+        }
+
+        if (rule != null)
+        {
+            var ruleView = EvaluateRuleCapacity(rule, hosts, profilesById, instances, allEvents);
+            if (ruleView.RemainingSlots <= 0)
+            {
+                return new EventCapacityView
+                {
+                    BlockedBy = CapacityBlockerKind.ProvisioningRule,
+                    Summary = $"Rule '{rule.Name}' is using {ruleView.ActiveCount}/{ruleView.ConfiguredLimit} concurrent slots"
+                };
+            }
+        }
+
+        var hostAnalysis = AnalyzeHostSelection(profile, rule, hosts, profilesById, instances);
+        var detail = hostAnalysis.Candidates
+            .Take(3)
+            .Select(candidate =>
+                $"{candidate.HostLabel}: profile {candidate.ProfileUsage.Summary}, {profile.ExecutionBackend.ToString().ToLowerInvariant()} {candidate.BackendCapacity.Summary}")
+            .ToList();
+
+        if (hostAnalysis.SelectedHost != null)
+        {
+            return new EventCapacityView
+            {
+                BlockedBy = CapacityBlockerKind.None,
+                Summary = $"Capacity is available on '{hostAnalysis.SelectedHost.Label}'"
+            };
+        }
+
+        return new EventCapacityView
+        {
+            BlockedBy = hostAnalysis.BlockedBy,
+            Summary = hostAnalysis.Reason,
+            Details = detail
+        };
+    }
+
+    public static bool MatchesRuleHostRequirements(Host host, ProvisioningRule? rule)
+    {
+        if (rule == null)
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(rule.TargetHostId)
+            && !string.Equals(host.Id, rule.TargetHostId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(rule.TargetGroupId)
+            && !string.Equals(host.GroupId, rule.TargetGroupId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        foreach (var required in rule.RequiredHostLabels)
+        {
+            if (!host.Labels.TryGetValue(required.Key, out var actualValue)
+                || !string.Equals(actualValue, required.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static HostCapacityView BuildHostView(
+        Host host,
+        IReadOnlyCollection<RunnerInstance> instances,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
+    {
+        var hostInstances = instances
+            .Where(i => string.Equals(i.HostId, host.Id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var profileUsage = hostInstances
+            .Where(i => profilesById.TryGetValue(i.ProfileId, out _))
+            .GroupBy(i => i.ProfileId, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var profile = profilesById[group.Key];
+                return new HostProfileUsage(profile.Id, profile.Name, group.Count(), profile.MaxParallelPerHost);
+            })
+            .OrderByDescending(view => view.Used)
+            .ToList();
+
+        return new HostCapacityView
+        {
+            HostId = host.Id,
+            HostLabel = host.Label,
+            ActiveInstances = hostInstances.Count,
+            BackendUsage = new Dictionary<ExecutionBackend, CapacityCounter>
+            {
+                [ExecutionBackend.Docker] = GetBackendUsage(host, ExecutionBackend.Docker, hostInstances, profilesById),
+                [ExecutionBackend.Tart] = GetBackendUsage(host, ExecutionBackend.Tart, hostInstances, profilesById),
+                [ExecutionBackend.Native] = GetBackendUsage(host, ExecutionBackend.Native, hostInstances, profilesById)
+            },
+            ProfileUsage = profileUsage
+        };
+    }
+
+    private static ProfileCapacityView BuildProfileView(
+        RunnerProfile profile,
+        IReadOnlyCollection<Host> hosts,
+        IReadOnlyCollection<RunnerInstance> instances)
+    {
+        var usages = instances
+            .Where(i => string.Equals(i.ProfileId, profile.Id, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(i => i.HostId, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var host = hosts.FirstOrDefault(h => string.Equals(h.Id, group.Key, StringComparison.OrdinalIgnoreCase));
+                var hostLabel = host?.Label ?? group.Key;
+                return new ProfileHostUsage(group.Key, hostLabel, group.Count(), profile.MaxParallelPerHost);
+            })
+            .OrderByDescending(view => view.Used)
+            .ThenBy(view => view.HostLabel, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new ProfileCapacityView
+        {
+            ProfileId = profile.Id,
+            ProfileName = profile.Name,
+            PerHostLimit = profile.MaxParallelPerHost,
+            TotalActive = usages.Sum(view => view.Used),
+            HostUsage = usages
+        };
+    }
+
+    private static RuleProfileCapacityView BuildRuleProfileView(
+        RunnerProfile profile,
+        ProvisioningRule rule,
+        IReadOnlyCollection<Host> hosts,
+        IReadOnlyCollection<RunnerInstance> instances,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
+    {
+        var matchingHosts = hosts
+            .Where(host =>
+                host.Platform == profile.RequiredHostPlatform
+                && MatchesRuleHostRequirements(host, rule)
+                && MatchesProfileHostRequirements(host, profile))
+            .ToList();
+
+        var matchingHostUsages = matchingHosts
+            .Select(host =>
+            {
+                var hostInstances = instances
+                    .Where(i => string.Equals(i.HostId, host.Id, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                var backendUsage = GetBackendUsage(host, profile.ExecutionBackend, hostInstances, profilesById);
+
+                var profileUsage = GetProfileUsage(host, profile, hostInstances);
+                return new { backendUsage, profileUsage };
+            })
+            .ToList();
+
+        var effectivePoolLimit = matchingHostUsages.Sum(x => Math.Min(x.profileUsage.Limit, x.backendUsage.Limit));
+        var availableNow = matchingHostUsages.Sum(x => Math.Min(x.profileUsage.Remaining, x.backendUsage.Remaining));
+        var activeNow = matchingHostUsages.Sum(x => x.profileUsage.Used);
+
+        return new RuleProfileCapacityView
+        {
+            ProfileId = profile.Id,
+            ProfileName = profile.Name,
+            PerHostLimit = profile.MaxParallelPerHost,
+            MatchingHosts = matchingHosts.Count,
+            SaturatedHosts = matchingHostUsages.Count(x => x.profileUsage.IsSaturated || x.backendUsage.IsSaturated),
+            EffectivePoolLimit = effectivePoolLimit,
+            AvailableNow = availableNow,
+            ActiveNow = activeNow
+        };
+    }
+
+    private static CapacityCounter GetBackendUsage(
+        Host host,
+        ExecutionBackend backend,
+        IReadOnlyCollection<RunnerInstance> hostInstances,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
+    {
+        var used = hostInstances.Count(i =>
+            profilesById.TryGetValue(i.ProfileId, out var instanceProfile)
+            && instanceProfile.ExecutionBackend == backend);
+
+        var limit = backend switch
+        {
+            ExecutionBackend.Docker => host.MaxDockerContainers,
+            ExecutionBackend.Tart => host.MaxTartVMs,
+            _ => host.MaxNativeProcesses
+        };
+
+        return new CapacityCounter(used, limit);
+    }
+
+    private static ProfileHostUsage GetProfileUsage(
+        Host host,
+        RunnerProfile profile,
+        IReadOnlyCollection<RunnerInstance> hostInstances)
+    {
+        var used = hostInstances.Count(i => string.Equals(i.ProfileId, profile.Id, StringComparison.OrdinalIgnoreCase));
+        return new ProfileHostUsage(host.Id, host.Label, used, Math.Max(0, profile.MaxParallelPerHost));
+    }
+
+    private static bool MatchesProfileHostRequirements(Host host, RunnerProfile profile)
+    {
+        if (profile.ExecutionBackend != ExecutionBackend.Docker)
+            return true;
+
+        if (!host.Labels.TryGetValue("docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
+            return true;
+
+        var expectedDockerOs = profile.RequiredHostPlatform switch
+        {
+            HostPlatform.Windows => "windows",
+            HostPlatform.Linux => "linux",
+            _ => null
+        };
+
+        return expectedDockerOs == null
+            || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> GetRuleProfileIds(ProvisioningRule rule)
+    {
+        if (rule.Type == ProvisioningType.Webhook)
+        {
+            return rule.LabelMappings
+                .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ProfileId))
+                .Select(mapping => mapping.ProfileId.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (!string.IsNullOrWhiteSpace(rule.ProfileId))
+            return [rule.ProfileId.Trim()];
+
+        return [];
+    }
+
+    private static (ProvisioningRule? Rule, RunnerProfile? Profile, string Reason) ResolveProvisioningMatch(
+        WebhookEvent evt,
+        string? requestedProfileId,
+        IEnumerable<ProvisioningRule> rules,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
+    {
+        if (!Enum.TryParse<RunnerProvider>(evt.Provider, true, out var provider))
+            return (null, null, $"Unsupported provider '{evt.Provider}'");
+
+        var repo = evt.Repository;
+        var org = repo.Contains('/') ? repo.Split('/')[0] : "";
+
+        var candidateRules = rules
+            .Where(r => r.Type == ProvisioningType.Webhook && r.Provider == provider && r.Enabled)
+            .Where(r =>
+                r.AllowedRepos.Any(x => x.Equals(repo, StringComparison.OrdinalIgnoreCase))
+                || r.AllowedOrgs.Any(x => x.Equals(org, StringComparison.OrdinalIgnoreCase))
+                || (r.AllowedRepos.Count == 0 && r.AllowedOrgs.Count == 0))
+            .OrderByDescending(r => string.Equals(r.Id, evt.BindingId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (candidateRules.Count == 0)
+            return (null, null, $"No provisioning rule currently matches repository '{repo}'");
+
+        foreach (var rule in candidateRules)
+        {
+            var profileId = rule.ResolveWebhookProfileId(evt.Labels, requestedProfileId);
+            if (string.IsNullOrWhiteSpace(profileId))
+                continue;
+
+            if (profilesById.TryGetValue(profileId, out var profile))
+                return (rule, profile, "");
+        }
+
+        return (candidateRules[0], null, $"No current label mapping matches labels [{string.Join(", ", evt.Labels)}]");
+    }
+}

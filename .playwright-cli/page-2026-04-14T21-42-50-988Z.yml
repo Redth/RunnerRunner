@@ -1,0 +1,122 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]: 
+      - generic [ref=e7]: RunnerRunner
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: Overview
+        - link " Dashboard" [ref=e11] [cursor=pointer]:
+          - /url: ""
+          - generic [ref=e12]: 
+          - generic [ref=e13]: Dashboard
+      - generic [ref=e14]:
+        - generic [ref=e15]: Infrastructure
+        - link " Hosts" [ref=e16] [cursor=pointer]:
+          - /url: hosts
+          - generic [ref=e17]: 
+          - generic [ref=e18]: Hosts
+        - link " Runners" [ref=e19] [cursor=pointer]:
+          - /url: runners
+          - generic [ref=e20]: 
+          - generic [ref=e21]: Runners
+        - link " Images" [ref=e22] [cursor=pointer]:
+          - /url: images
+          - generic [ref=e23]: 
+          - generic [ref=e24]: Images
+        - link " Logs" [ref=e25] [cursor=pointer]:
+          - /url: logs
+          - generic [ref=e26]: 
+          - generic [ref=e27]: Logs
+        - link " Events" [ref=e28] [cursor=pointer]:
+          - /url: webhook-events
+          - generic [ref=e29]: 
+          - generic [ref=e30]: Events
+      - generic [ref=e31]:
+        - generic [ref=e32]: Configuration
+        - link " Provisioning" [ref=e33] [cursor=pointer]:
+          - /url: provisioning-rules
+          - generic [ref=e34]: 
+          - generic [ref=e35]: Provisioning
+        - link " Profiles" [ref=e36] [cursor=pointer]:
+          - /url: profiles
+          - generic [ref=e37]: 
+          - generic [ref=e38]: Profiles
+        - link " Env Variables" [ref=e39] [cursor=pointer]:
+          - /url: envvarsets
+          - generic [ref=e40]: 
+          - generic [ref=e41]: Env Variables
+        - link " Registries" [ref=e42] [cursor=pointer]:
+          - /url: registries
+          - generic [ref=e43]: 
+          - generic [ref=e44]: Registries
+        - link " Settings" [ref=e45] [cursor=pointer]:
+          - /url: settings
+          - generic [ref=e46]: 
+          - generic [ref=e47]: Settings
+    - button "" [ref=e48] [cursor=pointer]:
+      - generic [ref=e49]: 
+      - text: 
+  - main [ref=e50]:
+    - generic [ref=e51]:
+      - generic [ref=e52]:
+        - text: 
+        - generic [ref=e53]:
+          - heading " Runner Instances" [active] [level=1] [ref=e54]:
+            - generic [ref=e55]: 
+            - text: Runner Instances
+          - generic [ref=e56]: View Orleans-managed runners across connected hosts.
+      - button "" [ref=e58] [cursor=pointer]:
+        - text: 
+        - generic [ref=e60]: 
+    - article [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]:
+          - generic [ref=e64]: Search
+          - textbox "Filter runners…" [ref=e65]
+        - generic [ref=e66]:
+          - generic [ref=e67]: Status
+          - combobox [ref=e68]:
+            - option "Active" [selected]
+            - option "All"
+            - option "Pending"
+            - option "Starting"
+            - option "Running"
+            - option "Stopping"
+            - option "Stopped"
+            - option "Failed"
+            - option "Crashed"
+        - generic [ref=e69]:
+          - generic [ref=e70]: Host
+          - combobox [ref=e71]:
+            - option "All" [selected]
+            - option "linux-host-192.168.2.4"
+            - option "mac-host-192.168.2.134"
+            - option "windows-host-192.168.2.125"
+        - generic [ref=e72]:
+          - generic [ref=e73]: Profile
+          - combobox [ref=e74]:
+            - option "All" [selected]
+            - option "MacOS-Native"
+            - option "MAUI-Linux"
+            - option "MAUI-macOS"
+        - generic [ref=e75]:
+          - generic [ref=e76]: Mode
+          - combobox [ref=e77]:
+            - option "All" [selected]
+            - option "Static"
+            - option "Dynamic"
+        - button " Refresh" [ref=e79] [cursor=pointer]:
+          - generic [ref=e80]: 
+          - text: Refresh
+      - generic [ref=e81]:
+        - generic [ref=e82]:
+          - strong [ref=e83]: "linux-host-192.168.2.4:"
+          - text: Docker 0/10 · Tart 0/3 · Native 0/5
+        - generic [ref=e84]:
+          - strong [ref=e85]: "mac-host-192.168.2.134:"
+          - text: Docker 0/10 · Tart 0/3 · Native 0/5
+        - generic [ref=e86]:
+          - strong [ref=e87]: "windows-host-192.168.2.125:"
+          - text: Docker 0/10 · Tart 0/3 · Native 0/5
+      - generic [ref=e88]: No managed runner instances are active. Use provisioning rules to launch runners.

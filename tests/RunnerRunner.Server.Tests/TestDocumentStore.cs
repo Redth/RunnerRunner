@@ -24,7 +24,8 @@ public static class TestDocumentStore
         .MapTypeToTable<EnvironmentVariableSet>("env_var_sets")
         .MapTypeToTable<RunnerAgentVersion>("runner_agent_versions")
         .MapTypeToTable<ProviderCredential>("provider_credentials")
-        .MapTypeToTable<AuditLogEntry>("audit_log"));
+        .MapTypeToTable<AuditLogEntry>("audit_log")
+        .MapTypeToTable<WebhookEvent>("webhook_events"));
 
         return store;
     }

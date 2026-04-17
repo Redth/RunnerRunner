@@ -4,29 +4,34 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Hubs
+@using RunnerRunner.Server.Services
 @using Microsoft.AspNetCore.SignalR
 @inject IDocumentStore Store
 @inject IJSRuntime JS
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject IGrainFactory GrainFactory
+@inject CapacityPlanningService CapacityService
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-hdd-rack-fill"></i> Hosts</h1>
-        <span class="page-desc">Manage host machines and assign runner profiles.</span>
+        <span class="page-desc">Manage host machines and their capabilities. Provisioning is defined through rules.</span>
     </div>
 </SectionContent>
 
-<div class="mb-3">
+<div class="mb-3 d-flex flex-wrap gap-2">
     <button class="btn btn-primary" @onclick="GenerateEnrollmentToken">
         <i class="bi bi-key-fill me-1"></i> Generate Enrollment Token
     </button>
+    <a class="btn btn-outline-primary" href="/provisioning-rules">
+        <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
+    </a>
     @if (!string.IsNullOrEmpty(newToken))
     {
         <div class="alert alert-success mt-2">
             <strong>Enrollment Token:</strong> <code>@newToken</code>
-            <br /><small>Use this token when starting a new host agent to register it with this server.</small>
+            <br /><small>Use this token when starting a new host node to register it with the cluster.</small>
         </div>
     }
 </div>
@@ -72,7 +77,7 @@
             <th role="button" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
             <th role="button" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
             <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
-            <th>Assignments</th>
+            <th>Provisioning</th>
             <th role="button" @onclick='() => ToggleSort("LastHeartbeat")'>Last Heartbeat @SortIndicator("LastHeartbeat")</th>
             <th>Actions</th>
         </tr>
@@ -80,7 +85,7 @@
     <tbody>
         @foreach (var host in FilteredHosts)
         {
-            var hostAssignments = assignments.Where(a => a.HostId == host.Id).ToList();
+            var hostRules = GetHostRules(host);
             <tr>
                 <td>
                     @if (renamingHostId == host.Id)
@@ -121,28 +126,48 @@
                             }
                         </div>
                     }
+                    @if (capacitySnapshot.Hosts.TryGetValue(host.Id, out var capacity))
+                    {
+                        <div class="small text-muted mt-2">
+                            <span class="me-2">Docker @FormatBackendUsage(capacity, ExecutionBackend.Docker)</span>
+                            <span class="me-2">Tart @FormatBackendUsage(capacity, ExecutionBackend.Tart)</span>
+                            <span>Native @FormatBackendUsage(capacity, ExecutionBackend.Native)</span>
+                        </div>
+                        @if (GetAutoLabels(host).TryGetValue("docker_os", out var dockerOs))
+                        {
+                            <div class="small text-muted mt-1">
+                                Docker mode: <strong>@dockerOs</strong> containers
+                            </div>
+                        }
+                        @if (capacity.ProfileUsage.Any(p => p.IsSaturated))
+                        {
+                            <div class="small text-warning mt-1">
+                                Saturated profiles:
+                                @string.Join(", ", capacity.ProfileUsage.Where(p => p.IsSaturated).Take(2).Select(p => $"{p.ProfileName} {p.Summary}"))
+                            </div>
+                        }
+                    }
                 </td>
                 <td>
-                    @if (hostAssignments.Any())
+                    @if (hostRules.Any())
                     {
-                        @foreach (var a in hostAssignments)
+                        @foreach (var rule in hostRules)
                         {
-                            var profileName = profileNames.GetValueOrDefault(a.ProfileId, "?");
-                            <span class="badge bg-info me-1">@profileName ×@a.DesiredCount</span>
+                            <span class="badge @GetRuleBadge(rule.Type) me-1">@rule.Name</span>
                         }
                     }
                     else
                     {
-                        <span class="text-muted">None</span>
+                        <span class="text-muted">Use provisioning rules</span>
                     }
                 </td>
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td>
                     <a href="/logs?source=agent:@host.Name" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
-                    <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleConfigure(host)" title="Configure labels & resources">
+                    <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleConfigure(host)" title="Configure capabilities & resources">
                         <i class="bi bi-gear"></i> Configure
                     </button>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => ShowAssignForm(host)">  <i class="bi bi-link-45deg"></i> Assign</button>
+                    <a class="btn btn-sm btn-outline-primary me-1" href="/provisioning-rules"><i class="bi bi-diagram-3"></i> Rules</a>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndRemoveHost(host)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
             </tr>
@@ -153,9 +178,9 @@
                         <div class="card m-2">
                             <div class="card-body">
                                 <div class="row">
-                                    @* Labels Section *@
+                                    @* Capabilities Section *@
                                     <div class="col-md-7">
-                                        <h6><i class="bi bi-tags me-1"></i>Labels</h6>
+                                        <h6><i class="bi bi-tags me-1"></i>Capabilities</h6>
                                         @{
                                             var autoLabels = GetAutoLabels(host);
                                         }
@@ -164,7 +189,7 @@
                                             <div class="d-flex flex-wrap gap-1 mb-2">
                                                 @foreach (var label in autoLabels)
                                                 {
-                                                    <span class="host-chip arch-chip" title="Auto-detected (read-only)">
+                                                    <span class="host-chip arch-chip" title="Auto-detected capability (read-only)">
                                                         <i class="bi bi-lock-fill me-1"></i>@label.Key=@label.Value
                                                     </span>
                                                 }
@@ -181,7 +206,7 @@
                                             }
                                         </div>
                                         <div class="input-group input-group-sm" style="max-width: 400px;">
-                                            <input class="form-control" @bind="newLabelKey" placeholder="key" />
+                                            <input class="form-control" @bind="newLabelKey" placeholder="capability" />
                                             <input class="form-control" @bind="newLabelValue" placeholder="value" />
                                             <button class="btn btn-outline-primary" @onclick="() => AddLabel(host)">
                                                 <i class="bi bi-plus-lg"></i> Add
@@ -190,12 +215,13 @@
                                     </div>
 
                                     @* Resource Limits Section *@
-                                    <div class="col-md-5">
-                                        <h6><i class="bi bi-speedometer2 me-1"></i>Resource Limits</h6>
-                                        <div class="mb-2">
-                                            <label class="form-label form-label-sm mb-0">Max Docker Containers</label>
-                                            <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
-                                                   @bind="host.MaxDockerContainers" min="0" />
+                                     <div class="col-md-5">
+                                         <h6><i class="bi bi-speedometer2 me-1"></i>Resource Limits</h6>
+                                         <div class="form-text mb-2">These are the host-level backend caps. Set a value to <code>0</code> to disable that backend on this host.</div>
+                                         <div class="mb-2">
+                                             <label class="form-label form-label-sm mb-0">Max Docker Containers</label>
+                                             <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
+                                                    @bind="host.MaxDockerContainers" min="0" />
                                         </div>
                                         <div class="mb-2">
                                             <label class="form-label form-label-sm mb-0">Max Tart VMs</label>
@@ -232,59 +258,10 @@
 </table>
 </div>
 
-@* Assignment modal *@
-@if (showAssign && assignHost != null)
-{
-    <div class="card mt-3 mb-3">
-        <div class="card-body">
-            <h5>Assign Profile to @assignHost.Name</h5>
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    <label class="form-label">Profile</label>
-                    <select class="form-select" @bind="assignProfileId">
-                        <option value="">— Select profile —</option>
-                        @foreach (var p in compatibleProfiles)
-                        {
-                            <option value="@p.Id">@p.Name (@p.Provider, @p.ExecutionBackend)</option>
-                        }
-                    </select>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <label class="form-label">Desired Instance Count</label>
-                    <input type="number" class="form-control" @bind="assignCount" min="1" />
-                </div>
-                <div class="col-md-3 mb-3 d-flex align-items-end">
-                    <button class="btn btn-success me-2" @onclick="SaveAssignment">  <i class="bi bi-plus-lg"></i> Add Assignment</button>
-                    <button class="btn btn-secondary" @onclick="() => showAssign = false">Cancel</button>
-                </div>
-            </div>
-
-            <h6>Current Assignments</h6>
-            <table class="table table-sm">
-                <thead><tr><th>Profile</th><th>Desired Count</th><th></th></tr></thead>
-                <tbody>
-                    @foreach (var a in assignments.Where(a => a.HostId == assignHost.Id))
-                    {
-                        <tr>
-                            <td>@(profileNames.GetValueOrDefault(a.ProfileId, "?"))</td>
-                            <td>
-                                <input type="number" class="form-control form-control-sm" style="width:80px"
-                                       value="@a.DesiredCount" @onchange="e => UpdateAssignmentCount(a, int.Parse(e.Value?.ToString()!))" min="0" />
-                            </td>
-                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndRemoveAssignment(a)">✕</button></td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-}
-
 @code {
     private List<Host> hosts = [];
-    private List<RunnerAssignment> assignments = [];
-    private List<RunnerProfile> allProfiles = [];
-    private Dictionary<string, string> profileNames = new();
+    private List<ProvisioningRule> rules = [];
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private string? newToken;
 
     // Filter & sort state
@@ -352,13 +329,6 @@
         return new MarkupString(sortAscending ? " ▲" : " ▼");
     }
 
-    // Assignment form
-    private bool showAssign;
-    private Host? assignHost;
-    private string assignProfileId = "";
-    private int assignCount = 1;
-    private List<RunnerProfile> compatibleProfiles = [];
-
     // Rename
     private string? renamingHostId;
     private string renameValue = "";
@@ -382,6 +352,10 @@
             labels["arch"] = host.Architecture;
         if (host.Platform != default)
             labels["os"] = host.Platform.ToString().ToLowerInvariant();
+        if (host.Labels.TryGetValue("docker_os", out var dockerOs) && !string.IsNullOrWhiteSpace(dockerOs))
+            labels["docker_os"] = dockerOs;
+        if (host.Labels.TryGetValue("windows_containers", out var windowsContainers) && !string.IsNullOrWhiteSpace(windowsContainers))
+            labels["windows_containers"] = windowsContainers;
         foreach (var cap in host.Capabilities)
             labels[cap] = "true";
         return labels;
@@ -407,6 +381,7 @@
         host.UpdatedAt = DateTime.UtcNow;
         await Store.Update(host);
         configureHostId = null;
+        await ReloadData();
     }
 
     private void StartRename(Host host)
@@ -423,6 +398,7 @@
         host.UpdatedAt = DateTime.UtcNow;
         await Store.Update(host);
         renamingHostId = null;
+        await ReloadData();
     }
 
     private async Task OnRenameKeyDown(KeyboardEventArgs e, Host host)
@@ -439,9 +415,8 @@
     private async Task ReloadData()
     {
         hosts = (await Store.Query<Host>().ToList()).ToList();
-        assignments = (await Store.Query<RunnerAssignment>().ToList()).ToList();
-        allProfiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
-        profileNames = allProfiles.ToDictionary(p => p.Id, p => p.Name);
+        rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+        capacitySnapshot = await CapacityService.GetSnapshotAsync();
     }
 
     private async Task GenerateEnrollmentToken()
@@ -463,12 +438,6 @@
         if (confirmed) await RemoveHost(host.Id);
     }
 
-    private async Task ConfirmAndRemoveAssignment(RunnerAssignment assignment)
-    {
-        var confirmed = await JS.InvokeAsync<bool>("confirm", "Remove assignment? Runners for this profile will be stopped.");
-        if (confirmed) await RemoveAssignment(assignment.Id);
-    }
-
     private async Task RemoveHost(string id)
     {
         // Stop all running instances on this host
@@ -481,83 +450,21 @@
             await Store.Remove<RunnerInstance>(inst.Id);
 
         // Remove all assignments for this host
-        var hostAssignments = assignments.Where(a => a.HostId == id).ToList();
+        var hostAssignments = (await Store.Query<RunnerAssignment>().ToList())
+            .Where(a => a.HostId == id)
+            .ToList();
         foreach (var a in hostAssignments)
             await Store.Remove<RunnerAssignment>(a.Id);
 
+        var targetedRules = rules.Where(r => r.TargetHostId == id).ToList();
+        foreach (var rule in targetedRules)
+        {
+            rule.TargetHostId = null;
+            rule.UpdatedAt = DateTime.UtcNow;
+            await Store.Update(rule);
+        }
+
         await Store.Remove<Host>(id);
-        await ReloadData();
-    }
-
-    private void ShowAssignForm(Host host)
-    {
-        assignHost = host;
-        assignProfileId = "";
-        assignCount = 1;
-        // Filter profiles compatible with this host's platform
-        compatibleProfiles = allProfiles
-            .Where(p => p.RequiredHostPlatform == host.Platform)
-            .ToList();
-        showAssign = true;
-    }
-
-    private async Task SaveAssignment()
-    {
-        if (string.IsNullOrEmpty(assignProfileId) || assignHost == null) return;
-
-        var existing = assignments.FirstOrDefault(a => a.HostId == assignHost.Id && a.ProfileId == assignProfileId);
-        if (existing != null)
-        {
-            existing.DesiredCount += assignCount;
-            existing.UpdatedAt = DateTime.UtcNow;
-            await Store.Update(existing);
-        }
-        else
-        {
-            var assignment = new RunnerAssignment
-            {
-                HostId = assignHost.Id,
-                ProfileId = assignProfileId,
-                DesiredCount = assignCount
-            };
-            await Store.Insert(assignment);
-        }
-
-        await ReloadData();
-        assignProfileId = "";
-        assignCount = 1;
-    }
-
-    private async Task UpdateAssignmentCount(RunnerAssignment assignment, int newCount)
-    {
-        if (newCount <= 0)
-        {
-            await Store.Remove<RunnerAssignment>(assignment.Id);
-        }
-        else
-        {
-            assignment.DesiredCount = newCount;
-            assignment.UpdatedAt = DateTime.UtcNow;
-            await Store.Update(assignment);
-        }
-        await ReloadData();
-    }
-
-    private async Task RemoveAssignment(string id)
-    {
-        var assignment = assignments.FirstOrDefault(a => a.Id == id);
-        if (assignment != null)
-        {
-            await StopRunnersForHostProfile(assignment.HostId, assignment.ProfileId);
-
-            var instances = (await Store.Query<RunnerInstance>().ToList())
-                .Where(i => i.HostId == assignment.HostId && i.ProfileId == assignment.ProfileId
-                         && i.ProvisioningMode == "static").ToList();
-            foreach (var inst in instances)
-                await Store.Remove<RunnerInstance>(inst.Id);
-        }
-
-        await Store.Remove<RunnerAssignment>(id);
         await ReloadData();
     }
 
@@ -572,26 +479,6 @@
 
         var running = (await Store.Query<RunnerInstance>().ToList())
             .Where(i => i.HostId == hostId &&
-                        i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting).ToList();
-        foreach (var inst in running)
-            await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
-            {
-                InstanceId = inst.Id,
-                InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
-            });
-    }
-
-    // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
-    private async Task StopRunnersForHostProfile(string hostId, string profileId)
-    {
-        var host = hosts.FirstOrDefault(h => h.Id == hostId);
-        if (host == null) return;
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-        if (agent == null) return;
-
-        var running = (await Store.Query<RunnerInstance>().ToList())
-            .Where(i => i.HostId == hostId && i.ProfileId == profileId &&
                         i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting).ToList();
         foreach (var inst in running)
             await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
@@ -617,6 +504,22 @@
         _ => "bi-pc-display"
     };
 
+    private List<ProvisioningRule> GetHostRules(Host host) =>
+        rules.Where(r =>
+                r.TargetHostId == host.Id ||
+                (!string.IsNullOrWhiteSpace(host.GroupId) && r.TargetGroupId == host.GroupId))
+            .OrderBy(r => r.Name)
+            .ToList();
+
+    private string GetRuleBadge(ProvisioningType type) => type switch
+    {
+        ProvisioningType.Static => "bg-secondary",
+        ProvisioningType.ScaleSet => "bg-primary",
+        ProvisioningType.Webhook => "bg-warning text-dark",
+        ProvisioningType.Scheduled => "bg-info",
+        _ => "bg-secondary"
+    };
+
     private async Task<HostGrainState?> GetHostGrainState(string hostId)
     {
         try
@@ -625,6 +528,14 @@
             return await grain.GetState();
         }
         catch { return null; }
+    }
+
+    private static string FormatBackendUsage(HostCapacityView capacity, ExecutionBackend backend)
+    {
+        if (!capacity.BackendUsage.TryGetValue(backend, out var counter))
+            return "0/0";
+
+        return counter.IsDisabled ? "off" : $"{counter.Used}/{counter.Limit}";
     }
 }
 

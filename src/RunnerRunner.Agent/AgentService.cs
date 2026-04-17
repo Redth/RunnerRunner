@@ -51,10 +51,10 @@ public class AgentService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _agentId = string.IsNullOrEmpty(_configuration["RunnerRunner:AgentId"])
-            ? Guid.NewGuid().ToString("N")[..12]
+            ? (_configuration["HostSilo:HostId"] ?? Guid.NewGuid().ToString("N")[..12])
             : _configuration["RunnerRunner:AgentId"]!;
         _agentName = string.IsNullOrEmpty(_configuration["RunnerRunner:AgentName"])
-            ? Environment.MachineName
+            ? (_configuration["HostSilo:HostName"] ?? Environment.MachineName)
             : _configuration["RunnerRunner:AgentName"]!;
 
         _logger.LogInformation("RunnerRunner Agent starting: {AgentName} ({AgentId})", _agentName, _agentId);
@@ -67,6 +67,7 @@ public class AgentService : BackgroundService
         _signalR.OnDeleteImage += HandleDeleteImage;
         _signalR.OnLoginRegistry += HandleLoginRegistry;
         _signalR.OnGetHostEnvironment += HandleGetHostEnvironment;
+        _signalR.OnGetHostLogs += HandleGetHostLogs;
         _signalR.OnGetRunnerLogs += HandleGetRunnerLogs;
         _signalR.OnCleanupOrphan += HandleCleanupOrphan;
         _signalR.OnReconnected += RegisterWithServer;
@@ -109,48 +110,36 @@ public class AgentService : BackgroundService
                 var metrics = _healthReporter.CollectMetrics(_agentId);
                 await _signalR.SendHeartbeat(metrics);
 
-                // Send per-runner health updates with actual container/VM/process status
-                var deadRunners = new List<string>();
-                foreach (var runner in _lifecycleManager.RunningInstances.Values)
+                // Send per-runner health updates using actual backend health so exited
+                // native/docker/tart processes don't linger as phantom "Running" instances.
+                foreach (var snapshot in await _lifecycleManager.CollectRunnerHealthAsync(stoppingToken))
                 {
-                    var health = await _lifecycleManager.CheckHealthAsync(runner.InstanceId);
-                    if (health != null && health.IsRunning)
+                    if (snapshot.Health.IsRunning)
                     {
                         await _signalR.SendRunnerHealthUpdate(new RunnerHealthUpdateEvent
                         {
-                            InstanceId = runner.InstanceId,
+                            InstanceId = snapshot.Runner.InstanceId,
                             Status = RunnerInstanceStatus.Running,
                             CheckedAt = DateTime.UtcNow,
-                            StatusMessage = $"Running ({health.Status})"
+                            StatusMessage = string.Equals(snapshot.Health.Status, "running", StringComparison.OrdinalIgnoreCase)
+                                ? "Running"
+                                : snapshot.Health.Status
                         });
+                        continue;
                     }
-                    else
-                    {
-                        // Container/VM/process is gone — report stopped
-                        _logger.LogWarning(
-                            "Runner {RunnerName} ({InstanceId}) is no longer running (status: {Status}), reporting stopped",
-                            runner.RunnerName, runner.InstanceId, health?.Status ?? "not_found");
-                        deadRunners.Add(runner.InstanceId);
-                    }
-                }
 
-                // Report dead runners and remove from tracking
-                foreach (var deadId in deadRunners)
-                {
-                    try
+                    var stopReason = string.Equals(snapshot.Health.Status, "exited:0", StringComparison.OrdinalIgnoreCase)
+                        ? "Exited"
+                        : "crashed";
+
+                    await _signalR.SendRunnerStopped(new RunnerStoppedEvent
                     {
-                        await _signalR.SendRunnerStopped(new RunnerStoppedEvent
-                        {
-                            InstanceId = deadId,
-                            Reason = "crashed",
-                            ErrorMessage = "Container/process exited unexpectedly (detected during health check)"
-                        });
-                        await _lifecycleManager.StopRunnerAsync(deadId);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to report dead runner {InstanceId}", deadId);
-                    }
+                        InstanceId = snapshot.Runner.InstanceId,
+                        Reason = stopReason,
+                        ErrorMessage = stopReason == "crashed"
+                            ? $"Runner no longer active on host ({snapshot.Health.Status})"
+                            : null
+                    });
                 }
                 // Reconciliation: report actual state to server
                 try
@@ -224,7 +213,8 @@ public class AgentService : BackgroundService
                 {
                     InstanceId = command.InstanceId,
                     RunnerName = result.RunnerName,
-                    InstanceHandle = result.InstanceHandle
+                    InstanceHandle = result.InstanceHandle,
+                    Backend = command.Backend
                 });
 
                 await _signalR.SendRunnerHealthUpdate(new RunnerHealthUpdateEvent
@@ -271,18 +261,69 @@ public class AgentService : BackgroundService
     {
         _logger.LogInformation("Listing images (filter: {Filter})", command.FilterType);
         var images = new List<AgentImageInfo>();
+        var hadErrors = false;
+
+        async Task ReportStatus(string stage, string message, bool isComplete = false, bool success = true)
+        {
+            await _signalR.SendImageRefreshStatus(new ImageRefreshStatusEvent
+            {
+                HostId = _agentId,
+                Stage = stage,
+                Message = message,
+                IsComplete = isComplete,
+                Success = success
+            });
+        }
+
+        await ReportStatus("starting", "Starting image refresh...");
 
         if (command.FilterType is null or ImageType.Docker)
-            images.AddRange(await _imageManager.ListDockerImagesAsync());
+        {
+            await ReportStatus("docker", "Loading Docker images...");
+            try
+            {
+                var dockerImages = await _imageManager.ListDockerImagesAsync();
+                images.AddRange(dockerImages);
+                await ReportStatus("docker", $"Loaded {dockerImages.Count} Docker image(s).");
+            }
+            catch (Exception ex)
+            {
+                hadErrors = true;
+                _logger.LogWarning(ex, "Failed to load Docker images");
+                await ReportStatus("docker", $"Docker image refresh failed: {ex.Message}", success: false);
+            }
+        }
 
         if (command.FilterType is null or ImageType.Tart)
-            images.AddRange(await _imageManager.ListTartImagesAsync());
+        {
+            await ReportStatus("tart", "Loading Tart images...");
+            try
+            {
+                var tartImages = await _imageManager.ListTartImagesAsync();
+                images.AddRange(tartImages);
+                await ReportStatus("tart", $"Loaded {tartImages.Count} Tart image(s).");
+            }
+            catch (Exception ex)
+            {
+                hadErrors = true;
+                _logger.LogWarning(ex, "Failed to load Tart images");
+                await ReportStatus("tart", $"Tart image refresh failed: {ex.Message}", success: false);
+            }
+        }
 
         await _signalR.SendImageList(new ImageListEvent
         {
             HostId = _agentId,
             Images = images
         });
+
+        await ReportStatus(
+            "complete",
+            hadErrors
+                ? $"Refresh finished with issues. {images.Count} image(s) were still reported."
+                : $"Refresh complete. {images.Count} image(s) reported.",
+            isComplete: true,
+            success: !hadErrors);
     }
 
     private async Task HandlePullImage(PullImageCommand command)
@@ -299,13 +340,11 @@ public class AgentService : BackgroundService
                     command.RegistryUrl ?? "", command.Username, command.Password);
             }
 
-            var fullImage = string.IsNullOrEmpty(command.RegistryUrl)
-                ? $"{command.ImageName}:{command.Tag}"
-                : $"{command.RegistryUrl}/{command.ImageName}:{command.Tag}";
+            var fullImage = ImageReference.Build(command.RegistryUrl, command.ImageName, command.Tag);
 
             if (command.ImageType == ImageType.Docker)
             {
-                await _imageManager.PullDockerImageAsync(command.ImageName, command.Tag,
+                await _imageManager.PullDockerImageAsync(command.ImageName, command.Tag, command.RegistryUrl,
                     async progress =>
                     {
                         progress.HostId = _agentId;
@@ -409,6 +448,31 @@ public class AgentService : BackgroundService
         });
     }
 
+    private async Task HandleGetHostLogs(GetHostLogsCommand command)
+    {
+        _logger.LogInformation("Fetching host logs (tail: {TailLines})", command.TailLines);
+
+        try
+        {
+            var logs = await GetHostLogTail(command.TailLines);
+
+            await _signalR.SendHostLogs(new HostLogsEvent
+            {
+                HostId = _agentId,
+                Logs = logs
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch host logs");
+            await _signalR.SendHostLogs(new HostLogsEvent
+            {
+                HostId = _agentId,
+                Logs = $"Error fetching host logs: {ex.Message}"
+            });
+        }
+    }
+
     private async Task HandleGetRunnerLogs(GetRunnerLogsCommand command)
     {
         _logger.LogInformation("Fetching logs for runner {Handle}", command.InstanceHandle);
@@ -416,7 +480,7 @@ public class AgentService : BackgroundService
         {
             var logs = "";
             // Try Docker logs first
-            if (_dockerBackend is Backends.DockerBackend docker)
+            if (_dockerBackend is Backends.DockerBackend docker && await docker.IsAvailableAsync())
             {
                 try
                 {
@@ -528,10 +592,49 @@ public class AgentService : BackgroundService
         return logLines.Count > 0 ? string.Join("\n", logLines) : "";
     }
 
+    private async Task<string> GetHostLogTail(int tailLines)
+    {
+        var tailCount = tailLines > 0 ? tailLines : 100;
+
+        var candidatePaths = new List<string>();
+        void AddIfSet(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path) && !candidatePaths.Contains(path))
+                candidatePaths.Add(path);
+        }
+
+        AddIfSet(_configuration["RunnerRunner:HostLogFile"]);
+        AddIfSet(_configuration["HostSilo:LogFilePath"]);
+        AddIfSet("/tmp/runnerrunner-hostsilo.log");
+        AddIfSet(Path.Combine(Path.GetTempPath(), "runnerrunner-hostsilo.log"));
+        AddIfSet(Path.Combine(AppContext.BaseDirectory, "logs", "runnerrunner-hostsilo.log"));
+
+        var logPath = candidatePaths.FirstOrDefault(File.Exists);
+        if (logPath != null)
+            return await ReadTailLines(logPath, tailCount);
+
+        var details = string.Join("\n", candidatePaths.Select(p => $"  - {p}"));
+        return
+            $"(No readable host log file was found on this host.\nChecked:\n{details}\n\n" +
+            "This host can still provide live runner logs and status, but the HostSilo process log is not currently being written to a known file path.)";
+    }
+
     private static async Task<string> ReadTailLines(string filePath, int lineCount)
     {
-        var allLines = await File.ReadAllLinesAsync(filePath);
-        var tail = allLines.Skip(Math.Max(0, allLines.Length - lineCount));
+        var maxLines = Math.Max(1, lineCount);
+        var tail = new Queue<string>(maxLines);
+
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            if (tail.Count == maxLines)
+                tail.Dequeue();
+
+            tail.Enqueue(line);
+        }
+
         return string.Join("\n", tail);
     }
 
@@ -540,7 +643,7 @@ public class AgentService : BackgroundService
         var runners = new List<DiscoveredRunnerInfo>();
 
         // Docker
-        if (_dockerBackend is Backends.DockerBackend docker)
+        if (_dockerBackend is Backends.DockerBackend docker && await docker.IsAvailableAsync())
         {
             try
             {
@@ -562,7 +665,7 @@ public class AgentService : BackgroundService
         }
 
         // Tart
-        if (_tartBackend is Backends.TartBackend tart)
+        if (_tartBackend is Backends.TartBackend tart && await tart.IsAvailableAsync())
         {
             try
             {
@@ -594,6 +697,7 @@ public class AgentService : BackgroundService
                     InstanceId = d.InstanceId,
                     RunnerName = d.RunnerName,
                     ProcessId = d.ProcessId,
+                    InstanceDir = d.InstanceDir,
                     Backend = d.Backend,
                     IsRunning = d.IsRunning,
                     Status = d.Status
@@ -647,7 +751,7 @@ public class AgentService : BackgroundService
             OsVersion = RuntimeInformation.OSDescription,
             Architecture = RuntimeInformation.OSArchitecture.ToString(),
             AgentVersion = typeof(AgentService).Assembly.GetName().Version?.ToString() ?? "0.0.0",
-            Capabilities = DetectCapabilities()
+            Capabilities = await DetectCapabilitiesAsync()
         });
         _logger.LogInformation("Agent registered with server");
 
@@ -659,7 +763,7 @@ public class AgentService : BackgroundService
     {
         try
         {
-            if (_dockerBackend is Backends.DockerBackend docker)
+            if (_dockerBackend is Backends.DockerBackend docker && await docker.IsAvailableAsync())
             {
                 var discovered = await docker.DiscoverManagedContainersAsync();
                 if (discovered.Count > 0)
@@ -693,21 +797,18 @@ public class AgentService : BackgroundService
         return HostPlatform.Linux;
     }
 
-    private List<string> DetectCapabilities()
+    private async Task<List<string>> DetectCapabilitiesAsync()
     {
         var caps = new List<string>();
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
             caps.Add("apple-silicon"); // TODO: detect actual architecture
-            // Check for tart
-            if (File.Exists("/opt/homebrew/bin/tart") || File.Exists("/usr/local/bin/tart"))
+            if (_tartBackend is Backends.TartBackend tart && await tart.IsAvailableAsync())
                 caps.Add("tart");
         }
 
-        // Check for docker
-        if (File.Exists("/usr/bin/docker") || File.Exists("/usr/local/bin/docker")
-            || File.Exists("/opt/homebrew/bin/docker"))
+        if (_dockerBackend is Backends.DockerBackend docker && await docker.IsAvailableAsync())
             caps.Add("docker");
 
         caps.Add("native"); // All hosts support native process execution

@@ -16,9 +16,15 @@ public class RunnerTimeoutService : BackgroundService
     private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PendingTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan StartingTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DynamicPickupTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan DynamicRunningTimeout = TimeSpan.FromHours(2);
     private static readonly TimeSpan StoppingTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan HealthCheckStaleTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan DynamicTerminalRetention = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan CompletedWebhookRetention = TimeSpan.FromDays(7);
+    private static readonly TimeSpan StaleNoMatchRetention = TimeSpan.FromHours(24);
+    private static readonly TimeSpan IgnoredWebhookRetention = TimeSpan.FromDays(2);
+    private static readonly TimeSpan RetryAfterRunnerFailureDelay = TimeSpan.FromSeconds(10);
 
     private readonly ILogger<RunnerTimeoutService> _logger;
     private readonly IServiceProvider _services;
@@ -82,7 +88,11 @@ public class RunnerTimeoutService : BackgroundService
                     await CheckStoppingTimeout(store, instance, now);
                     break;
             }
+
+            await CleanupExpiredDynamicRecord(store, instance, now);
         }
+
+        await CleanupExpiredWebhookEvents(store, now, ct);
     }
 
     private async Task CheckPendingTimeout(IDocumentStore store, RunnerInstance instance, DateTime now)
@@ -101,6 +111,11 @@ public class RunnerTimeoutService : BackgroundService
 
         if (instance.ProvisioningMode == "dynamic")
         {
+            await TryRequeueLinkedWebhookEvent(
+                store,
+                instance,
+                now,
+                "Runner deployment timed out before the host acknowledged it; retrying provisioning");
             await TrySendStopRunner(store, instance);
             await store.Remove<RunnerInstance>(instance.Id);
         }
@@ -122,6 +137,11 @@ public class RunnerTimeoutService : BackgroundService
 
         if (instance.ProvisioningMode == "dynamic")
         {
+            await TryRequeueLinkedWebhookEvent(
+                store,
+                instance,
+                now,
+                "Runner registration timed out before it connected to the provider; retrying provisioning");
             await TrySendStopRunner(store, instance);
             await store.Remove<RunnerInstance>(instance.Id);
         }
@@ -129,6 +149,49 @@ public class RunnerTimeoutService : BackgroundService
 
     private async Task CheckRunningTimeouts(IDocumentStore store, RunnerInstance instance, DateTime now)
     {
+        if (instance.ProvisioningMode == "dynamic"
+            && !string.IsNullOrWhiteSpace(instance.WebhookEventId))
+        {
+            var linkedEvent = await store.Get<WebhookEvent>(instance.WebhookEventId);
+            var eventStatus = linkedEvent?.Status?.Trim();
+            if (eventStatus is "completed" or "timed_out" or "ignored" or "rejected")
+            {
+                _logger.LogWarning(
+                    "Dynamic runner {RunnerName} ({Id}) is still active after its event resolved with status {EventStatus}",
+                    instance.RunnerName, instance.Id, eventStatus);
+
+                instance.Status = RunnerInstanceStatus.Failed;
+                instance.StatusMessage = $"Dynamic runner cleanup after event resolved: {eventStatus}";
+                await store.Update(instance);
+
+                await TrySendStopRunner(store, instance);
+                await store.Remove<RunnerInstance>(instance.Id);
+                return;
+            }
+
+            if (instance.StartedAt != null
+                && now - instance.StartedAt.Value > DynamicPickupTimeout
+                && !string.Equals(eventStatus, "in_progress", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning(
+                    "Dynamic runner {RunnerName} ({Id}) never picked up its queued job after {Elapsed}; recycling it",
+                    instance.RunnerName, instance.Id, now - instance.StartedAt.Value);
+
+                instance.Status = RunnerInstanceStatus.Failed;
+                instance.StatusMessage = "Dynamic runner pickup timeout — job never started on provider";
+                await store.Update(instance);
+
+                await TryRequeueLinkedWebhookEvent(
+                    store,
+                    instance,
+                    now,
+                    "Runner came online but never picked up the queued job; provisioning will be retried");
+                await TrySendStopRunner(store, instance);
+                await store.Remove<RunnerInstance>(instance.Id);
+                return;
+            }
+        }
+
         // Dynamic runner running too long without completion webhook
         if (instance.ProvisioningMode == "dynamic"
             && instance.StartedAt != null
@@ -142,23 +205,38 @@ public class RunnerTimeoutService : BackgroundService
             instance.StatusMessage = "Dynamic runner timeout — no completion webhook received";
             await store.Update(instance);
 
+            await TryRequeueLinkedWebhookEvent(
+                store,
+                instance,
+                now,
+                "Runner exceeded the dynamic execution timeout before the job completed; provisioning will be retried if the provider still shows it queued");
             await TrySendStopRunner(store, instance);
             await store.Remove<RunnerInstance>(instance.Id);
             return;
         }
 
-        // Static runner with stale health check
-        if (instance.ProvisioningMode == "static"
-            && instance.LastHealthCheck != null
-            && now - instance.LastHealthCheck.Value > HealthCheckStaleTimeout)
+        var lastSeenAt = instance.LastHealthCheck ?? instance.StartedAt;
+        if (lastSeenAt != null
+            && now - lastSeenAt.Value > HealthCheckStaleTimeout)
         {
             _logger.LogWarning(
-                "Static runner {RunnerName} ({Id}) has stale health check (last: {LastHealth})",
-                instance.RunnerName, instance.Id, instance.LastHealthCheck.Value);
+                "Runner {RunnerName} ({Id}) has stale health check (last seen: {LastHealth})",
+                instance.RunnerName, instance.Id, lastSeenAt.Value);
 
             instance.Status = RunnerInstanceStatus.Crashed;
             instance.StatusMessage = "Health check stale — runner may have crashed";
             await store.Update(instance);
+
+            if (instance.ProvisioningMode == "dynamic")
+            {
+                await TryRequeueLinkedWebhookEvent(
+                    store,
+                    instance,
+                    now,
+                    "Runner health checks went stale before the job was picked up; provisioning will be retried");
+                await TrySendStopRunner(store, instance);
+                await store.Remove<RunnerInstance>(instance.Id);
+            }
         }
     }
 
@@ -194,7 +272,10 @@ public class RunnerTimeoutService : BackgroundService
             }
 
             var agent = AgentHub.GetConnectedAgents().Values
-                .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+                .FirstOrDefault(a =>
+                    a.AgentInfo.Name == host.Name
+                    || a.AgentInfo.AgentId == host.Name
+                    || a.AgentInfo.AgentId == host.Id);
 
             if (agent == null)
             {
@@ -215,5 +296,95 @@ public class RunnerTimeoutService : BackgroundService
         {
             _logger.LogWarning(ex, "Failed to send StopRunner for instance {Id}", instance.Id);
         }
+    }
+
+    private async Task TryRequeueLinkedWebhookEvent(
+        IDocumentStore store,
+        RunnerInstance instance,
+        DateTime now,
+        string reason)
+    {
+        if (string.IsNullOrWhiteSpace(instance.WebhookEventId))
+            return;
+
+        var linkedEvent = await store.Get<WebhookEvent>(instance.WebhookEventId);
+        if (!PrepareLinkedEventRetry(linkedEvent, now, reason))
+            return;
+
+        await store.Update(linkedEvent!);
+        _logger.LogInformation(
+            "Re-queued webhook event {EventId} after runner failure for instance {InstanceId}",
+            linkedEvent!.Id,
+            instance.Id);
+    }
+
+    internal static bool PrepareLinkedEventRetry(WebhookEvent? linkedEvent, DateTime now, string reason)
+    {
+        if (linkedEvent == null
+            || !string.Equals(linkedEvent.Action, "queued", StringComparison.OrdinalIgnoreCase)
+            || linkedEvent.IsTerminal)
+            return false;
+
+        linkedEvent.ResolvedAt = null;
+        linkedEvent.InstanceId = null;
+        linkedEvent.ScheduleRetry(
+            reason,
+            now,
+            RetryAfterRunnerFailureDelay,
+            status: "pending",
+            countAttempt: false);
+        return true;
+    }
+
+    private static async Task CleanupExpiredDynamicRecord(IDocumentStore store, RunnerInstance instance, DateTime now)
+    {
+        if (instance.ProvisioningMode != "dynamic"
+            || instance.Status is not (RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed))
+        {
+            return;
+        }
+
+        var terminalAt = instance.StoppedAt ?? instance.LastHealthCheck ?? instance.StartedAt ?? instance.DeployedAt ?? instance.CreatedAt;
+        if (now - terminalAt > DynamicTerminalRetention)
+            await store.Remove<RunnerInstance>(instance.Id);
+    }
+
+    private async Task CleanupExpiredWebhookEvents(IDocumentStore store, DateTime now, CancellationToken ct)
+    {
+        var webhookEvents = (await store.Query<WebhookEvent>().ToList()).ToList();
+        var removed = 0;
+
+        foreach (var evt in webhookEvents)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (!ShouldRemoveWebhookEvent(evt, now))
+                continue;
+
+            await store.Remove<WebhookEvent>(evt.Id);
+            removed++;
+        }
+
+        if (removed > 0)
+            _logger.LogInformation("Cleaned up {Count} expired webhook event records", removed);
+    }
+
+    private static bool ShouldRemoveWebhookEvent(WebhookEvent evt, DateTime now)
+    {
+        var age = now - evt.ReceivedAt;
+
+        if (evt.Status is "no_match" or "pending_host_match" or "pending_config")
+            return age > StaleNoMatchRetention;
+
+        if (evt.Status is "completed" or "timed_out")
+            return age > CompletedWebhookRetention;
+
+        if (evt.Status is "ignored" or "rejected")
+            return age > IgnoredWebhookRetention;
+
+        if (evt.Status is "in_progress" or "provisioned")
+            return age > CompletedWebhookRetention;
+
+        return false;
     }
 }

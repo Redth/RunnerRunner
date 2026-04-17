@@ -1,6 +1,8 @@
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Data;
 using Orleans.Runtime.MembershipService.SiloMetadata;
+using RunnerRunner.Agent;
+using RunnerRunner.Agent.Services;
 
 var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
 
@@ -19,6 +21,14 @@ builder.Services.AddRunnerRunnerDocumentStore(pgConnectionString);
 
 // Host registration service
 builder.Services.AddHostedService<RunnerRunner.HostSilo.HostRegistrationService>();
+
+// Host execution bridge: lets HostSilo receive deploy/stop/log commands from the server
+// without needing a separate legacy Agent process.
+builder.Services.AddSingleton<SignalRConnection>();
+builder.Services.AddSingleton<RunnerLifecycleManager>();
+builder.Services.AddSingleton<HealthReporter>();
+builder.Services.AddSingleton<ImageManager>();
+builder.Services.AddHostedService<AgentService>();
 
 // Orleans silo (headless — no web UI)
 builder.UseOrleans(silo =>
@@ -63,11 +73,15 @@ builder.UseOrleans(silo =>
         var advertisedIp = builder.Configuration["Orleans:AdvertisedIPAddress"];
         if (!string.IsNullOrEmpty(advertisedIp) && System.Net.IPAddress.TryParse(advertisedIp, out var ip))
         {
+            var siloPort = builder.Configuration.GetValue("Orleans:SiloPort", 11111);
+            var gatewayPort = builder.Configuration.GetValue("Orleans:GatewayPort", 30000);
             silo.Configure<Orleans.Configuration.EndpointOptions>(options =>
             {
                 options.AdvertisedIPAddress = ip;
-                options.SiloPort = 11111;
-                options.GatewayPort = 30000;
+                options.SiloListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, siloPort);
+                options.GatewayListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, gatewayPort);
+                options.SiloPort = siloPort;
+                options.GatewayPort = gatewayPort;
             });
         }
     }

@@ -1,0 +1,5 @@
+[      70ms] [INFO] [2026-04-14T21:42:50.970Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[     401ms] [INFO] [2026-04-14T21:42:51.302Z] Information: WebSocket connected to wss://r2.jjagd.net/_blazor?id=iB5pqvxBnxlnQCOvs715Sw. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[ 8509044ms] [ERROR] [2026-04-15T00:04:39.944Z] Error: Connection disconnected with error 'Error: Server timeout elapsed without receiving a message from the server.'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[ 8509050ms] [INFO] [2026-04-15T00:04:39.950Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[ 8510062ms] [INFO] [2026-04-15T00:04:40.962Z] Information: WebSocket connected to wss://r2.jjagd.net/_blazor?id=qo3m1j4mzalw_ztEgyYdOw. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0

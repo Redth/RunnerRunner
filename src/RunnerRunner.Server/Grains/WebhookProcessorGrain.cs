@@ -201,20 +201,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         if (action == "queued")
         {
             // Label matching: find profile from rule's label mappings
-            string? profileId = null;
-            var sortedMappings = matchedRule.LabelMappings.OrderByDescending(m => m.Priority);
-
-            foreach (var mapping in sortedMappings)
-            {
-                if (mapping.RequiredLabels.All(required =>
-                    labels.Any(l => l.Equals(required, StringComparison.OrdinalIgnoreCase))))
-                {
-                    profileId = mapping.ProfileId;
-                    break;
-                }
-            }
-
-            profileId ??= matchedRule.DefaultProfileId ?? matchedRule.ProfileId;
+            var profileId = matchedRule.ResolveWebhookProfileId(labels);
 
             if (string.IsNullOrEmpty(profileId))
             {

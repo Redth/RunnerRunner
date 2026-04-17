@@ -135,6 +135,36 @@ public class RunnerLifecycleManager
         {
             _logger.LogWarning(ex, "Error monitoring container exit for runner {RunnerName}", runnerName);
         }
+
+    }
+    public async Task<List<ManagedRunnerHealth>> CollectRunnerHealthAsync(CancellationToken ct = default)
+    {
+        var snapshots = new List<ManagedRunnerHealth>();
+
+        foreach (var (instanceId, runner) in _runners.ToArray())
+        {
+            RunnerHealthStatus health;
+            try
+            {
+                health = await runner.Backend.GetHealthAsync(runner.InstanceHandle, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Health check failed for runner {RunnerName} ({InstanceId})", runner.RunnerName, instanceId);
+                health = new RunnerHealthStatus { IsRunning = false, Status = "health_check_failed" };
+            }
+
+            if (!health.IsRunning)
+                _runners.TryRemove(instanceId, out _);
+
+            snapshots.Add(new ManagedRunnerHealth
+            {
+                Runner = runner,
+                Health = health
+            });
+        }
+
+        return snapshots;
     }
 }
 
@@ -146,4 +176,10 @@ public class ManagedRunner
     public required string InstanceHandle { get; set; }
     public required IRunnerBackend Backend { get; set; }
     public DateTime StartedAt { get; set; }
+}
+
+public class ManagedRunnerHealth
+{
+    public required ManagedRunner Runner { get; set; }
+    public required RunnerHealthStatus Health { get; set; }
 }

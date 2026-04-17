@@ -1,0 +1,782 @@
+[     750ms] [INFO] [2026-04-14T21:33:42.047Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[     997ms] [INFO] [2026-04-14T21:33:42.295Z] Information: WebSocket connected to wss://r2.jjagd.net/_blazor?id=5Xox4JZq6TnJWiNLqPt1Zw. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431188ms] [ERROR] [2026-04-14T21:40:52.486Z] Error: Connection disconnected with error 'Error: WebSocket closed with status code: 1006 (no reason given).'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431199ms] [INFO] [2026-04-14T21:40:52.497Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431510ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431511ms] [ERROR] [2026-04-14T21:40:52.810Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431511ms] [ERROR] [2026-04-14T21:40:52.810Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431511ms] [ERROR] [2026-04-14T21:40:52.810Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431512ms] [ERROR] [2026-04-14T21:40:52.810Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431512ms] [INFO] [2026-04-14T21:40:52.810Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431515ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431515ms] [ERROR] [2026-04-14T21:40:52.813Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431515ms] [ERROR] [2026-04-14T21:40:52.813Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431515ms] [ERROR] [2026-04-14T21:40:52.813Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431515ms] [ERROR] [2026-04-14T21:40:52.814Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431515ms] [INFO] [2026-04-14T21:40:52.814Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431517ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431517ms] [ERROR] [2026-04-14T21:40:52.816Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431517ms] [ERROR] [2026-04-14T21:40:52.816Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431517ms] [ERROR] [2026-04-14T21:40:52.816Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431518ms] [ERROR] [2026-04-14T21:40:52.816Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431518ms] [INFO] [2026-04-14T21:40:52.816Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431519ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431519ms] [ERROR] [2026-04-14T21:40:52.818Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431519ms] [ERROR] [2026-04-14T21:40:52.818Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431519ms] [ERROR] [2026-04-14T21:40:52.818Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431519ms] [ERROR] [2026-04-14T21:40:52.818Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431519ms] [INFO] [2026-04-14T21:40:52.818Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431521ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431521ms] [ERROR] [2026-04-14T21:40:52.819Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431521ms] [ERROR] [2026-04-14T21:40:52.819Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431521ms] [ERROR] [2026-04-14T21:40:52.820Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431521ms] [ERROR] [2026-04-14T21:40:52.820Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431521ms] [INFO] [2026-04-14T21:40:52.820Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431523ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431523ms] [ERROR] [2026-04-14T21:40:52.821Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431523ms] [ERROR] [2026-04-14T21:40:52.821Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431523ms] [ERROR] [2026-04-14T21:40:52.821Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431523ms] [ERROR] [2026-04-14T21:40:52.821Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431523ms] [INFO] [2026-04-14T21:40:52.821Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431525ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431525ms] [ERROR] [2026-04-14T21:40:52.824Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431525ms] [ERROR] [2026-04-14T21:40:52.824Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431525ms] [ERROR] [2026-04-14T21:40:52.824Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431525ms] [ERROR] [2026-04-14T21:40:52.824Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431525ms] [INFO] [2026-04-14T21:40:52.824Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431527ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431527ms] [ERROR] [2026-04-14T21:40:52.826Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431527ms] [ERROR] [2026-04-14T21:40:52.826Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431527ms] [ERROR] [2026-04-14T21:40:52.826Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431527ms] [ERROR] [2026-04-14T21:40:52.826Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431528ms] [INFO] [2026-04-14T21:40:52.826Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431529ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431529ms] [ERROR] [2026-04-14T21:40:52.828Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431529ms] [ERROR] [2026-04-14T21:40:52.828Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431530ms] [ERROR] [2026-04-14T21:40:52.828Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431530ms] [ERROR] [2026-04-14T21:40:52.828Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431530ms] [INFO] [2026-04-14T21:40:52.828Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431531ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  431531ms] [ERROR] [2026-04-14T21:40:52.830Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431531ms] [ERROR] [2026-04-14T21:40:52.830Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431531ms] [ERROR] [2026-04-14T21:40:52.830Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  431531ms] [ERROR] [2026-04-14T21:40:52.830Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  436533ms] [INFO] [2026-04-14T21:40:57.832Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  436536ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  436537ms] [ERROR] [2026-04-14T21:40:57.835Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  436537ms] [ERROR] [2026-04-14T21:40:57.835Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  436537ms] [ERROR] [2026-04-14T21:40:57.835Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  436537ms] [ERROR] [2026-04-14T21:40:57.835Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  441539ms] [INFO] [2026-04-14T21:41:02.838Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  441543ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  441543ms] [ERROR] [2026-04-14T21:41:02.842Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  441543ms] [ERROR] [2026-04-14T21:41:02.842Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  441543ms] [ERROR] [2026-04-14T21:41:02.842Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  441543ms] [ERROR] [2026-04-14T21:41:02.842Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  446547ms] [INFO] [2026-04-14T21:41:07.845Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  446869ms] [ERROR] Failed to load resource: net::ERR_SSL_UNRECOGNIZED_NAME_ALERT @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  446869ms] [WARNING] [2026-04-14T21:41:08.168Z] Warning: Error from HTTP request. TypeError: Failed to fetch. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  446869ms] [ERROR] [2026-04-14T21:41:08.168Z] Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  446869ms] [ERROR] [2026-04-14T21:41:08.168Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  446870ms] [ERROR] [2026-04-14T21:41:08.168Z] Error: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  446870ms] [ERROR] [2026-04-14T21:41:08.168Z] Error: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  451873ms] [INFO] [2026-04-14T21:41:13.171Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  452142ms] [ERROR] Failed to load resource: net::ERR_SSL_UNRECOGNIZED_NAME_ALERT @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  452142ms] [WARNING] [2026-04-14T21:41:13.440Z] Warning: Error from HTTP request. TypeError: Failed to fetch. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  452142ms] [ERROR] [2026-04-14T21:41:13.440Z] Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  452142ms] [ERROR] [2026-04-14T21:41:13.440Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  452142ms] [ERROR] [2026-04-14T21:41:13.440Z] Error: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  452142ms] [ERROR] [2026-04-14T21:41:13.440Z] Error: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  457146ms] [INFO] [2026-04-14T21:41:18.444Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  457467ms] [ERROR] Failed to load resource: net::ERR_SSL_UNRECOGNIZED_NAME_ALERT @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  457467ms] [WARNING] [2026-04-14T21:41:18.765Z] Warning: Error from HTTP request. TypeError: Failed to fetch. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  457467ms] [ERROR] [2026-04-14T21:41:18.766Z] Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  457467ms] [ERROR] [2026-04-14T21:41:18.766Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  457467ms] [ERROR] [2026-04-14T21:41:18.766Z] Error: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  457467ms] [ERROR] [2026-04-14T21:41:18.766Z] Error: Error: Failed to complete negotiation with the server: TypeError: Failed to fetch @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  462470ms] [INFO] [2026-04-14T21:41:23.769Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  462781ms] [ERROR] Failed to load resource: the server responded with a status of 502 () @ https://r2.jjagd.net/_blazor/negotiate?negotiateVersion=1:0
+[  462781ms] [ERROR] [2026-04-14T21:41:24.080Z] Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  462781ms] [ERROR] [2026-04-14T21:41:24.080Z] Error: Failed to start the connection: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  462782ms] [ERROR] [2026-04-14T21:41:24.080Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  462782ms] [ERROR] [2026-04-14T21:41:24.080Z] Error: Error: Failed to complete negotiation with the server: Error: <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>openresty</center>
+</body>
+</html>
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+<!-- a padding to disable MSIE and Chrome friendly error page -->
+: Status code '502' @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  467785ms] [INFO] [2026-04-14T21:41:29.083Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  468130ms] [INFO] [2026-04-14T21:41:29.429Z] Information: WebSocket connected to wss://r2.jjagd.net/_blazor?id=QV6FwI9lp0dEIxK75ckBGw. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  468553ms] [INFO] [2026-04-14T21:41:29.852Z] Information: Normalizing '_blazor' to 'https://r2.jjagd.net/_blazor'. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0
+[  468837ms] [INFO] [2026-04-14T21:41:30.135Z] Information: WebSocket connected to wss://r2.jjagd.net/_blazor?id=IM40EKvjEUqwUOY1dMdd7w. @ https://r2.jjagd.net/_framework/blazor.web.qcnkhbt5lj.js:0

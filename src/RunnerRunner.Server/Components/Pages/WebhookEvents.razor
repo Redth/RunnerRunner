@@ -1,14 +1,17 @@
 @page "/webhook-events"
 @rendermode InteractiveServer
+@implements IDisposable
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Services
 @inject IDocumentStore Store
+@inject CapacityPlanningService CapacityService
 
-<PageTitle>Webhook Events - RunnerRunner</PageTitle>
+<PageTitle>Events - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
     <div class="page-header">
-        <h1><i class="bi bi-clock-history"></i> Webhook Events</h1>
-        <span class="page-desc">Audit log of received webhook events.</span>
+        <h1><i class="bi bi-clock-history"></i> Events</h1>
+        <span class="page-desc">Webhook and provisioning audit trail for the Orleans runner lifecycle.</span>
     </div>
 </SectionContent>
 
@@ -20,6 +23,12 @@
     <div>
         <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
     </div>
+    <div class="small text-muted mb-1">Auto-refreshing every 5s</div>
+</div>
+
+<div class="alert alert-info py-2 d-flex align-items-center gap-2 mb-3" style="font-size: 0.9rem;">
+    <i class="bi bi-info-circle"></i>
+    <span>Queued work is evaluated in this order: <strong>FIFO</strong> → <strong>rule concurrency</strong> → <strong>profile per-host cap</strong> → <strong>host backend slots</strong>.</span>
 </div>
 
 @if (!filteredEvents.Any())
@@ -36,6 +45,7 @@ else
                 <th>Action</th>
                 <th>Repository</th>
                 <th>Workflow</th>
+                <th>Rule</th>
                 <th>Labels</th>
                 <th>Matched Profile</th>
                 <th>Status</th>
@@ -50,6 +60,7 @@ else
                     <td><span class="badge @(evt.Action == "queued" ? "bg-primary" : "bg-secondary")">@evt.Action</span></td>
                     <td>@evt.Repository</td>
                     <td>@evt.WorkflowName</td>
+                    <td>@GetSourceName(evt)</td>
                     <td>
                         <div class="d-flex flex-wrap gap-1">
                             @foreach (var label in evt.Labels)
@@ -59,13 +70,53 @@ else
                         </div>
                     </td>
                     <td>@(evt.MatchedProfileName ?? "—")</td>
-                    <td>
-                        <span class="badge @GetStatusBadge(evt.Status)">@evt.Status</span>
-                        @if (!string.IsNullOrEmpty(evt.Error))
-                        {
-                            <br/><small class="text-danger">@evt.Error</small>
+                     <td>
+                         <span class="badge @GetStatusBadge(evt.Status)">@GetStatusLabel(evt.Status)</span>
+                         @if (!string.IsNullOrEmpty(evt.Error))
+                         {
+                             <br/><small class="@(evt.Status is "timed_out" or "error" or "rejected" ? "text-danger" : "text-muted")">@evt.Error</small>
                         }
-                    </td>
+                        @if (evt.RetryCount > 0 || evt.NextRetryAt.HasValue || evt.ExpiresAt.HasValue || IsQueuedWait(evt))
+                        {
+                            <div class="small text-muted mt-1">
+                                @if (IsQueuedWait(evt))
+                                {
+                                    var queuePosition = GetQueuePosition(evt);
+                                    if (queuePosition.HasValue)
+                                    {
+                                        <span>Queue: #@queuePosition.Value</span>
+                                    }
+                                    <span>@(queuePosition.HasValue ? " · " : "")Waiting since @evt.ReceivedAt.ToLocalTime().ToString("g")</span>
+                                }
+                                @if (evt.RetryCount > 0)
+                                {
+                                    <span>@(IsQueuedWait(evt) ? " · " : "")Attempts: @evt.RetryCount</span>
+                                }
+                                @if (evt.NextRetryAt.HasValue && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "provisioned")
+                                {
+                                    <span>@((evt.RetryCount > 0 || IsQueuedWait(evt) ? " · " : ""))Next: @evt.NextRetryAt.Value.ToLocalTime().ToString("t")</span>
+                                }
+                                @if (evt.ExpiresAt.HasValue && evt.Status is not "completed" and not "timed_out")
+                                {
+                                    <span> · Expires: @evt.ExpiresAt.Value.ToLocalTime().ToString("t")</span>
+                                 }
+                             </div>
+                         }
+                         @if (IsQueuedWait(evt) && capacitySnapshot.Events.TryGetValue(evt.Id, out var insight) && (!string.IsNullOrWhiteSpace(insight.Summary) || insight.Details.Any()))
+                         {
+                             <div class="small mt-1">
+                                 @if (insight.BlockedBy != CapacityBlockerKind.None)
+                                 {
+                                     <span class="badge @GetLimitBadge(insight.BlockedBy) me-1">@GetLimitLabel(insight.BlockedBy)</span>
+                                 }
+                                 <span>@insight.Summary</span>
+                                 @if (insight.Details.Any())
+                                 {
+                                     <br/><span class="text-muted">@string.Join(" · ", insight.Details.Take(2))</span>
+                                 }
+                             </div>
+                         }
+                     </td>
                     <td>
                         @if (!string.IsNullOrEmpty(evt.InstanceId))
                         {
@@ -86,17 +137,25 @@ else
 @code {
     private List<WebhookEvent> allEvents = [];
     private List<WebhookEvent> filteredEvents = [];
+    private Dictionary<string, string> sourceNames = [];
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private string searchText = "";
+    private CancellationTokenSource? _refreshCts;
 
     private string _lastSearch = "";
 
-    protected override async Task OnInitializedAsync() => await Refresh();
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+        _refreshCts = new CancellationTokenSource();
+        _ = RunAutoRefreshAsync(_refreshCts.Token);
+    }
 
     protected override void OnParametersSet() => ApplyFilter();
 
-    private void ApplyFilter()
+    private void ApplyFilter(bool force = false)
     {
-        if (searchText == _lastSearch && filteredEvents.Any())
+        if (!force && searchText == _lastSearch && filteredEvents.Any())
             return;
         _lastSearch = searchText;
 
@@ -114,22 +173,114 @@ else
 
     private async Task Refresh()
     {
+        var rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+        var bindings = (await Store.Query<WebhookBinding>().ToList()).ToList();
+        sourceNames = rules.ToDictionary(r => r.Id, r => r.Name);
+
+        foreach (var binding in bindings)
+            sourceNames.TryAdd(binding.Id, binding.Name);
+
         allEvents = (await Store.Query<WebhookEvent>().ToList())
             .OrderByDescending(e => e.ReceivedAt)
+            .ThenByDescending(GetActivityTime)
             .ToList();
-        _lastSearch = ""; // force refilter
-        ApplyFilter();
+        capacitySnapshot = await CapacityService.GetSnapshotAsync();
+        ApplyFilter(force: true);
+        await InvokeAsync(StateHasChanged);
     }
+
+    private static DateTime GetActivityTime(WebhookEvent evt) =>
+        evt.UpdatedAt > evt.ReceivedAt ? evt.UpdatedAt : evt.ReceivedAt;
+
+    private async Task RunAutoRefreshAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+                await InvokeAsync(Refresh);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private string GetSourceName(WebhookEvent evt) =>
+        string.IsNullOrWhiteSpace(evt.BindingId)
+            ? "—"
+            : sourceNames.GetValueOrDefault(evt.BindingId, evt.BindingId);
 
     private string GetStatusBadge(string status) => status switch
     {
         "provisioned" => "bg-success",
         "completed" => "bg-success",
-        "matched" => "bg-warning text-dark",
-        "error" or "rejected" => "bg-danger",
+        "matching" or "preparing" or "dispatching" => "bg-primary",
+        "matched" or "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "bg-warning text-dark",
+        "error" or "rejected" or "timed_out" => "bg-danger",
         "in_progress" => "bg-info",
-        "no_match" or "rate_limited" => "bg-secondary",
         "ignored" => "bg-light text-muted",
         _ => "bg-secondary"
     };
+
+    private string GetStatusLabel(string status) => status switch
+    {
+        "pending_fifo" => "Queued (FIFO)",
+        "pending_capacity" => "Waiting capacity",
+        "pending_host_match" => "Waiting host",
+        "pending_config" => "Waiting config",
+        "matching" => "Matching",
+        "preparing" => "Preparing",
+        "dispatching" => "Dispatching",
+        "provisioned" => "Provisioned",
+        "in_progress" => "Job running",
+        "no_match" => "No match",
+        _ => status
+    };
+
+    private static bool IsQueuedWait(WebhookEvent evt) =>
+        evt.Action == "queued"
+        && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match";
+
+    private string GetLimitBadge(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "bg-secondary",
+        CapacityBlockerKind.ProvisioningRule => "bg-warning text-dark",
+        CapacityBlockerKind.Profile => "bg-info text-dark",
+        CapacityBlockerKind.Host => "bg-danger",
+        CapacityBlockerKind.Matching => "bg-dark",
+        CapacityBlockerKind.Configuration => "bg-secondary",
+        _ => "bg-light text-muted"
+    };
+
+    private string GetLimitLabel(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "FIFO",
+        CapacityBlockerKind.ProvisioningRule => "Rule",
+        CapacityBlockerKind.Profile => "Profile",
+        CapacityBlockerKind.Host => "Host",
+        CapacityBlockerKind.Matching => "Match",
+        CapacityBlockerKind.Configuration => "Config",
+        _ => "Ready"
+    };
+
+    private int? GetQueuePosition(WebhookEvent evt)
+    {
+        if (!IsQueuedWait(evt))
+            return null;
+
+        var orderedQueue = allEvents
+            .Where(IsQueuedWait)
+            .OrderBy(e => e.ReceivedAt)
+            .ThenBy(e => e.Id)
+            .Select((e, index) => new { e.Id, Position = index + 1 })
+            .FirstOrDefault(e => e.Id == evt.Id);
+
+        return orderedQueue?.Position;
+    }
+
+    public void Dispose()
+    {
+        _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
+    }
 }

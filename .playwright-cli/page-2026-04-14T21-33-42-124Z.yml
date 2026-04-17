@@ -1,0 +1,264 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]: 
+      - generic [ref=e7]: RunnerRunner
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: Overview
+        - link " Dashboard" [ref=e11] [cursor=pointer]:
+          - /url: ""
+          - generic [ref=e12]: 
+          - generic [ref=e13]: Dashboard
+      - generic [ref=e14]:
+        - generic [ref=e15]: Infrastructure
+        - link " Hosts" [ref=e16] [cursor=pointer]:
+          - /url: hosts
+          - generic [ref=e17]: 
+          - generic [ref=e18]: Hosts
+        - link " Runners" [ref=e19] [cursor=pointer]:
+          - /url: runners
+          - generic [ref=e20]: 
+          - generic [ref=e21]: Runners
+        - link " Images" [ref=e22] [cursor=pointer]:
+          - /url: images
+          - generic [ref=e23]: 
+          - generic [ref=e24]: Images
+        - link " Logs" [ref=e25] [cursor=pointer]:
+          - /url: logs
+          - generic [ref=e26]: 
+          - generic [ref=e27]: Logs
+        - link " Events" [ref=e28] [cursor=pointer]:
+          - /url: webhook-events
+          - generic [ref=e29]: 
+          - generic [ref=e30]: Events
+      - generic [ref=e31]:
+        - generic [ref=e32]: Configuration
+        - link " Provisioning" [ref=e33] [cursor=pointer]:
+          - /url: provisioning-rules
+          - generic [ref=e34]: 
+          - generic [ref=e35]: Provisioning
+        - link " Profiles" [ref=e36] [cursor=pointer]:
+          - /url: profiles
+          - generic [ref=e37]: 
+          - generic [ref=e38]: Profiles
+        - link " Env Variables" [ref=e39] [cursor=pointer]:
+          - /url: envvarsets
+          - generic [ref=e40]: 
+          - generic [ref=e41]: Env Variables
+        - link " Registries" [ref=e42] [cursor=pointer]:
+          - /url: registries
+          - generic [ref=e43]: 
+          - generic [ref=e44]: Registries
+        - link " Settings" [ref=e45] [cursor=pointer]:
+          - /url: settings
+          - generic [ref=e46]: 
+          - generic [ref=e47]: Settings
+    - button "" [ref=e48] [cursor=pointer]:
+      - generic [ref=e49]: 
+      - text: 
+  - main [ref=e50]:
+    - generic [ref=e51]:
+      - generic [ref=e52]:
+        - text: 
+        - generic [ref=e53]:
+          - heading " Runner Instances" [active] [level=1] [ref=e54]:
+            - generic [ref=e55]: 
+            - text: Runner Instances
+          - generic [ref=e56]: View Orleans-managed runners across connected hosts.
+      - button "" [ref=e58] [cursor=pointer]:
+        - text: 
+        - generic [ref=e60]: 
+    - article [ref=e61]:
+      - generic [ref=e62]:
+        - generic [ref=e63]:
+          - generic [ref=e64]: Search
+          - textbox "Filter runners…" [ref=e65]
+        - generic [ref=e66]:
+          - generic [ref=e67]: Status
+          - combobox [ref=e68]:
+            - option "Active" [selected]
+            - option "All"
+            - option "Pending"
+            - option "Starting"
+            - option "Running"
+            - option "Stopping"
+            - option "Stopped"
+            - option "Failed"
+            - option "Crashed"
+        - generic [ref=e69]:
+          - generic [ref=e70]: Host
+          - combobox [ref=e71]:
+            - option "All" [selected]
+            - option "linux-host-192.168.2.4"
+            - option "mac-host-192.168.2.134"
+            - option "windows-host-192.168.2.125"
+        - generic [ref=e72]:
+          - generic [ref=e73]: Profile
+          - combobox [ref=e74]:
+            - option "All" [selected]
+            - option "MacOS-Native"
+            - option "MAUI-Linux"
+            - option "MAUI-macOS"
+        - generic [ref=e75]:
+          - generic [ref=e76]: Mode
+          - combobox [ref=e77]:
+            - option "All" [selected]
+            - option "Static"
+            - option "Dynamic"
+        - button " Refresh" [ref=e79] [cursor=pointer]:
+          - generic [ref=e80]: 
+          - text: Refresh
+      - generic [ref=e81]:
+        - generic [ref=e82]:
+          - strong [ref=e83]: "linux-host-192.168.2.4:"
+          - text: Docker 5/10 · Tart 0/3 · Native 0/5
+        - generic [ref=e84]:
+          - strong [ref=e85]: "mac-host-192.168.2.134:"
+          - text: Docker 0/10 · Tart 0/3 · Native 1/5
+        - generic [ref=e86]:
+          - strong [ref=e87]: "windows-host-192.168.2.125:"
+          - text: Docker 0/10 · Tart 0/3 · Native 0/5
+      - table [ref=e89]:
+        - rowgroup [ref=e90]:
+          - row "Runner Name Profile Status Mode Started ▼ Last Health Check Actions" [ref=e91]:
+            - button "Runner Name" [ref=e92] [cursor=pointer]
+            - button "Profile" [ref=e93] [cursor=pointer]
+            - button "Status" [ref=e94] [cursor=pointer]
+            - button "Mode" [ref=e95] [cursor=pointer]
+            - button "Started ▼" [ref=e96] [cursor=pointer]
+            - button "Last Health Check" [ref=e97] [cursor=pointer]
+            - columnheader "Actions" [ref=e98]
+        - rowgroup [ref=e99]:
+          - button " linux-host-192.168.2.4 5 Docker 5/10 · Tart 0/3 · Native 0/5" [ref=e100] [cursor=pointer]:
+            - cell " linux-host-192.168.2.4 5 Docker 5/10 · Tart 0/3 · Native 0/5" [ref=e101]:
+              - generic [ref=e102]: 
+              - strong [ref=e103]: linux-host-192.168.2.4
+              - generic [ref=e104]: "5"
+              - text: Docker 5/10 · Tart 0/3 · Native 0/5
+          - 'row "MAUI-Linux-jit-dc7e9b02 MAUI-Linux Host usage: 5/10 Running Running Dynamic 04/14/2026 21:07 21:32:05   Stop Remove" [ref=e105]':
+            - cell "MAUI-Linux-jit-dc7e9b02" [ref=e106]
+            - 'cell "MAUI-Linux Host usage: 5/10" [ref=e107]':
+              - text: MAUI-Linux
+              - text: "Host usage: 5/10"
+            - cell "Running Running" [ref=e108]:
+              - generic [ref=e109]: Running
+              - text: Running
+            - cell "Dynamic" [ref=e110]:
+              - generic [ref=e111]: Dynamic
+            - cell "04/14/2026 21:07" [ref=e112]
+            - cell "21:32:05" [ref=e113]
+            - cell "  Stop Remove" [ref=e114]:
+              - link "" [ref=e115] [cursor=pointer]:
+                - /url: /logs?source=runner:6891e9b7-9de7-4c78-adbd-57fa7a54ba6b
+                - generic [ref=e116]: 
+              - button " Stop" [ref=e117] [cursor=pointer]:
+                - generic [ref=e118]: 
+                - text: Stop
+              - button "Remove" [ref=e119] [cursor=pointer]
+          - 'row "MAUI-Linux-jit-982f2974 MAUI-Linux Host usage: 5/10 Running Running Dynamic 04/14/2026 21:07 21:32:05   Stop Remove" [ref=e120]':
+            - cell "MAUI-Linux-jit-982f2974" [ref=e121]
+            - 'cell "MAUI-Linux Host usage: 5/10" [ref=e122]':
+              - text: MAUI-Linux
+              - text: "Host usage: 5/10"
+            - cell "Running Running" [ref=e123]:
+              - generic [ref=e124]: Running
+              - text: Running
+            - cell "Dynamic" [ref=e125]:
+              - generic [ref=e126]: Dynamic
+            - cell "04/14/2026 21:07" [ref=e127]
+            - cell "21:32:05" [ref=e128]
+            - cell "  Stop Remove" [ref=e129]:
+              - link "" [ref=e130] [cursor=pointer]:
+                - /url: /logs?source=runner:5290295e-9d9a-416a-980e-fc0f917172ad
+                - generic [ref=e131]: 
+              - button " Stop" [ref=e132] [cursor=pointer]:
+                - generic [ref=e133]: 
+                - text: Stop
+              - button "Remove" [ref=e134] [cursor=pointer]
+          - 'row "MAUI-Linux-jit-0d1ee558 MAUI-Linux Host usage: 5/10 Running Running Dynamic 04/14/2026 21:07 21:32:05   Stop Remove" [ref=e135]':
+            - cell "MAUI-Linux-jit-0d1ee558" [ref=e136]
+            - 'cell "MAUI-Linux Host usage: 5/10" [ref=e137]':
+              - text: MAUI-Linux
+              - text: "Host usage: 5/10"
+            - cell "Running Running" [ref=e138]:
+              - generic [ref=e139]: Running
+              - text: Running
+            - cell "Dynamic" [ref=e140]:
+              - generic [ref=e141]: Dynamic
+            - cell "04/14/2026 21:07" [ref=e142]
+            - cell "21:32:05" [ref=e143]
+            - cell "  Stop Remove" [ref=e144]:
+              - link "" [ref=e145] [cursor=pointer]:
+                - /url: /logs?source=runner:0683a17b-99fc-4fd2-ade5-d6e4ec6a7d5a
+                - generic [ref=e146]: 
+              - button " Stop" [ref=e147] [cursor=pointer]:
+                - generic [ref=e148]: 
+                - text: Stop
+              - button "Remove" [ref=e149] [cursor=pointer]
+          - 'row "MAUI-Linux-jit-8dd3536f MAUI-Linux Host usage: 5/10 Running Running Dynamic 04/14/2026 21:07 21:32:05   Stop Remove" [ref=e150]':
+            - cell "MAUI-Linux-jit-8dd3536f" [ref=e151]
+            - 'cell "MAUI-Linux Host usage: 5/10" [ref=e152]':
+              - text: MAUI-Linux
+              - text: "Host usage: 5/10"
+            - cell "Running Running" [ref=e153]:
+              - generic [ref=e154]: Running
+              - text: Running
+            - cell "Dynamic" [ref=e155]:
+              - generic [ref=e156]: Dynamic
+            - cell "04/14/2026 21:07" [ref=e157]
+            - cell "21:32:05" [ref=e158]
+            - cell "  Stop Remove" [ref=e159]:
+              - link "" [ref=e160] [cursor=pointer]:
+                - /url: /logs?source=runner:cd4c762d-4fd4-4b0d-bfb1-c15aea10dbdb
+                - generic [ref=e161]: 
+              - button " Stop" [ref=e162] [cursor=pointer]:
+                - generic [ref=e163]: 
+                - text: Stop
+              - button "Remove" [ref=e164] [cursor=pointer]
+          - 'row "MAUI-Linux-jit-c8e23221 MAUI-Linux Host usage: 5/10 Running Running Dynamic 04/14/2026 21:07 21:32:05   Stop Remove" [ref=e165]':
+            - cell "MAUI-Linux-jit-c8e23221" [ref=e166]
+            - 'cell "MAUI-Linux Host usage: 5/10" [ref=e167]':
+              - text: MAUI-Linux
+              - text: "Host usage: 5/10"
+            - cell "Running Running" [ref=e168]:
+              - generic [ref=e169]: Running
+              - text: Running
+            - cell "Dynamic" [ref=e170]:
+              - generic [ref=e171]: Dynamic
+            - cell "04/14/2026 21:07" [ref=e172]
+            - cell "21:32:05" [ref=e173]
+            - cell "  Stop Remove" [ref=e174]:
+              - link "" [ref=e175] [cursor=pointer]:
+                - /url: /logs?source=runner:d6fd488b-b2d9-47ef-a8f5-7ee3e77f1536
+                - generic [ref=e176]: 
+              - button " Stop" [ref=e177] [cursor=pointer]:
+                - generic [ref=e178]: 
+                - text: Stop
+              - button "Remove" [ref=e179] [cursor=pointer]
+          - button " mac-host-192.168.2.134 1 Docker 0/10 · Tart 0/3 · Native 1/5" [ref=e180] [cursor=pointer]:
+            - cell " mac-host-192.168.2.134 1 Docker 0/10 · Tart 0/3 · Native 1/5" [ref=e181]:
+              - generic [ref=e182]: 
+              - strong [ref=e183]: mac-host-192.168.2.134
+              - generic [ref=e184]: "1"
+              - text: Docker 0/10 · Tart 0/3 · Native 1/5
+          - 'row "MacOS-Native-jit-7e36026d MacOS-Native Host usage: 1/8 Running Running Dynamic 04/14/2026 21:07 21:33:39   Stop Remove" [ref=e185]':
+            - cell "MacOS-Native-jit-7e36026d" [ref=e186]
+            - 'cell "MacOS-Native Host usage: 1/8" [ref=e187]':
+              - text: MacOS-Native
+              - text: "Host usage: 1/8"
+            - cell "Running Running" [ref=e188]:
+              - generic [ref=e189]: Running
+              - text: Running
+            - cell "Dynamic" [ref=e190]:
+              - generic [ref=e191]: Dynamic
+            - cell "04/14/2026 21:07" [ref=e192]
+            - cell "21:33:39" [ref=e193]
+            - cell "  Stop Remove" [ref=e194]:
+              - link "" [ref=e195] [cursor=pointer]:
+                - /url: /logs?source=runner:bbd2d429-ae37-4f33-9bea-dc01a3d7977a
+                - generic [ref=e196]: 
+              - button " Stop" [ref=e197] [cursor=pointer]:
+                - generic [ref=e198]: 
+                - text: Stop
+              - button "Remove" [ref=e199] [cursor=pointer]

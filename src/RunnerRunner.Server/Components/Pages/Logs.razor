@@ -4,6 +4,7 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Hubs
+@using RunnerRunner.Server.Services
 @using Microsoft.AspNetCore.SignalR
 @using Microsoft.AspNetCore.Components
 @inject IDocumentStore Store
@@ -103,6 +104,7 @@
                 <option value="100">100 lines</option>
                 <option value="200">200 lines</option>
                 <option value="500">500 lines</option>
+                <option value="1000">1000 lines</option>
             </select>
             <button class="btn btn-sm btn-primary" @onclick="FetchLogs" disabled="@isLoading">
                 <i class="bi bi-arrow-clockwise me-1"></i> Refresh
@@ -122,6 +124,9 @@
         @* Terminal container *@
         <div class="flex-grow-1 rounded overflow-hidden border" style="min-height: 300px;">
             <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
+        </div>
+        <div class="text-muted mt-2" style="font-size: 0.75rem;">
+            Host and runner logs are loaded on demand from the connected agent when available.
         </div>
     </div>
 </div>
@@ -186,15 +191,13 @@
     private bool termInitialized;
     private string searchQuery = "";
     private string lastFetchTime = "";
+    private TaskCompletionSource<string>? _hostLogsTcs;
     private TaskCompletionSource<string>? _runnerLogsTcs;
 
     protected override async Task OnInitializedAsync()
     {
-        hosts = (await Store.Query<Host>().ToList()).ToList();
-        runnerInstances = (await Store.Query<RunnerInstance>().ToList())
-            .Where(i => i.Status == RunnerInstanceStatus.Running || i.Status == RunnerInstanceStatus.Starting)
-            .ToList();
-        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
+        await LoadSources();
+        AgentHub.OnHostLogsReceived += OnHostLogsReceived;
         AgentHub.OnRunnerLogsReceived += OnRunnerLogsReceived;
 
         // Check for query string parameter
@@ -253,6 +256,8 @@
 
         try
         {
+            await LoadSources();
+
             if (selectedSource == "server")
             {
                 logContent = await GetServerLogsAsync();
@@ -312,12 +317,28 @@
         var host = hosts.FirstOrDefault(h => h.Id == instance.HostId);
         if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
-        // LEGACY: Checks AgentHub for connection state. Will use HostGrain status instead.
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
+        var agent = FindConnectedAgent(host);
 
         if (agent == null)
-            return $"\x1b[33mHost '{host.Label}' is not connected.\x1b[0m";
+        {
+            var lines = new List<string>
+            {
+                $"\x1b[1;36m=== Runner: {instance.RunnerName} ===\x1b[0m",
+                $"\x1b[90mHost: {host.Label}\x1b[0m",
+                $"Status: \x1b[1m{instance.Status}\x1b[0m",
+                $"Mode: {GetModeLabel(instance)}",
+            };
+
+            if (!string.IsNullOrWhiteSpace(instance.StatusMessage))
+                lines.Add($"Detail: {instance.StatusMessage}");
+
+            lines.Add("");
+            lines.Add("\x1b[33mDirect live log streaming is unavailable for this host right now.\x1b[0m");
+            lines.Add("\x1b[90mThe runner is tracked by the Orleans lifecycle model, but live log streaming is not currently available from this host.\x1b[0m");
+            lines.Add("");
+            lines.AddRange(GetManualLogHints(host, instance));
+            return string.Join("\n", lines);
+        }
 
         var handle = instance.ContainerId ?? instance.RunnerName;
         _runnerLogsTcs = new TaskCompletionSource<string>();
@@ -345,19 +366,24 @@
         lines.Add($"\x1b[90mTimestamp: {DateTime.UtcNow:u}\x1b[0m");
         lines.Add("");
 
-        // LEGACY: Checks AgentHub for connection state. Will use HostGrain status instead.
         var connectedAgents = AgentHub.GetConnectedAgents();
-        lines.Add($"\x1b[1mConnected hosts:\x1b[0m {connectedAgents.Count}");
-        foreach (var agent in connectedAgents.Values)
+        var onlineHosts = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
+
+        lines.Add($"\x1b[1mHosts online in cluster:\x1b[0m {onlineHosts}/{hosts.Count}");
+        lines.Add($"\x1b[1mLive log bridges:\x1b[0m {connectedAgents.Count}");
+        lines.Add("");
+
+        foreach (var host in hosts.OrderBy(h => h.Label))
         {
-            var lastHb = agent.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
-            var runners = agent.LastMetrics?.RunningInstanceCount ?? 0;
-            var statusColor = runners > 0 ? "\x1b[32m" : "\x1b[90m";
-            lines.Add($"  {statusColor}●\x1b[0m {agent.AgentInfo.Name} \x1b[90m({agent.AgentInfo.Platform} {agent.AgentInfo.Architecture})\x1b[0m — heartbeat: {lastHb}, runners: \x1b[1m{runners}\x1b[0m");
+            var lastHb = host.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
+            var runners = runnerInstances.Count(i => i.HostId == host.Id);
+            var statusColor = host.AgentStatus == AgentStatus.Online ? "\x1b[32m" : "\x1b[90m";
+            var bridge = FindConnectedAgent(host) != null ? "live logs available" : "summary only";
+            lines.Add($"  {statusColor}●\x1b[0m {host.Label} \x1b[90m({host.Platform} {host.Architecture})\x1b[0m — heartbeat: {lastHb}, runners: \x1b[1m{runners}\x1b[0m, log access: {bridge}");
         }
 
-        if (!connectedAgents.Any())
-            lines.Add("  \x1b[33mNo hosts connected\x1b[0m");
+        if (!hosts.Any())
+            lines.Add("  \x1b[33mNo hosts registered\x1b[0m");
 
         lines.Add("");
         lines.Add("\x1b[90mFor full server container logs:\x1b[0m");
@@ -371,24 +397,39 @@
         var host = hosts.FirstOrDefault(h => h.Name == hostName);
         if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
-        // LEGACY: Checks AgentHub for connection state. Will use HostGrain status instead.
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == hostName);
-
-        if (agent == null)
-            return $"\x1b[33mHost '{host.Label}' is not connected.\x1b[0m\n\n\x1b[90mCheck logs manually:\n  ssh <user>@<host> 'tail -{tailLines} /tmp/runnerrunner-agent.log'\x1b[0m";
+        var agent = FindConnectedAgent(host);
 
         var lines = new List<string>();
         lines.Add($"\x1b[1;36m=== Host: {host.Label} ===\x1b[0m");
         lines.Add($"\x1b[90mPlatform: {host.Platform} {host.Architecture}\x1b[0m");
-        lines.Add($"Status: \x1b[32m{host.AgentStatus}\x1b[0m");
+        lines.Add($"Status: {(host.AgentStatus == AgentStatus.Online ? "\x1b[32m" : "\x1b[33m")}{host.AgentStatus}\x1b[0m");
         lines.Add($"Last heartbeat: {host.LastHeartbeat?.ToString("u") ?? "never"}");
         if (host.Capabilities.Any())
             lines.Add($"Capabilities: \x1b[90m{string.Join(", ", host.Capabilities)}\x1b[0m");
         lines.Add("");
 
+        if (agent != null)
+        {
+            lines.Add($"\x1b[1mLive host log tail:\x1b[0m last {tailLines} lines");
+            lines.Add("\x1b[90mLoaded on demand from the connected host agent.\x1b[0m");
+            lines.Add("");
+
+            var liveLogs = await RequestHostLogsAsync(agent);
+            if (!string.IsNullOrWhiteSpace(liveLogs))
+                lines.Add(liveLogs);
+
+            lines.Add("");
+        }
+        else
+        {
+            lines.Add("\x1b[33mDirect live host log streaming is unavailable right now.\x1b[0m");
+            lines.Add("\x1b[90mThis host is registered with the cluster, but live log streaming is not currently available.\x1b[0m");
+            lines.Add("");
+        }
+
         var instances = (await Store.Query<RunnerInstance>().ToList())
-            .Where(i => i.HostId == host.Id).ToList();
+            .Where(i => IsManagedInstance(i) && i.HostId == host.Id)
+            .ToList();
 
         if (instances.Count > 0)
         {
@@ -409,13 +450,93 @@
         }
 
         lines.Add("");
-        lines.Add("\x1b[90mFor full host logs:\x1b[0m");
-        if (host.Platform == HostPlatform.Linux)
-            lines.Add("\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs agent --tail 100'\x1b[0m");
-        else
-            lines.Add($"\x1b[90m  ssh <user>@{hostName} 'tail -{tailLines} /tmp/runnerrunner-agent.log'\x1b[0m");
+        if (agent == null)
+            lines.AddRange(GetManualLogHints(host));
 
         return string.Join("\n", lines);
+    }
+
+    private async Task LoadSources()
+    {
+        hosts = (await Store.Query<Host>().ToList())
+            .OrderByDescending(h => h.AgentStatus == AgentStatus.Online)
+            .ThenBy(h => h.Label)
+            .ToList();
+
+        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
+
+        runnerInstances = (await Store.Query<RunnerInstance>().ToList())
+            .Where(i => IsManagedInstance(i) &&
+                        i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
+            .OrderBy(i => hostNames.GetValueOrDefault(i.HostId, i.HostId))
+            .ThenBy(i => i.RunnerName)
+            .ToList();
+
+        if (selectedSource.StartsWith("runner:") &&
+            !runnerInstances.Any(i => $"runner:{i.Id}" == selectedSource))
+        {
+            selectedSource = "server";
+        }
+    }
+
+    private static bool IsManagedInstance(RunnerInstance instance) =>
+        CapacityPlanningService.IsRunnerRunnerManaged(instance);
+
+    private ConnectedAgent? FindConnectedAgent(Host host) =>
+        AgentHub.GetConnectedAgents().Values.FirstOrDefault(a =>
+            a.AgentInfo.Name == host.Name
+            || a.AgentInfo.AgentId == host.Name
+            || a.AgentInfo.AgentId == host.Id);
+
+    private async Task<string> RequestHostLogsAsync(ConnectedAgent agent)
+    {
+        _hostLogsTcs = new TaskCompletionSource<string>();
+        await HubContext.Clients.Client(agent.ConnectionId).GetHostLogs(new GetHostLogsCommand
+        {
+            TailLines = tailLines
+        });
+
+        var completedTask = await Task.WhenAny(_hostLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        if (completedTask == _hostLogsTcs.Task)
+            return await _hostLogsTcs.Task;
+
+        return "\x1b[33mTimeout waiting for host logs.\x1b[0m";
+    }
+
+    private void OnHostLogsReceived(HostLogsEvent evt)
+    {
+        _hostLogsTcs?.TrySetResult(evt.Logs ?? "(empty)");
+        InvokeAsync(StateHasChanged);
+    }
+
+    private string GetModeLabel(RunnerInstance instance) =>
+        string.Equals(instance.ProvisioningMode, "dynamic", StringComparison.OrdinalIgnoreCase)
+            ? "Dynamic"
+            : "Static";
+
+    private IEnumerable<string> GetManualLogHints(Host host, RunnerInstance? instance = null)
+    {
+        var lines = new List<string> { "\x1b[90mManual log access:\x1b[0m" };
+
+        if (host.Platform == HostPlatform.Linux)
+        {
+            lines.Add($"\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs server --tail {tailLines}'\x1b[0m");
+        }
+        else if (host.Platform == HostPlatform.MacOS)
+        {
+            lines.Add($"\x1b[90m  ssh <user>@{host.Name} 'tail -{tailLines} /tmp/runnerrunner-hostsilo.log'\x1b[0m");
+        }
+        else
+        {
+            lines.Add("\x1b[90m  Check the local HostSilo service logs on the target machine.\x1b[0m");
+        }
+
+        if (instance != null)
+        {
+            lines.Add($"\x1b[90m  Runner: {instance.RunnerName} ({instance.Id})\x1b[0m");
+        }
+
+        return lines;
     }
 
     private string GetPlatformIcon(HostPlatform platform) => platform switch
@@ -443,6 +564,7 @@
 
     public void Dispose()
     {
+        AgentHub.OnHostLogsReceived -= OnHostLogsReceived;
         AgentHub.OnRunnerLogsReceived -= OnRunnerLogsReceived;
         try { _ = JS.InvokeVoidAsync("rrTerminal.dispose", "rr-terminal"); }
         catch { }

@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\RunnerRunner.Agent\RunnerRunner.Agent.csproj" />
     <ProjectReference Include="..\RunnerRunner.Core\RunnerRunner.Core.csproj" />
     <ProjectReference Include="..\RunnerRunner.ServiceDefaults\RunnerRunner.ServiceDefaults.csproj" />
     <ProjectReference Include="..\RunnerRunner.Server\RunnerRunner.Server.csproj">

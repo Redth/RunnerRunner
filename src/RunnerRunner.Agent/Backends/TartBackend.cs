@@ -38,24 +38,29 @@ public class TartBackend : IRunnerBackend
         var config = request.TartConfig
             ?? throw new InvalidOperationException("TartConfig is required for Tart backend");
 
-        var sourceImage = $"{config.RegistryUrl}/{config.ImageName}:{config.Tag}";
+        var sourceImage = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag);
         var vmName = request.RunnerName.StartsWith("rr-", StringComparison.OrdinalIgnoreCase)
             ? request.RunnerName
             : $"rr-{request.RunnerName}";
 
         // Clone the base image for this runner instance
         _logger.LogInformation("Cloning tart image {Source} → {VM}", sourceImage, vmName);
-        await RunCommandAsync("tart", $"clone {sourceImage} {vmName}", ct);
+        EnsureSuccess(await RunCommandAsync("tart", $"clone {sourceImage} {vmName}", ct),
+            $"tart clone {sourceImage} {vmName}");
 
         // Configure VM resources if specified
         if (config.CpuCount.HasValue)
-            await RunCommandAsync("tart", $"set {vmName} --cpu {config.CpuCount.Value}", ct);
+            EnsureSuccess(await RunCommandAsync("tart", $"set {vmName} --cpu {config.CpuCount.Value}", ct),
+                $"tart set {vmName} --cpu {config.CpuCount.Value}");
         if (config.MemorySizeGb.HasValue)
-            await RunCommandAsync("tart", $"set {vmName} --memory {config.MemorySizeGb.Value * 1024}", ct);
+            EnsureSuccess(await RunCommandAsync("tart", $"set {vmName} --memory {config.MemorySizeGb.Value * 1024}", ct),
+                $"tart set {vmName} --memory {config.MemorySizeGb.Value * 1024}");
         if (config.DiskSizeGb.HasValue)
-            await RunCommandAsync("tart", $"set {vmName} --disk-size {config.DiskSizeGb.Value}", ct);
+            EnsureSuccess(await RunCommandAsync("tart", $"set {vmName} --disk-size {config.DiskSizeGb.Value}", ct),
+                $"tart set {vmName} --disk-size {config.DiskSizeGb.Value}");
         if (!string.IsNullOrEmpty(config.Display))
-            await RunCommandAsync("tart", $"set {vmName} --display {config.Display}", ct);
+            EnsureSuccess(await RunCommandAsync("tart", $"set {vmName} --display {config.Display}", ct),
+                $"tart set {vmName} --display {config.Display}");
 
         // Build tart run arguments with shared directories
         var dirArgs = "";
@@ -71,13 +76,15 @@ public class TartBackend : IRunnerBackend
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "tart",
+                FileName = ResolveToolPath("tart", "/opt/homebrew/bin/tart", "/usr/local/bin/tart") ?? "tart",
                 Arguments = $"run {vmName} --no-graphics {dirArgs}",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                WorkingDirectory = "/"
             }
         };
+        process.StartInfo.Environment["PATH"] = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin";
         process.Start();
 
         // Wait for VM to get an IP, then set up runner via SSH
@@ -89,7 +96,7 @@ public class TartBackend : IRunnerBackend
         }
         else
         {
-            _logger.LogError("Tart VM {VM} did not get an IP address within 90 seconds", vmName);
+            throw new InvalidOperationException($"Tart VM {vmName} did not get an IP address within 90 seconds");
         }
 
         return new RunnerInstanceInfo
@@ -307,24 +314,69 @@ public class TartBackend : IRunnerBackend
             sshUser, vmIp, script.Length > 200 ? script[..200] + "..." : script);
 
         var sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15";
+        ProcessStartInfo psi;
 
-        // Build the full SSH command and run via bash -c to handle quoting correctly
-        string fullCommand;
         if (!string.IsNullOrEmpty(sshPassword))
-            fullCommand = $"sshpass -p '{EscapeShell(sshPassword)}' ssh {sshOpts} {sshUser}@{vmIp} bash -s";
-        else
-            fullCommand = $"ssh {sshOpts} {sshUser}@{vmIp} bash -s";
-
-        // Use bash -s to read script from stdin — avoids all quoting issues
-        var psi = new ProcessStartInfo
         {
-            FileName = "/bin/bash",
-            Arguments = $"-c \"{fullCommand.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true
-        };
+            var sshpassPath = ResolveToolPath("sshpass", "/opt/homebrew/bin/sshpass", "/usr/local/bin/sshpass");
+            if (!string.IsNullOrWhiteSpace(sshpassPath))
+            {
+                var fullCommand = $"{sshpassPath} -p '{EscapeShell(sshPassword)}' ssh {sshOpts} {sshUser}@{vmIp} bash -s";
+                psi = new ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = $"-lc \"{fullCommand.Replace("\"", "\\\"")}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true
+                };
+            }
+            else
+            {
+                var expectPath = ResolveToolPath("expect", "/usr/bin/expect", "/opt/homebrew/bin/expect", "/usr/local/bin/expect");
+                if (string.IsNullOrWhiteSpace(expectPath))
+                    throw new InvalidOperationException("Neither sshpass nor expect is available for password-based Tart SSH setup.");
+
+                var expectScript =
+                    $"set timeout 60; " +
+                    $"spawn ssh {sshOpts} {sshUser}@{vmIp} bash -s; " +
+                    "expect { " +
+                    "\"*assword:*\" { send -- \"$env(RR_SSH_PASSWORD)\\r\"; exp_continue } " +
+                    "timeout { } " +
+                    "eof { catch wait result; exit [lindex $result 3] } " +
+                    "}; " +
+                    "send -- \"$env(RR_SSH_SCRIPT)\\n\"; " +
+                    "send -- \"\\004\"; " +
+                    "expect eof; " +
+                    "catch wait result; " +
+                    "exit [lindex $result 3]";
+
+                psi = new ProcessStartInfo
+                {
+                    FileName = expectPath,
+                    Arguments = $"-c \"{expectScript.Replace("\"", "\\\"")}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                psi.Environment["RR_SSH_PASSWORD"] = sshPassword;
+                psi.Environment["RR_SSH_SCRIPT"] = script;
+            }
+        }
+        else
+        {
+            var fullCommand = $"ssh {sshOpts} {sshUser}@{vmIp} bash -s";
+            psi = new ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = $"-lc \"{fullCommand.Replace("\"", "\\\"")}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true
+            };
+        }
 
         // Add homebrew to PATH
         var path = psi.Environment.TryGetValue("PATH", out var existingPath) ? existingPath ?? "" : "";
@@ -333,9 +385,12 @@ public class TartBackend : IRunnerBackend
 
         var process = Process.Start(psi)!;
 
-        // Send script via stdin — no quoting issues at all
-        await process.StandardInput.WriteAsync(script);
-        process.StandardInput.Close();
+        if (psi.RedirectStandardInput)
+        {
+            await process.StandardInput.WriteAsync(script);
+            await process.StandardInput.WriteAsync(Environment.NewLine);
+            process.StandardInput.Close();
+        }
 
         var stdout = await process.StandardOutput.ReadToEndAsync(ct);
         var stderr = await process.StandardError.ReadToEndAsync(ct);
@@ -344,22 +399,32 @@ public class TartBackend : IRunnerBackend
         var output = string.IsNullOrEmpty(stderr) ? stdout : $"{stdout}\n{stderr}";
 
         if (process.ExitCode != 0)
-            _logger.LogWarning("SSH command returned {Code}: {Output}", process.ExitCode, output.Trim());
+            throw new InvalidOperationException($"SSH command failed with exit code {process.ExitCode}: {output.Trim()}");
     }
 
     private static string EscapeShell(string value) =>
         value.Replace("'", "'\\''");
 
+    private static void EnsureSuccess((int ExitCode, string Output) result, string operation)
+    {
+        if (result.ExitCode != 0)
+            throw new InvalidOperationException($"{operation} failed: {result.Output}");
+    }
+
     private static async Task<(int ExitCode, string Output)> RunCommandAsync(
         string command, string arguments, CancellationToken ct)
     {
+        if (string.Equals(command, "tart", StringComparison.OrdinalIgnoreCase))
+            command = ResolveToolPath("tart", "/opt/homebrew/bin/tart", "/usr/local/bin/tart") ?? command;
+
         var psi = new ProcessStartInfo
         {
             FileName = command,
             Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            WorkingDirectory = "/"
         };
 
         // Ensure homebrew paths are available (macOS)
@@ -376,5 +441,24 @@ public class TartBackend : IRunnerBackend
 
         var combinedOutput = string.IsNullOrEmpty(stderr) ? output : $"{output}\n{stderr}";
         return (process.ExitCode, combinedOutput.Trim());
+    }
+
+    private static string? ResolveToolPath(string command, params string[] preferredPaths)
+    {
+        foreach (var path in preferredPaths)
+        {
+            if (File.Exists(path))
+                return path;
+        }
+
+        var envPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        foreach (var pathPart in envPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(pathPart, command);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return null;
     }
 }

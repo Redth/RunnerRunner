@@ -41,49 +41,67 @@ public class JitConfigService
 		try
 		{
 			var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
-
-			// Build list of endpoints to try (repo-level first, then org-level)
-			var endpoints = new List<(string url, string scope)>();
-
-			// 1. Use the actual repo from the webhook event (most specific, most likely to work)
-			if (!string.IsNullOrEmpty(webhookRepo))
-			{
-				var parts = webhookRepo.Split('/', 2);
-				if (parts.Length == 2)
-					endpoints.Add(($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{webhookRepo}"));
-			}
-
-			// 2. Try credential's configured repo
-			if (!string.IsNullOrEmpty(credential.GitHubRepo) && credential.GitHubRepo != webhookRepo)
-			{
-				var parts = credential.GitHubRepo.Split('/', 2);
-				if (parts.Length == 2)
-					endpoints.Add(($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{credential.GitHubRepo}"));
-			}
-
-			// 3. Try org-level
-			if (!string.IsNullOrEmpty(credential.GitHubOrg))
-			{
-				endpoints.Add(($"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/generate-jitconfig", $"org:{credential.GitHubOrg}"));
-			}
-
-			if (endpoints.Count == 0)
-				return new JitConfigResult { Success = false, Error = "No GitHub org, repo, or webhook repo available to generate JIT config." };
-
-			var requestBody = new
-			{
-				name = runnerName,
-				labels = labels.Select(l => l).ToArray(),
-				runner_group_id = 1,
-				work_folder = "_work"
-			};
-
 			using var client = _httpClientFactory.CreateClient();
 			client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential.GitHubToken);
 			client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
 			client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
-			var json = JsonSerializer.Serialize(requestBody);
+			// Build list of endpoints to try (repo-level first, then org-level)
+			var endpoints = new List<(string url, string scope)>();
+			var triedScopes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var errors = new List<string>();
+
+			void AddEndpoint(string url, string scope)
+			{
+				if (triedScopes.Add(scope))
+					endpoints.Add((url, scope));
+			}
+
+			// 1. Use the actual repo from the webhook event (most specific, most likely to work)
+			var normalizedWebhookRepo = NormalizeRepo(webhookRepo, credential.GitHubOrg);
+			if (!string.IsNullOrEmpty(normalizedWebhookRepo))
+			{
+				var parts = normalizedWebhookRepo.Split('/', 2);
+				if (parts.Length == 2)
+				{
+					AddEndpoint($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{normalizedWebhookRepo}");
+					AddEndpoint($"{apiUrl}/orgs/{parts[0]}/actions/runners/generate-jitconfig", $"org:{parts[0]}");
+				}
+			}
+
+			// 2. Try credential's configured repo
+			var normalizedCredentialRepo = NormalizeRepo(credential.GitHubRepo, credential.GitHubOrg);
+			if (!string.IsNullOrEmpty(normalizedCredentialRepo)
+				&& !string.Equals(normalizedCredentialRepo, normalizedWebhookRepo, StringComparison.OrdinalIgnoreCase))
+			{
+				var parts = normalizedCredentialRepo.Split('/', 2);
+				if (parts.Length == 2)
+					AddEndpoint($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{normalizedCredentialRepo}");
+			}
+
+			// 3. Try org-level
+			if (!string.IsNullOrEmpty(credential.GitHubOrg))
+			{
+				AddEndpoint($"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/generate-jitconfig", $"org:{credential.GitHubOrg}");
+			}
+
+			if (endpoints.Count == 0)
+				return new JitConfigResult { Success = false, Error = "No GitHub org, repo, or webhook repo available to generate JIT config." };
+
+			var resolvedRunnerGroupId = await ResolveRunnerGroupIdAsync(client, apiUrl, credential, runnerGroup);
+			var effectiveRunnerGroupId = resolvedRunnerGroupId ?? 1;
+			var requestBody = new
+			{
+				Name = runnerName,
+				Labels = labels.ToArray(),
+				RunnerGroupId = effectiveRunnerGroupId,
+				WorkFolder = "_work"
+			};
+
+			var json = JsonSerializer.Serialize(requestBody, JsonOptions);
+			_logger.LogInformation(
+				"Generating GitHub JIT config for runner '{RunnerName}' with group id {RunnerGroupId} and labels [{Labels}]",
+				runnerName, effectiveRunnerGroupId, string.Join(", ", labels));
 
 			// Try each endpoint — repo-level first, fall back to org-level
 			foreach (var (endpoint, scope) in endpoints)
@@ -99,6 +117,7 @@ public class JitConfigService
 				{
 					_logger.LogWarning("GitHub JIT config request to {Scope} failed with {StatusCode}: {Body}",
 						scope, response.StatusCode, responseBody);
+					errors.Add($"{scope} -> {(int)response.StatusCode}: {SummarizeError(responseBody)}");
 					continue; // Try next endpoint
 				}
 
@@ -112,13 +131,87 @@ public class JitConfigService
 			}
 
 			// All endpoints failed
-			return new JitConfigResult { Success = false, Error = "GitHub JIT config failed for all endpoints (repo + org). Check token permissions: needs admin:self_hosted_runner scope." };
+			return new JitConfigResult
+			{
+				Success = false,
+				Error = $"GitHub JIT config failed for all endpoints. {string.Join(" | ", errors)}"
+			};
 		}
 		catch (HttpRequestException ex)
 		{
 			_logger.LogError(ex, "HTTP error generating GitHub JIT config for runner '{RunnerName}'", runnerName);
 			return new JitConfigResult { Success = false, Error = $"HTTP error: {ex.Message}" };
 		}
+	}
+
+	private async Task<long?> ResolveRunnerGroupIdAsync(HttpClient client, string apiUrl, ProviderCredential credential, string? runnerGroup)
+	{
+		if (string.IsNullOrWhiteSpace(runnerGroup) || string.Equals(runnerGroup, "Default", StringComparison.OrdinalIgnoreCase))
+			return null;
+
+		if (string.IsNullOrWhiteSpace(credential.GitHubOrg))
+		{
+			_logger.LogWarning("Runner group '{RunnerGroup}' requested, but no GitHub org is configured; using GitHub default group", runnerGroup);
+			return null;
+		}
+
+		var endpoint = $"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runner-groups";
+		var response = await client.GetAsync(endpoint);
+		var body = await response.Content.ReadAsStringAsync();
+
+		if (!response.IsSuccessStatusCode)
+		{
+			_logger.LogWarning("Unable to resolve GitHub runner group '{RunnerGroup}' from {Endpoint}: {StatusCode} {Body}",
+				runnerGroup, endpoint, response.StatusCode, body);
+			return null;
+		}
+
+		using var doc = JsonDocument.Parse(body);
+		if (!doc.RootElement.TryGetProperty("runner_groups", out var groups))
+			return null;
+
+		foreach (var group in groups.EnumerateArray())
+		{
+			var name = group.GetProperty("name").GetString();
+			if (!string.Equals(name, runnerGroup, StringComparison.OrdinalIgnoreCase))
+				continue;
+
+			return group.GetProperty("id").GetInt64();
+		}
+
+		_logger.LogWarning("GitHub runner group '{RunnerGroup}' was not found in org '{Org}'; using GitHub default group",
+			runnerGroup, credential.GitHubOrg);
+		return null;
+	}
+
+	private static string SummarizeError(string? responseBody)
+	{
+		if (string.IsNullOrWhiteSpace(responseBody))
+			return "No response body";
+
+		try
+		{
+			using var doc = JsonDocument.Parse(responseBody);
+			var root = doc.RootElement;
+			var message = root.TryGetProperty("message", out var messageEl) ? messageEl.GetString() : null;
+			return string.IsNullOrWhiteSpace(message) ? responseBody : message.Replace('\n', ' ').Trim();
+		}
+		catch (JsonException)
+		{
+			return responseBody.Length > 300 ? responseBody[..300] : responseBody;
+		}
+	}
+
+	private static string? NormalizeRepo(string? repo, string? org)
+	{
+		if (string.IsNullOrWhiteSpace(repo))
+			return null;
+
+		var trimmed = repo.Trim().Trim('/');
+		if (trimmed.Contains('/'))
+			return trimmed;
+
+		return string.IsNullOrWhiteSpace(org) ? null : $"{org.Trim().Trim('/')}/{trimmed}";
 	}
 
 	public async Task<JitConfigResult> GenerateGiteaJitConfig(

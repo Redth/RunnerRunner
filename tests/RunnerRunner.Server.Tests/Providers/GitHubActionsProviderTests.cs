@@ -81,6 +81,34 @@ public class GitHubActionsProviderTests
     }
 
     [Fact]
+    public async Task GetRegistrationToken_FullOwnerRepoValue_DoesNotDuplicateOrg()
+    {
+        string? capturedUrl = null;
+        var provider = CreateProvider(req =>
+        {
+            capturedUrl = req.RequestUri?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { token = "repo-token" }))
+            };
+        });
+
+        var cred = new ProviderCredential
+        {
+            Name = "test",
+            GitHubOrg = "ignored-org",
+            GitHubRepo = "actual-owner/my-repo",
+            GitHubToken = "ghp_fake"
+        };
+
+        var token = await provider.GetRegistrationTokenAsync(cred);
+
+        Assert.Equal("repo-token", token);
+        Assert.Contains("/repos/actual-owner/my-repo/actions/runners/registration-token", capturedUrl);
+        Assert.DoesNotContain("/repos/ignored-org/actual-owner/my-repo", capturedUrl);
+    }
+
+    [Fact]
     public async Task GetRegistrationToken_UsesCustomApiUrl()
     {
         string? capturedUrl = null;

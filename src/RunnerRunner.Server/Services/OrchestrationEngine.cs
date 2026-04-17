@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.SignalR;
+using Orleans;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Hubs;
 using Host = RunnerRunner.Core.Models.Host;
 
@@ -16,15 +18,18 @@ public class OrchestrationEngine : BackgroundService
 {
     private readonly IServiceProvider _services;
     private readonly IHubContext<AgentHub, IAgentHubClient> _hubContext;
+    private readonly IGrainFactory _grainFactory;
     private readonly ILogger<OrchestrationEngine> _logger;
 
     public OrchestrationEngine(
         IServiceProvider services,
         IHubContext<AgentHub, IAgentHubClient> hubContext,
+        IGrainFactory grainFactory,
         ILogger<OrchestrationEngine> logger)
     {
         _services = services;
         _hubContext = hubContext;
+        _grainFactory = grainFactory;
         _logger = logger;
     }
 
@@ -158,6 +163,7 @@ public class OrchestrationEngine : BackgroundService
     {
         // Resolve credential first (needed for both env var injection and registration token)
         var credential = credentials.FirstOrDefault(c => c.Id == profile.ProviderCredentialId);
+        var provider = ResolveProvider(profile.Provider);
 
         // Compose environment variables (credential RR_* vars + profile sets + overrides + host overrides)
         var host = await store.Get<Host>(assignment.HostId);
@@ -171,7 +177,6 @@ public class OrchestrationEngine : BackgroundService
         {
             try
             {
-                var provider = ResolveProvider(profile.Provider);
                 if (provider != null)
                 {
                     registrationToken = await provider.GetRegistrationTokenAsync(credential, ct);
@@ -186,18 +191,11 @@ public class OrchestrationEngine : BackgroundService
         }
 
         // Generate unique runner name
+        var instanceId = Guid.NewGuid().ToString();
         var suffix = Guid.NewGuid().ToString("N")[..8];
         var runnerName = $"{profile.Name}-{suffix}";
-
-        // Create instance record
-        var instance = new RunnerInstance
-        {
-            HostId = assignment.HostId,
-            ProfileId = profile.Id,
-            RunnerName = runnerName,
-            Status = RunnerInstanceStatus.Pending
-        };
-        await store.Insert(instance);
+        var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
+        await runnerGrain.Initialize(assignment.HostId, profile.Id, runnerName, "static");
 
         // Resolve runner agent version — if null or "latest", look up actual version
         var agentVersion = profile.RunnerAgentVersion;
@@ -208,6 +206,24 @@ public class OrchestrationEngine : BackgroundService
                 .OrderByDescending(v => v.IsLatest)
                 .ThenByDescending(v => v.Version)
                 .ToList();
+
+            if (versions.Count == 0 && provider != null)
+            {
+                try
+                {
+                    versions = (await provider.GetAvailableVersionsAsync(ct))
+                        .OrderByDescending(v => v.IsLatest)
+                        .ThenByDescending(v => v.Version)
+                        .ToList();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to query live runner versions for {Provider}; deploy will rely on agent-side fallback",
+                        profile.Provider);
+                }
+            }
+
             agentVersion = versions.FirstOrDefault()?.Version;
             if (agentVersion != null)
                 _logger.LogInformation("Resolved runner agent version to {Version} for {Provider}",
@@ -217,7 +233,7 @@ public class OrchestrationEngine : BackgroundService
         // Send deploy command to agent
         var command = new DeployRunnerCommand
         {
-            InstanceId = instance.Id,
+            InstanceId = instanceId,
             ProfileId = profile.Id,
             RunnerName = runnerName,
             Backend = profile.ExecutionBackend,
@@ -235,13 +251,18 @@ public class OrchestrationEngine : BackgroundService
             WorkDirectory = host?.WorkDirectory
         };
 
-        await _hubContext.Clients.Client(agent.ConnectionId).DeployRunner(command);
-
-        instance.Status = RunnerInstanceStatus.Starting;
-        instance.DeployedAt = DateTime.UtcNow;
-        instance.StartedAt = DateTime.UtcNow;
-        instance.StatusMessage = "Deploy command sent to agent";
-        await store.Update(instance);
+        await runnerGrain.MarkStarting("Sending deploy command to host");
+        try
+        {
+            await _hubContext.Clients.Client(agent.ConnectionId).DeployRunner(command);
+            await runnerGrain.UpdateStatusMessage("Deploy command sent to host");
+            await runnerGrain.MarkDeployed();
+        }
+        catch (Exception ex)
+        {
+            await runnerGrain.MarkFailed($"Failed to dispatch deploy command: {ex.Message}");
+            throw;
+        }
 
         _logger.LogInformation("Deploy command sent for {RunnerName} to {Host}", runnerName, agent.AgentInfo.Name);
     }
@@ -252,8 +273,8 @@ public class OrchestrationEngine : BackgroundService
         ConnectedAgent agent,
         CancellationToken ct)
     {
-        instance.Status = RunnerInstanceStatus.Stopping;
-        await store.Update(instance);
+        var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id);
+        await runnerGrain.MarkStopping();
 
         await _hubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
         {
@@ -383,7 +404,14 @@ public class OrchestrationEngine : BackgroundService
     {
         var serverUrl = credential.GitHubServerUrl?.TrimEnd('/') ?? "https://github.com";
         if (!string.IsNullOrEmpty(credential.GitHubRepo))
-            return $"{serverUrl}/{credential.GitHubOrg}/{credential.GitHubRepo}";
+        {
+            var trimmedRepo = credential.GitHubRepo.Trim().Trim('/');
+            if (trimmedRepo.Contains('/'))
+                return $"{serverUrl}/{trimmedRepo}";
+
+            if (!string.IsNullOrEmpty(credential.GitHubOrg))
+                return $"{serverUrl}/{credential.GitHubOrg}/{trimmedRepo}";
+        }
         if (!string.IsNullOrEmpty(credential.GitHubOrg))
             return $"{serverUrl}/{credential.GitHubOrg}";
         return null;

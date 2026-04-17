@@ -2,9 +2,11 @@
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Services
 @inject IDocumentStore Store
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
+@inject CapacityPlanningService CapacityService
 
 <PageTitle>Runner Profiles - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -47,6 +49,11 @@
             }
         </select>
     </div>
+</div>
+
+<div class="alert alert-info py-2 d-flex align-items-center gap-2 mb-3" style="font-size: 0.9rem;">
+    <i class="bi bi-info-circle"></i>
+    <span><strong>Max Parallel Per Host</strong> is the profile-level cap. After a rule matches, each host still has to satisfy both this limit and its backend slot limit.</span>
 </div>
 
 @if (showForm)
@@ -164,13 +171,13 @@
                 </div>
                 <div class="alert alert-secondary py-2" style="font-size: 0.8rem;">
                     <i class="bi bi-info-circle me-1"></i> <strong>Path tokens:</strong>
-                    Paths support <code>${"{"}</code> token expansion. Available tokens:
-                    <code>${"{"}BASE_PATH{"}"}</code>,
-                    <code>${"{"}RUNNER_NAME{"}"}</code>,
-                    <code>${"{"}INSTANCE_ID{"}"}</code>,
-                    <code>${"{"}PROVIDER{"}"}</code>,
-                    <code>${"{"}VERSION{"}"}</code>,
-                    <code>${"{"}HOME{"}"}</code>
+                    Paths support <code>${TOKEN}</code> expansion. Available tokens:
+                    <code>${BASE_PATH}</code>,
+                    <code>${RUNNER_NAME}</code>,
+                    <code>${INSTANCE_ID}</code>,
+                    <code>${PROVIDER}</code>,
+                    <code>${VERSION}</code>,
+                    <code>${HOME}</code>
                 </div>
             }
 
@@ -178,6 +185,14 @@
             @if (editProfile.ExecutionBackend == ExecutionBackend.Docker)
             {
                 <h6 class="mt-3">Docker Image Configuration</h6>
+                @if (editProfile.RequiredHostPlatform == HostPlatform.Windows)
+                {
+                    <div class="alert alert-warning py-2" style="font-size: 0.85rem;">
+                        <i class="bi bi-windows me-1"></i>
+                        Use a <strong>Windows container image</strong> here. The target host must have Docker running in
+                        <strong>windows</strong>-container mode; hosts report this as <code>docker_os=windows</code>.
+                    </div>
+                }
                 <div class="row">
                     <div class="col-md-3 mb-3">
                         <label class="form-label">Registry URL</label>
@@ -429,7 +444,19 @@
                         <span class="text-muted">—</span>
                     }
                 </td>
-                <td>@profile.MaxParallelPerHost</td>
+                <td>
+                    <strong>@profile.MaxParallelPerHost / host</strong>
+                    @if (capacitySnapshot.Profiles.TryGetValue(profile.Id, out var profileCapacity))
+                    {
+                        <div class="small text-muted mt-1">
+                            Active: @profileCapacity.TotalActive
+                            @if (profileCapacity.TotalActive > 0)
+                            {
+                                <span> · saturated on @profileCapacity.SaturatedHostCount host(s)</span>
+                            }
+                        </div>
+                    }
+                </td>
                 <td>
                     <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)"><i class="bi bi-pencil-square"></i> Edit</button>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteProfile(profile)"><i class="bi bi-trash3"></i> Delete</button>
@@ -444,6 +471,7 @@
     private List<RunnerProfile> profiles = [];
     private List<EnvironmentVariableSet> allEnvVarSets = [];
     private List<ProviderCredential> credentials = [];
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private RunnerProfile editProfile = new() { Name = "" };
     private bool showForm;
     private bool isEditing;
@@ -548,10 +576,16 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadDataAsync();
+        BuildRrResolvableVars();
+    }
+
+    private async Task LoadDataAsync()
+    {
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         allEnvVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
         credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
-        BuildRrResolvableVars();
+        capacitySnapshot = await CapacityService.GetSnapshotAsync();
     }
 
     private void ShowCreateForm()
@@ -661,7 +695,7 @@
         else
             await Store.Insert(editProfile);
 
-        profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        await LoadDataAsync();
         showForm = false;
     }
 
@@ -674,7 +708,7 @@
     private async Task DeleteProfile(string id)
     {
         await Store.Remove<RunnerProfile>(id);
-        profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        await LoadDataAsync();
     }
 
     private void OnBackendChanged() => StateHasChanged();

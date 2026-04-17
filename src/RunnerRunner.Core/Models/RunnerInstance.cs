@@ -25,6 +25,12 @@ public class RunnerInstance
     /// <summary>Provider job ID this instance was provisioned for (dynamic only)</summary>
     public string? JobId { get; set; }
 
+    /// <summary>
+    /// True when this instance lifecycle was created and is actively managed by RunnerRunner.
+    /// Null/false entries are treated as external or legacy records in the UI/capacity views.
+    /// </summary>
+    public bool? ManagedByRunnerRunner { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DeployedAt { get; set; }
     public DateTime? StartedAt { get; set; }

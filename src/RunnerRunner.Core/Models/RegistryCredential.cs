@@ -16,6 +16,7 @@ public class RegistryCredential
     public required string Name { get; set; }
     public required string RegistryUrl { get; set; }
     public RegistryType RegistryType { get; set; } = RegistryType.Docker;
+    public string? DefaultNamespace { get; set; }
     public string? Username { get; set; }
     public string? Password { get; set; }
     public bool IsDefault { get; set; }

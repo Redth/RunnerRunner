@@ -28,7 +28,12 @@ public class ServerHostRegistrationService : BackgroundService
         // Wait for silo to be ready
         await Task.Delay(8000, stoppingToken);
 
-        var hostId = _config["HostSilo:HostId"] ?? $"server-{Environment.MachineName}";
+        var advertisedIp = _config["Orleans:AdvertisedIPAddress"];
+        var defaultHostId = !string.IsNullOrWhiteSpace(advertisedIp)
+            ? $"linux-host-{advertisedIp}"
+            : $"server-{Environment.MachineName}";
+
+        var hostId = _config["HostSilo:HostId"] ?? defaultHostId;
         var hostName = _config["HostSilo:HostName"] ?? hostId;
 
         _logger.LogInformation("Registering server as host: {HostId}", hostId);

@@ -1,7 +1,10 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
+using RunnerRunner.Server.Services;
+using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
 
@@ -9,15 +12,18 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
 {
     private readonly IPersistentState<ProvisioningRuleGrainState> _state;
     private readonly ILogger<ProvisioningRuleGrain> _logger;
+    private readonly IServiceProvider _serviceProvider;
     private IGrainTimer? _reconcileTimer;
 
     public ProvisioningRuleGrain(
         [PersistentState("provisioningRule", "PersistentStore")]
         IPersistentState<ProvisioningRuleGrainState> state,
-        ILogger<ProvisioningRuleGrain> logger)
+        ILogger<ProvisioningRuleGrain> logger,
+        IServiceProvider serviceProvider)
     {
         _state = state;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     public async Task SetConfig(ProvisioningRuleConfig config)
@@ -185,7 +191,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
 
     private async Task ReconcileScaleSet(List<string> aliveIds, int aliveCount)
     {
-        var minReady = _state.State.Config.MinReady;
+        var minReady = Math.Min(_state.State.Config.MinReady, _state.State.Config.MaxInstances);
 
         if (aliveCount < minReady)
         {
@@ -298,13 +304,44 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
     {
         var profileGrain = GrainFactory.GetGrain<IProfileGrain>(_state.State.Config.ProfileId);
         var profile = await profileGrain.GetProfile();
-        var backend = profile?.ExecutionBackend ?? ExecutionBackend.Docker;
+        if (profile == null)
+        {
+            _logger.LogWarning("Rule {RuleId} references missing profile {ProfileId}",
+                this.GetPrimaryKeyString(),
+                _state.State.Config.ProfileId);
+            return null;
+        }
 
-        var scheduler = GrainFactory.GetGrain<ISchedulerGrain>(0);
-        var hostId = await scheduler.SelectHost(_state.State.Config.RequiredHostLabels, backend);
+        using var scope = _serviceProvider.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+        var hosts = (await store.Query<Core.Models.Host>().ToList()).ToList();
+        var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
+        var profilesById = (await store.Query<RunnerProfile>().ToList())
+            .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        profilesById[profile.Id] = profile;
+
+        var ruleModel = new ProvisioningRule
+        {
+            Id = this.GetPrimaryKeyString(),
+            Name = _state.State.Config.Name,
+            ProfileId = _state.State.Config.ProfileId,
+            Type = _state.State.Config.Type,
+            DesiredCount = _state.State.Config.DesiredCount,
+            TargetHostId = _state.State.Config.TargetHostId,
+            MinReady = _state.State.Config.MinReady,
+            MaxInstances = _state.State.Config.MaxInstances,
+            MaxConcurrent = _state.State.Config.MaxConcurrent,
+            RequiredHostLabels = new Dictionary<string, string>(_state.State.Config.RequiredHostLabels),
+            TargetGroupId = _state.State.Config.TargetGroupId
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(profile, ruleModel, hosts, profilesById, instances);
+        var hostId = analysis.SelectedHost?.Id;
         if (hostId == null)
         {
-            _logger.LogWarning("No host available for rule {RuleId}", this.GetPrimaryKeyString());
+            _logger.LogWarning("No host available for rule {RuleId}: {Reason}",
+                this.GetPrimaryKeyString(),
+                analysis.Reason);
             return null;
         }
 

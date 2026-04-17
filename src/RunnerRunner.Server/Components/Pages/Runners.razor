@@ -11,13 +11,14 @@
 @inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
+@inject CapacityPlanningService CapacityService
 @implements IDisposable
 
 <PageTitle>Runner Instances - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-lightning-charge-fill"></i> Runner Instances</h1>
-        <span class="page-desc">View and manage runners across connected hosts.</span>
+        <span class="page-desc">View Orleans-managed runners across connected hosts.</span>
     </div>
 </SectionContent>
 
@@ -29,6 +30,7 @@
     <div>
         <label class="form-label mb-0 small text-muted">Status</label>
         <select class="form-select form-select-sm" @bind="filterStatus" style="min-width:120px;">
+            <option value="active">Active</option>
             <option value="">All</option>
             @foreach (var s in Enum.GetValues<RunnerInstanceStatus>())
             {
@@ -69,6 +71,30 @@
     </div>
 </div>
 
+@if (capacitySnapshot.Hosts.Any())
+{
+    <div class="alert alert-light border small py-2 mb-3">
+        @foreach (var host in capacitySnapshot.Hosts.Values.OrderBy(h => h.HostLabel))
+        {
+            <div>
+                <strong>@host.HostLabel:</strong>
+                Docker @FormatBackendUsage(host, ExecutionBackend.Docker)
+                · Tart @FormatBackendUsage(host, ExecutionBackend.Tart)
+                · Native @FormatBackendUsage(host, ExecutionBackend.Native)
+            </div>
+        }
+    </div>
+}
+
+@if (unmanagedHiddenCount > 0)
+{
+    <div class="alert alert-warning py-2 mb-3 small">
+        <i class="bi bi-eye-slash me-1"></i>
+        <strong>@unmanagedHiddenCount external/legacy runner @(unmanagedHiddenCount == 1 ? "entry is" : "entries are") hidden</strong>
+        because RunnerRunner did not create or does not actively manage @(unmanagedHiddenCount == 1 ? "it" : "them").
+    </div>
+}
+
 @{
     var filtered = GetFilteredInstances();
     var groups = filtered.GroupBy(i => i.HostId)
@@ -79,7 +105,11 @@
 
 @if (!groups.Any())
 {
-    <div class="text-center text-muted py-4">No runner instances match the current filters.</div>
+    <div class="text-center text-muted py-4">
+        @(HasActiveFilters()
+            ? "No managed runner instances match the current filters."
+            : "No managed runner instances are active. Use provisioning rules to launch runners.")
+    </div>
 }
 else
 {
@@ -110,6 +140,14 @@ else
                         <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right") me-2"></i>
                         <strong>@hostLabel</strong>
                         <span class="badge @(isOrphan ? "bg-danger" : "bg-primary") ms-2">@sorted.Count</span>
+                        @if (!isOrphan && capacitySnapshot.Hosts.TryGetValue(hostId, out var hostCapacity))
+                        {
+                            <span class="small text-muted ms-2">
+                                Docker @FormatBackendUsage(hostCapacity, ExecutionBackend.Docker)
+                                · Tart @FormatBackendUsage(hostCapacity, ExecutionBackend.Tart)
+                                · Native @FormatBackendUsage(hostCapacity, ExecutionBackend.Native)
+                            </span>
+                        }
                         @if (isOrphan)
                         {
                             <button class="btn btn-sm btn-outline-danger ms-2" @onclick:stopPropagation="true" @onclick="() => ConfirmAndRemoveOrphans(sorted)">
@@ -124,7 +162,13 @@ else
                     {
                         <tr>
                             <td>@inst.RunnerName</td>
-                            <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
+                            <td>
+                                @(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))
+                                @if (TryGetProfileUsage(inst, out var usage))
+                                {
+                                    <br/><small class="text-muted">Host usage: @usage.Used/@usage.Limit</small>
+                                }
+                            </td>
                             <td>
                                 <span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span>
                                 @if (!string.IsNullOrEmpty(inst.StatusMessage))
@@ -178,9 +222,11 @@ else
     private Dictionary<string, string> hostAgentNames = new();
     private HashSet<string> validHostIds = new();
     private Dictionary<string, string> profileNames = new();
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
+    private int unmanagedHiddenCount;
 
     private string searchText = "";
-    private string filterStatus = "";
+    private string filterStatus = "active";
     private string filterHostId = "";
     private string filterProfileId = "";
     private string filterMode = "";
@@ -208,18 +254,47 @@ else
 
     private async Task Refresh()
     {
-        instances = (await Store.Query<RunnerInstance>().ToList()).ToList();
+        var allInstances = (await Store.Query<RunnerInstance>().ToList()).ToList();
+        var staleEntries = allInstances.Where(IsLegacyDiscoveryEntry).ToList();
+
+        foreach (var stale in staleEntries)
+            await Store.Remove<RunnerInstance>(stale.Id);
+
+        if (staleEntries.Count > 0)
+            allInstances = (await Store.Query<RunnerInstance>().ToList()).ToList();
+
+        unmanagedHiddenCount = allInstances.Count(i =>
+            !IsManagedInstance(i)
+            && (i.Status is RunnerInstanceStatus.Pending
+                or RunnerInstanceStatus.Starting
+                or RunnerInstanceStatus.Running
+                or RunnerInstanceStatus.Stopping));
+        instances = allInstances.Where(IsManagedInstance).ToList();
         var hosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         validHostIds = hosts.Select(h => h.Id).ToHashSet();
         hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
         hostAgentNames = hosts.ToDictionary(h => h.Id, h => h.Name);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
+        capacitySnapshot = await CapacityService.GetSnapshotAsync();
 
         // Auto-expand all hosts that have instances
         foreach (var hostId in instances.Select(i => i.HostId).Distinct())
             expandedHosts.Add(hostId);
     }
+
+    private static bool IsManagedInstance(RunnerInstance instance) =>
+        CapacityPlanningService.IsRunnerRunnerManaged(instance);
+
+    private static bool IsLegacyDiscoveryEntry(RunnerInstance instance) =>
+        string.IsNullOrWhiteSpace(instance.RunnerName);
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(searchText) ||
+        (!string.IsNullOrWhiteSpace(filterStatus) && !string.Equals(filterStatus, "active", StringComparison.OrdinalIgnoreCase)) ||
+        !string.IsNullOrWhiteSpace(filterHostId) ||
+        !string.IsNullOrWhiteSpace(filterProfileId) ||
+        !string.IsNullOrWhiteSpace(filterMode);
 
     private IEnumerable<RunnerInstance> GetFilteredInstances()
     {
@@ -234,8 +309,17 @@ else
         if (!string.IsNullOrWhiteSpace(filterMode))
             q = q.Where(i => i.ProvisioningMode == filterMode);
 
-        if (!string.IsNullOrWhiteSpace(filterStatus) && Enum.TryParse<RunnerInstanceStatus>(filterStatus, out var status))
+        if (string.Equals(filterStatus, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            q = q.Where(i => i.Status is RunnerInstanceStatus.Pending
+                or RunnerInstanceStatus.Starting
+                or RunnerInstanceStatus.Running
+                or RunnerInstanceStatus.Stopping);
+        }
+        else if (!string.IsNullOrWhiteSpace(filterStatus) && Enum.TryParse<RunnerInstanceStatus>(filterStatus, out var status))
+        {
             q = q.Where(i => i.Status == status);
+        }
 
         if (!string.IsNullOrWhiteSpace(searchText))
         {
@@ -283,6 +367,29 @@ else
         return (MarkupString)(sortAscending ? "▲" : "▼");
     }
 
+    private static string FormatBackendUsage(HostCapacityView capacity, ExecutionBackend backend)
+    {
+        if (!capacity.BackendUsage.TryGetValue(backend, out var counter))
+            return "0/0";
+
+        return counter.IsDisabled ? "off" : $"{counter.Used}/{counter.Limit}";
+    }
+
+    private bool TryGetProfileUsage(RunnerInstance instance, out ProfileHostUsage usage)
+    {
+        usage = default!;
+
+        if (!capacitySnapshot.Profiles.TryGetValue(instance.ProfileId, out var profileCapacity))
+            return false;
+
+        var match = profileCapacity.HostUsage.FirstOrDefault(h => h.HostId == instance.HostId);
+        if (match == null)
+            return false;
+
+        usage = match;
+        return true;
+    }
+
     private void ToggleHost(string hostId)
     {
         if (!expandedHosts.Remove(hostId))
@@ -292,6 +399,16 @@ else
     // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
     private async Task StopInstance(RunnerInstance inst)
     {
+        try
+        {
+            var runnerGrain = GrainFactory.GetGrain<IRunnerInstanceGrain>(inst.Id);
+            await runnerGrain.MarkStopping();
+        }
+        catch
+        {
+            // Keep the stop UX functional even if the grain is unavailable transiently.
+        }
+
         var agents = AgentHub.GetConnectedAgents();
         var agentName = hostAgentNames.GetValueOrDefault(inst.HostId);
         var agent = agents.Values.FirstOrDefault(a => a.AgentInfo.Name == agentName);

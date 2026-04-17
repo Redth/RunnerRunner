@@ -7,6 +7,7 @@ using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
 using Shiny.DocumentDb;
+using System.Text.RegularExpressions;
 
 namespace RunnerRunner.Server.Grains;
 
@@ -19,6 +20,7 @@ namespace RunnerRunner.Server.Grains;
 // them once per-host silo deployment is in place.
 public class HostGrain : Grain, IHostGrain
 {
+    private static readonly Regex IpAddressRegex = new(@"\b\d{1,3}(?:\.\d{1,3}){3}\b", RegexOptions.Compiled);
     private readonly IPersistentState<HostGrainState> _state;
     private readonly ILogger<HostGrain> _logger;
     private readonly IServiceProvider _serviceProvider;
@@ -48,10 +50,14 @@ public class HostGrain : Grain, IHostGrain
             _state.State.Labels["arch"] = architecture.ToLowerInvariant();
 
         _state.State.Status = AgentStatus.Online;
-        _state.State.CreatedAt = DateTime.UtcNow;
+        if (_state.State.CreatedAt == default)
+            _state.State.CreatedAt = DateTime.UtcNow;
+        _state.State.LastHeartbeat = DateTime.UtcNow;
 
         await _state.WriteStateAsync();
         StartHeartbeatTimer();
+        await SyncToDocumentDb();
+        await PublishHostStatusChange();
 
         _logger.LogInformation("Host {HostId} registered: {Name} ({Platform}/{Architecture})",
             this.GetPrimaryKeyString(), name, platform, architecture);
@@ -176,6 +182,8 @@ public class HostGrain : Grain, IHostGrain
             _state.State.Status = AgentStatus.Offline;
             _state.State.ConnectionId = null;
             await _state.WriteStateAsync();
+            await PublishHostStatusChange();
+            await SyncToDocumentDb();
         }
 
         _heartbeatTimer?.Dispose();
@@ -190,13 +198,42 @@ public class HostGrain : Grain, IHostGrain
             var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
 
             var hostId = this.GetPrimaryKeyString();
-            var existing = await store.Get<Core.Models.Host>(hostId);
+            var allHosts = (await store.Query<Core.Models.Host>().ToList()).ToList();
+            var existing = allHosts.FirstOrDefault(h => h.Id == hostId);
+            var legacy = allHosts.FirstOrDefault(h => h.Id != hostId && string.Equals(h.Name, _state.State.Name, StringComparison.OrdinalIgnoreCase))
+                ?? FindLegacyProjectionByIp(allHosts.Where(h => h.Id != hostId), hostId, _state.State.Name);
 
-            if (existing != null)
+            if (existing == null)
             {
-                existing.AgentStatus = _state.State.Status;
-                existing.LastHeartbeat = _state.State.LastHeartbeat;
-                existing.Labels = new Dictionary<string, string>(_state.State.Labels);
+                existing = new Core.Models.Host
+                {
+                    Id = hostId,
+                    Name = _state.State.Name,
+                    CreatedAt = _state.State.CreatedAt == default ? DateTime.UtcNow : _state.State.CreatedAt
+                };
+
+                if (legacy != null)
+                    CopyUserManagedFields(legacy, existing);
+
+                ApplyProjection(existing);
+                await store.Insert(existing);
+
+                if (legacy != null)
+                {
+                    await MigrateHostReferences(store, legacy.Id, hostId);
+                    await store.Remove<Core.Models.Host>(legacy.Id);
+                }
+            }
+            else
+            {
+                if (legacy != null)
+                {
+                    CopyUserManagedFields(legacy, existing);
+                    await MigrateHostReferences(store, legacy.Id, hostId);
+                    await store.Remove<Core.Models.Host>(legacy.Id);
+                }
+
+                ApplyProjection(existing);
                 await store.Update(existing);
             }
         }
@@ -204,5 +241,112 @@ public class HostGrain : Grain, IHostGrain
         {
             _logger.LogWarning(ex, "Failed to sync Host to DocumentDB");
         }
+    }
+
+    private void ApplyProjection(Core.Models.Host host)
+    {
+        host.Name = _state.State.Name;
+        host.Platform = _state.State.Platform;
+        host.Architecture = _state.State.Architecture;
+        host.AgentVersion = _state.State.AgentVersion;
+        host.AgentStatus = _state.State.Status;
+        host.LastHeartbeat = _state.State.LastHeartbeat;
+        host.Labels = new Dictionary<string, string>(_state.State.Labels);
+        host.Capabilities = _state.State.Labels
+            .Where(kv =>
+                kv.Value.Equals("true", StringComparison.OrdinalIgnoreCase) &&
+                kv.Key is not "os" and not "arch" and not "role")
+            .Select(kv => kv.Key)
+            .OrderBy(k => k)
+            .ToList();
+        host.MaxDockerContainers = _state.State.MaxDockerContainers;
+        host.MaxTartVMs = _state.State.MaxTartVMs;
+        host.MaxNativeProcesses = _state.State.MaxNativeProcesses;
+        host.GroupId = _state.State.GroupId;
+        host.IsApproved = true;
+        host.UpdatedAt = DateTime.UtcNow;
+    }
+
+    private static void CopyUserManagedFields(Core.Models.Host source, Core.Models.Host target)
+    {
+        target.DisplayName ??= source.DisplayName;
+        target.RunnerBasePath ??= source.RunnerBasePath;
+        target.WorkDirectory ??= source.WorkDirectory;
+
+        if (target.EnvironmentOverrides.Count == 0 && source.EnvironmentOverrides.Count > 0)
+            target.EnvironmentOverrides = new Dictionary<string, string>(source.EnvironmentOverrides);
+
+        if (target.ReportedEnvironment.Count == 0 && source.ReportedEnvironment.Count > 0)
+            target.ReportedEnvironment = new Dictionary<string, string>(source.ReportedEnvironment);
+
+        if (target.CreatedAt == default && source.CreatedAt != default)
+            target.CreatedAt = source.CreatedAt;
+    }
+
+    private static async Task MigrateHostReferences(IDocumentStore store, string oldHostId, string newHostId)
+    {
+        if (string.Equals(oldHostId, newHostId, StringComparison.Ordinal))
+            return;
+
+        var assignments = (await store.Query<RunnerAssignment>().ToList())
+            .Where(a => a.HostId == oldHostId)
+            .ToList();
+        foreach (var assignment in assignments)
+        {
+            assignment.HostId = newHostId;
+            assignment.UpdatedAt = DateTime.UtcNow;
+            await store.Update(assignment);
+        }
+
+        var instances = (await store.Query<RunnerInstance>().ToList())
+            .Where(i => i.HostId == oldHostId)
+            .ToList();
+        foreach (var instance in instances)
+        {
+            instance.HostId = newHostId;
+            await store.Update(instance);
+        }
+
+        var images = (await store.Query<AgentImage>().ToList())
+            .Where(i => i.HostId == oldHostId)
+            .ToList();
+        foreach (var image in images)
+        {
+            image.HostId = newHostId;
+            image.LastReportedAt = DateTime.UtcNow;
+            await store.Update(image);
+        }
+
+        var rules = (await store.Query<ProvisioningRule>().ToList())
+            .Where(r => r.TargetHostId == oldHostId)
+            .ToList();
+        foreach (var rule in rules)
+        {
+            rule.TargetHostId = newHostId;
+            rule.UpdatedAt = DateTime.UtcNow;
+            await store.Update(rule);
+        }
+    }
+
+    private static Core.Models.Host? FindLegacyProjectionByIp(
+        IEnumerable<Core.Models.Host> hosts,
+        params string?[] values)
+    {
+        var ips = values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .SelectMany(v => IpAddressRegex.Matches(v!).Cast<Match>().Select(m => m.Value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (ips.Count == 0)
+            return null;
+
+        return hosts
+            .Where(h => ips.Any(ip =>
+                (h.Name?.Contains(ip, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (h.DisplayName?.Contains(ip, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                h.Id.Contains(ip, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(h => h.LastHeartbeat ?? h.UpdatedAt)
+            .FirstOrDefault();
     }
 }

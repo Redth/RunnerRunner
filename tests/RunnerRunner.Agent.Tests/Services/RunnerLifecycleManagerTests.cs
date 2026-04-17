@@ -171,4 +171,26 @@ public class RunnerLifecycleManagerTests
         Assert.Equal(2, capturedRequest.EnvironmentVariables.Count);
         Assert.Equal(2, capturedRequest.Labels.Count);
     }
+
+    [Fact]
+    public async Task CollectRunnerHealth_RemovesExitedRunnerFromTracking()
+    {
+        var manager = new RunnerLifecycleManager(_logger);
+        var backend = Substitute.For<IRunnerBackend>();
+
+        backend.StartRunnerAsync(Arg.Any<RunnerStartRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new RunnerInstanceInfo { InstanceHandle = "handle-dead", RunnerName = "dead-runner" });
+        backend.GetHealthAsync("handle-dead", Arg.Any<CancellationToken>())
+            .Returns(new RunnerHealthStatus { IsRunning = false, Status = "exited:1" });
+
+        await manager.StartRunnerAsync(
+            new DeployRunnerCommand { InstanceId = "dead-1", ProfileId = "p1", RunnerName = "dead-runner" },
+            backend);
+
+        var snapshots = await manager.CollectRunnerHealthAsync();
+
+        Assert.Single(snapshots);
+        Assert.False(snapshots[0].Health.IsRunning);
+        Assert.Empty(manager.RunningInstances);
+    }
 }

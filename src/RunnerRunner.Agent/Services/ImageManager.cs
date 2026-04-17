@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using RunnerRunner.Core.Hub;
@@ -53,23 +54,16 @@ public partial class ImageManager
     }
 
     public async Task PullDockerImageAsync(
-        string imageName, string tag,
+        string imageName, string tag, string? registryUrl,
         Func<ImagePullProgressEvent, Task> onProgress,
         CancellationToken ct = default)
     {
-        var fullImage = $"{imageName}:{tag}";
+        var fullImage = ImageReference.Build(registryUrl, imageName, tag);
         _logger.LogInformation("Pulling Docker image {Image}", fullImage);
 
         var process = new Process
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "docker",
-                Arguments = $"pull {fullImage}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }
+            StartInfo = CreateProcessStartInfo("docker", $"pull {fullImage}")
         };
 
         process.Start();
@@ -121,15 +115,7 @@ public partial class ImageManager
         _logger.LogInformation("Logging in to Docker registry {Registry}", registryUrl);
         var process = new Process
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "docker",
-                Arguments = $"login {registryUrl} -u {username} --password-stdin",
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }
+            StartInfo = CreateProcessStartInfo("docker", $"login {registryUrl} -u {username} --password-stdin", redirectStandardInput: true)
         };
 
         process.Start();
@@ -165,7 +151,7 @@ public partial class ImageManager
                 if (string.IsNullOrEmpty(name)) continue;
 
                 // "Size" is the actual disk usage in GB, "Disk" is the virtual disk size
-                var sizeGb = item.TryGetProperty("Size", out var sp) ? sp.GetInt64() : 0;
+                var sizeBytes = item.TryGetProperty("Size", out var sp) ? ParseTartSizeBytes(sp) : 0;
                 var state = item.TryGetProperty("State", out var stp) ? stp.GetString() : "unknown";
 
                 images.Add(new AgentImageInfo
@@ -174,7 +160,7 @@ public partial class ImageManager
                     Repository = name,
                     Tag = state ?? "local",
                     ImageId = name,
-                    SizeBytes = sizeGb * 1024 * 1024 * 1024, // GB to bytes
+                    SizeBytes = sizeBytes,
                     CreatedAt = null
                 });
             }
@@ -197,14 +183,7 @@ public partial class ImageManager
 
         var process = new Process
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "tart",
-                Arguments = $"pull {imageName}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }
+            StartInfo = CreateProcessStartInfo("tart", $"pull {imageName}")
         };
 
         process.Start();
@@ -254,14 +233,7 @@ public partial class ImageManager
         {
             var process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = command,
-                    Arguments = arguments,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }
+                StartInfo = CreateProcessStartInfo(command, arguments)
             };
 
             process.Start();
@@ -277,19 +249,97 @@ public partial class ImageManager
         }
     }
 
+    private static ProcessStartInfo CreateProcessStartInfo(string command, string arguments, bool redirectStandardInput = false)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = ResolveToolPath(command),
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardInput = redirectStandardInput,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var commonPaths = new[]
+        {
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        };
+
+        startInfo.Environment["PATH"] = string.Join(
+            Path.PathSeparator,
+            commonPaths
+                .Concat(currentPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+                .Distinct(StringComparer.Ordinal));
+
+        return startInfo;
+    }
+
+    private static string ResolveToolPath(string command)
+    {
+        IEnumerable<string> candidates = command switch
+        {
+            "tart" =>
+            [
+                Environment.GetEnvironmentVariable("RUNNERRUNNER_TART_PATH") ?? "",
+                "/opt/homebrew/bin/tart",
+                "/usr/local/bin/tart",
+                "/Applications/Tart.app/Contents/MacOS/tart",
+                "tart"
+            ],
+            "docker" =>
+            [
+                Environment.GetEnvironmentVariable("RUNNERRUNNER_DOCKER_PATH") ?? "",
+                "/usr/local/bin/docker",
+                "/opt/homebrew/bin/docker",
+                "/usr/bin/docker",
+                "docker"
+            ],
+            _ => [command]
+        };
+
+        foreach (var candidate in candidates.Where(c => !string.IsNullOrWhiteSpace(c)))
+        {
+            if (!Path.IsPathRooted(candidate) || File.Exists(candidate))
+                return candidate;
+        }
+
+        return command;
+    }
+
     private static long ParseDockerSize(string size)
     {
         // Parse "45.2MB", "1.2GB", "500kB"
         var match = SizeRegex().Match(size);
         if (!match.Success) return 0;
         var value = double.Parse(match.Groups[1].Value);
-        return match.Groups[2].Value.ToUpper() switch
+        return match.Groups[2].Value.ToUpperInvariant().Replace("IB", "B") switch
         {
             "KB" => (long)(value * 1024),
             "MB" => (long)(value * 1024 * 1024),
             "GB" => (long)(value * 1024 * 1024 * 1024),
             "TB" => (long)(value * 1024 * 1024 * 1024 * 1024),
             _ => (long)value
+        };
+    }
+
+    private static long ParseTartSizeBytes(JsonElement sizeElement)
+    {
+        return sizeElement.ValueKind switch
+        {
+            JsonValueKind.Number when sizeElement.TryGetInt64(out var sizeGb) =>
+                sizeGb > 10_000_000 ? sizeGb : sizeGb * 1024 * 1024 * 1024,
+            JsonValueKind.Number when sizeElement.TryGetDouble(out var sizeGbDouble) =>
+                sizeGbDouble > 10_000_000 ? (long)sizeGbDouble : (long)(sizeGbDouble * 1024 * 1024 * 1024),
+            JsonValueKind.String => ParseDockerSize(sizeElement.GetString() ?? "0"),
+            _ => 0
         };
     }
 
@@ -315,10 +365,10 @@ public partial class ImageManager
         return null;
     }
 
-    [GeneratedRegex(@"([\d.]+)\s*(KB|MB|GB|TB|B)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"([\d.]+)\s*(KIB|MIB|GIB|TIB|KB|MB|GB|TB|B)", RegexOptions.IgnoreCase)]
     private static partial Regex SizeRegex();
 
-    [GeneratedRegex(@"([\d.]+)\s*(KB|MB|GB|TB|B)\s*/\s*([\d.]+)\s*(KB|MB|GB|TB|B)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"([\d.]+)\s*(KIB|MIB|GIB|TIB|KB|MB|GB|TB|B)\s*/\s*([\d.]+)\s*(KIB|MIB|GIB|TIB|KB|MB|GB|TB|B)", RegexOptions.IgnoreCase)]
     private static partial Regex ProgressRegex();
 
     [GeneratedRegex(@"([\d.]+)\s*%")]

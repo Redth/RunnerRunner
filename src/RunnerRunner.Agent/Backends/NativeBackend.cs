@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 
@@ -30,7 +31,7 @@ public class NativeBackend : IRunnerBackend
         var basePath = request.RunnerBasePath
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
         var provider = request.Provider;
-        var agentVersion = request.RunnerAgentVersion ?? "latest";
+        var agentVersion = await ResolveAgentVersionAsync(provider, request.RunnerAgentVersion, ct);
 
         // Path token context for ${TOKEN} expansion
         var tokens = new Dictionary<string, string>
@@ -260,6 +261,7 @@ public class NativeBackend : IRunnerBackend
                 {
                     ProcessId = pid,
                     RunnerName = Path.GetFileName(dir),
+                    InstanceDir = dir,
                     Backend = ExecutionBackend.Native,
                     IsRunning = isRunning,
                     Status = isRunning ? "running" : "exited"
@@ -500,6 +502,77 @@ public class NativeBackend : IRunnerBackend
 
         File.Delete(tempFile);
         _logger.LogInformation("Runner agent extracted to {Dir}", targetDir);
+    }
+
+    private async Task<string> ResolveAgentVersionAsync(
+        RunnerProvider provider, string? requestedVersion, CancellationToken ct)
+    {
+        if (!NeedsLatestResolution(requestedVersion))
+            return requestedVersion!;
+
+        var resolvedVersion = await TryResolveLatestVersionAsync(provider, ct);
+        if (!string.IsNullOrWhiteSpace(resolvedVersion))
+        {
+            _logger.LogInformation("Resolved latest {Provider} runner version to {Version}", provider, resolvedVersion);
+            return resolvedVersion;
+        }
+
+        throw new InvalidOperationException(
+            $"Unable to resolve the latest runner agent version for {provider}. " +
+            "Set an explicit runner version on the profile or ensure version discovery can reach the provider release feed.");
+    }
+
+    private async Task<string?> TryResolveLatestVersionAsync(RunnerProvider provider, CancellationToken ct)
+    {
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("RunnerRunner-Agent");
+
+        var url = provider switch
+        {
+            RunnerProvider.GitHubActions => "https://api.github.com/repos/actions/runner/releases/latest",
+            RunnerProvider.GiteaActions => "https://gitea.com/api/v1/repos/gitea/act_runner/releases/latest",
+            RunnerProvider.AzureDevOps => "https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest",
+            _ => null
+        };
+
+        if (url == null)
+            return null;
+
+        try
+        {
+            using var response = await http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Latest version lookup for {Provider} returned HTTP {StatusCode}",
+                    provider, (int)response.StatusCode);
+                return null;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            var tagName = doc.RootElement.TryGetProperty("tag_name", out var tagElement)
+                ? tagElement.GetString()
+                : null;
+
+            return NormalizeVersionTag(tagName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve latest runner agent version for {Provider}", provider);
+            return null;
+        }
+    }
+
+    internal static bool NeedsLatestResolution(string? requestedVersion) =>
+        string.IsNullOrWhiteSpace(requestedVersion)
+        || string.Equals(requestedVersion, "latest", StringComparison.OrdinalIgnoreCase);
+
+    internal static string? NormalizeVersionTag(string? tagName)
+    {
+        if (string.IsNullOrWhiteSpace(tagName))
+            return null;
+
+        return tagName.Trim().TrimStart('v', 'V');
     }
 
     // ─── Helpers ───────────────────────────────────────────

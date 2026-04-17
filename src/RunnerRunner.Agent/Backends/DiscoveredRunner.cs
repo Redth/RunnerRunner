@@ -13,6 +13,7 @@ public class DiscoveredRunner
     public string ContainerId { get; set; } = "";
     public string? VmName { get; set; }
     public int? ProcessId { get; set; }
+    public string? InstanceDir { get; set; }
     public ExecutionBackend Backend { get; set; }
     public bool IsRunning { get; set; }
     public string Status { get; set; } = "";
