@@ -170,19 +170,23 @@ public class RunnerLifecycleManager
 
     /// <summary>
     /// Expands system environment variable references ($VAR, ${VAR}) and tilde (~)
-    /// in env var values using the host's actual environment. This runs on the agent
-    /// so that $HOME, $USER, etc. resolve to the correct host-specific values.
+    /// in env var values using the host's current environment. Shells out to a login
+    /// shell so that changes made after the HostSilo started (e.g. xcode-select,
+    /// PATH modifications in .zshrc) are picked up without a restart.
     /// </summary>
     private static Dictionary<string, string> ExpandHostEnvironmentVariables(Dictionary<string, string> vars)
     {
+        var systemEnv = GetFreshSystemEnvironment();
+        var home = systemEnv.GetValueOrDefault("HOME")
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
         var result = new Dictionary<string, string>(vars.Count);
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         foreach (var kvp in vars)
         {
             var value = kvp.Value;
 
-            // Expand ~ at start of value or after = to home directory
+            // Expand ~ at start of value to home directory
             if (!string.IsNullOrEmpty(home))
             {
                 if (value == "~")
@@ -191,21 +195,19 @@ public class RunnerLifecycleManager
                     value = home + value[1..];
             }
 
-            // Expand ${VAR} and $VAR references against system environment
+            // Expand ${VAR} and $VAR references against fresh system environment
             if (value.Contains('$'))
             {
-                // First pass: ${VAR} syntax
                 value = Regex.Replace(value, @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", match =>
                 {
-                    var envVal = Environment.GetEnvironmentVariable(match.Groups[1].Value);
-                    return envVal ?? match.Value; // leave unresolved if not found
+                    var name = match.Groups[1].Value;
+                    return systemEnv.GetValueOrDefault(name) ?? match.Value;
                 });
 
-                // Second pass: $VAR syntax (not followed by { which was already handled)
                 value = Regex.Replace(value, @"\$([A-Za-z_][A-Za-z0-9_]*)", match =>
                 {
-                    var envVal = Environment.GetEnvironmentVariable(match.Groups[1].Value);
-                    return envVal ?? match.Value;
+                    var name = match.Groups[1].Value;
+                    return systemEnv.GetValueOrDefault(name) ?? match.Value;
                 });
             }
 
@@ -213,6 +215,59 @@ public class RunnerLifecycleManager
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Spawns a login shell to capture the current system environment variables,
+    /// reflecting any changes made after this process started.
+    /// Falls back to the process environment if the shell fails.
+    /// </summary>
+    private static Dictionary<string, string> GetFreshSystemEnvironment()
+    {
+        try
+        {
+            var shell = Environment.GetEnvironmentVariable("SHELL") ?? "/bin/sh";
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = shell,
+                Arguments = "-l -c env",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc == null) return GetProcessEnvironment();
+
+            var output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(5000);
+
+            var env = new Dictionary<string, string>();
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eqIdx = line.IndexOf('=');
+                if (eqIdx > 0)
+                    env[line[..eqIdx]] = line[(eqIdx + 1)..].TrimEnd('\r');
+            }
+
+            return env.Count > 0 ? env : GetProcessEnvironment();
+        }
+        catch
+        {
+            return GetProcessEnvironment();
+        }
+    }
+
+    private static Dictionary<string, string> GetProcessEnvironment()
+    {
+        var env = new Dictionary<string, string>();
+        foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is string key && entry.Value is string val)
+                env[key] = val;
+        }
+        return env;
     }
 }
 
