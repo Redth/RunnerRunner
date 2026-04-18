@@ -66,14 +66,29 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             .Where(r => r.Enabled && r.Type == ProvisioningType.Webhook)
             .ToList();
 
-        // Find first rule where HMAC signature matches
+        // Find a rule where HMAC signature matches AND repo/org is in scope.
+        // Multiple rules may share the same webhook secret, so we must check all
+        // of them rather than stopping at the first HMAC match.
         ProvisioningRule? matchedRule = null;
+        var hmacMatchCount = 0;
         foreach (var rule in candidateRules)
         {
             if (string.IsNullOrEmpty(rule.WebhookSecret))
                 continue;
 
-            if (ValidateHmac(body, rule.WebhookSecret, signatureHeader, provider))
+            if (!ValidateHmac(body, rule.WebhookSecret, signatureHeader, provider))
+                continue;
+
+            hmacMatchCount++;
+
+            // Check repo/org scope
+            var repoMatch = rule.AllowedRepos.Any(r =>
+                r.Equals(repo, StringComparison.OrdinalIgnoreCase));
+            var orgMatch = rule.AllowedOrgs.Any(o =>
+                o.Equals(org, StringComparison.OrdinalIgnoreCase));
+            var scopeOpen = rule.AllowedRepos.Count == 0 && rule.AllowedOrgs.Count == 0;
+
+            if (repoMatch || orgMatch || scopeOpen)
             {
                 matchedRule = rule;
                 break;
@@ -82,8 +97,16 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
         if (matchedRule == null)
         {
-            _logger.LogWarning("Webhook from {Repo}: no rule matched signature (checked {Count} rules)",
-                repo, candidateRules.Count);
+            var status = hmacMatchCount > 0 ? "rejected" : (candidateRules.Count > 0 ? "rejected" : "no_match");
+            var error = hmacMatchCount > 0
+                ? "Repository not in scope"
+                : (candidateRules.Count > 0 ? "Signature validation failed" : null);
+            var message = hmacMatchCount > 0
+                ? $"Repository not in scope (checked {hmacMatchCount} HMAC-matched rules)"
+                : (candidateRules.Count > 0 ? "Signature validation failed" : "No matching rule");
+
+            _logger.LogWarning("Webhook from {Repo}: {Message} (checked {Count} rules)",
+                repo, message, candidateRules.Count);
 
             await store.Insert(new WebhookEvent
             {
@@ -94,49 +117,15 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 Repository = repo,
                 WorkflowName = workflowName,
                 Labels = labels,
-                Status = candidateRules.Count > 0 ? "rejected" : "no_match",
-                Error = candidateRules.Count > 0 ? "Signature validation failed" : null
+                Status = status,
+                Error = error
             });
 
             return new WebhookProcessResult
             {
                 Success = false,
-                Status = candidateRules.Count > 0 ? "rejected" : "no_match",
-                Message = candidateRules.Count > 0 ? "Signature validation failed" : "No matching rule"
-            };
-        }
-
-        // Check repo/org scope
-        var repoMatch = matchedRule.AllowedRepos.Any(r =>
-            r.Equals(repo, StringComparison.OrdinalIgnoreCase));
-        var orgMatch = matchedRule.AllowedOrgs.Any(o =>
-            o.Equals(org, StringComparison.OrdinalIgnoreCase));
-        var scopeOpen = matchedRule.AllowedRepos.Count == 0 && matchedRule.AllowedOrgs.Count == 0;
-
-        if (!repoMatch && !orgMatch && !scopeOpen)
-        {
-            _logger.LogInformation("Webhook from {Repo} matched rule {RuleId} but repo/org not in scope",
-                repo, matchedRule.Id);
-
-            await store.Insert(new WebhookEvent
-            {
-                BindingId = matchedRule.Id,
-                Provider = providerName,
-                Action = action,
-                JobId = jobId,
-                RunId = runId,
-                Repository = repo,
-                WorkflowName = workflowName,
-                Labels = labels,
-                Status = "rejected",
-                Error = "Repository not in scope"
-            });
-
-            return new WebhookProcessResult
-            {
-                Success = false,
-                Status = "rejected",
-                Message = "Repository not in scope"
+                Status = status,
+                Message = message
             };
         }
 
