@@ -1,6 +1,7 @@
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Hub;
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 
 namespace RunnerRunner.Agent.Services;
 
@@ -39,7 +40,7 @@ public class RunnerLifecycleManager
             InstanceId = command.InstanceId,
             RunnerName = command.RunnerName,
             Provider = command.Provider,
-            EnvironmentVariables = command.EnvironmentVariables,
+            EnvironmentVariables = ExpandHostEnvironmentVariables(command.EnvironmentVariables),
             RunnerAgentVersion = command.RunnerAgentVersion,
             DockerConfig = command.DockerConfig,
             TartConfig = command.TartConfig,
@@ -165,6 +166,53 @@ public class RunnerLifecycleManager
         }
 
         return snapshots;
+    }
+
+    /// <summary>
+    /// Expands system environment variable references ($VAR, ${VAR}) and tilde (~)
+    /// in env var values using the host's actual environment. This runs on the agent
+    /// so that $HOME, $USER, etc. resolve to the correct host-specific values.
+    /// </summary>
+    private static Dictionary<string, string> ExpandHostEnvironmentVariables(Dictionary<string, string> vars)
+    {
+        var result = new Dictionary<string, string>(vars.Count);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        foreach (var kvp in vars)
+        {
+            var value = kvp.Value;
+
+            // Expand ~ at start of value or after = to home directory
+            if (!string.IsNullOrEmpty(home))
+            {
+                if (value == "~")
+                    value = home;
+                else if (value.StartsWith("~/"))
+                    value = home + value[1..];
+            }
+
+            // Expand ${VAR} and $VAR references against system environment
+            if (value.Contains('$'))
+            {
+                // First pass: ${VAR} syntax
+                value = Regex.Replace(value, @"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", match =>
+                {
+                    var envVal = Environment.GetEnvironmentVariable(match.Groups[1].Value);
+                    return envVal ?? match.Value; // leave unresolved if not found
+                });
+
+                // Second pass: $VAR syntax (not followed by { which was already handled)
+                value = Regex.Replace(value, @"\$([A-Za-z_][A-Za-z0-9_]*)", match =>
+                {
+                    var envVal = Environment.GetEnvironmentVariable(match.Groups[1].Value);
+                    return envVal ?? match.Value;
+                });
+            }
+
+            result[kvp.Key] = value;
+        }
+
+        return result;
     }
 }
 
