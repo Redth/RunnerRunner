@@ -86,6 +86,17 @@ public class NativeBackend : IRunnerBackend
         request.EnvironmentVariables["RR_INSTANCE_ID"] = request.InstanceId;
         request.EnvironmentVariables["RR_RUNNER_NAME"] = request.RunnerName;
 
+        // Install the job-started banner hook if the server requested it.
+        // actions/runner picks this up via ACTIONS_RUNNER_HOOK_JOB_STARTED.
+        if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
+        {
+            var hookPath = OperatingSystem.IsWindows()
+                ? Services.JobHookScriptBuilder.WritePowerShellScript(instanceDir)
+                : Services.JobHookScriptBuilder.WriteBashScript(instanceDir);
+            request.EnvironmentVariables[Services.JobHookScriptBuilder.HookEnvVarName] = hookPath;
+            _logger.LogDebug("Installed job-started hook at {Path}", hookPath);
+        }
+
         // Step 4: Configure and start based on provider
         Process runProcess;
 

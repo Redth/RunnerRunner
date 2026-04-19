@@ -88,6 +88,46 @@ public class DockerBackend : IRunnerBackend
             envVars.Add($"RR_PROVISIONING_MODE={request.ProvisioningMode}");
         }
 
+        // Install the job-started banner hook if requested. We write the
+        // script to a unique host directory and bind-mount it read-only
+        // into the container, then set ACTIONS_RUNNER_HOOK_JOB_STARTED.
+        var hookBinds = new List<string>();
+        if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
+        {
+            // Peek at the image to decide bash-vs-powershell; fall back to
+            // Linux (bash) if the inspect fails or there's no image yet.
+            var isWindowsContainer = false;
+            try
+            {
+                var imageInspect = await _client.Images.InspectImageAsync(imageName, ct);
+                isWindowsContainer = IsWindowsContainerImage(imageInspect.Os);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Unable to inspect image {Image} for hook platform; defaulting to bash", imageName);
+            }
+
+            var hostHookDir = Path.Combine(Path.GetTempPath(), "runnerrunner-hooks", request.InstanceId);
+            string hostScriptPath;
+            string containerScriptPath;
+            if (isWindowsContainer)
+            {
+                hostScriptPath = Services.JobHookScriptBuilder.WritePowerShellScript(hostHookDir);
+                containerScriptPath = "C:\\runnerrunner\\" + Services.JobHookScriptBuilder.PowerShellFileName;
+                hookBinds.Add($"{hostHookDir}:C:\\runnerrunner:ro");
+            }
+            else
+            {
+                hostScriptPath = Services.JobHookScriptBuilder.WriteBashScript(hostHookDir);
+                containerScriptPath = "/runnerrunner/" + Services.JobHookScriptBuilder.BashFileName;
+                hookBinds.Add($"{hostHookDir}:/runnerrunner:ro");
+            }
+
+            envVars.Add($"{Services.JobHookScriptBuilder.HookEnvVarName}={containerScriptPath}");
+            _logger.LogDebug("Installed job-started hook at host:{Host} -> container:{Container}",
+                hostScriptPath, containerScriptPath);
+        }
+
         // Create and start container with RunnerRunner labels for tracking
         var createParams = new CreateContainerParameters
         {
@@ -106,6 +146,7 @@ public class DockerBackend : IRunnerBackend
                 // Keep managed containers until RunnerRunner explicitly removes them so
                 // reconciliation and logs can distinguish "exited" from "never existed".
                 AutoRemove = false,
+                Binds = hookBinds.Count > 0 ? hookBinds : null,
                 RestartPolicy = request.Ephemeral
                     ? new RestartPolicy { Name = RestartPolicyKind.No }
                     : new RestartPolicy { Name = RestartPolicyKind.UnlessStopped }

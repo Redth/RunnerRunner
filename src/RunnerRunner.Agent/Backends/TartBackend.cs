@@ -192,6 +192,20 @@ public class TartBackend : IRunnerBackend
     {
         _logger.LogInformation("Setting up runner in Tart VM {VM} ({IP}) via SSH", vmName, vmIp);
 
+        // Install the job-started banner hook in the guest if requested.
+        // Tart VMs are always macOS (bash), so we write the bash script to
+        // /tmp inside the guest and point the runner at it via env var.
+        if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
+        {
+            const string guestPath = "/tmp/rr-job-started.sh";
+            var script = Services.JobHookScriptBuilder.BuildBashScript();
+            var writeCmd =
+                $"cat <<'RR_HOOK_EOF' > {guestPath}\n{script}\nRR_HOOK_EOF\nchmod +x {guestPath}";
+            await SshExec(sshUser, vmIp, sshPassword, writeCmd, ct);
+            request.EnvironmentVariables[Services.JobHookScriptBuilder.HookEnvVarName] = guestPath;
+            _logger.LogDebug("Installed Tart job-started hook at {Path}", guestPath);
+        }
+
         // Export env vars into the SSH session
         var envExports = string.Join(" ", request.EnvironmentVariables
             .Select(kv => $"export {kv.Key}='{EscapeShell(kv.Value)}'"));
