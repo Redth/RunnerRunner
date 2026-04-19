@@ -85,9 +85,13 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
             hmacMatchCount++;
 
-            // Check repo/org scope — classify by specificity
+            // Check repo/org scope — classify by specificity.
+            // AllowedRepos may store full names ("org/repo") or short names ("repo").
+            var repoShortName = repo.Contains('/') ? repo.Split('/')[1] : repo;
             var repoMatch = rule.AllowedRepos.Any(r =>
-                r.Equals(repo, StringComparison.OrdinalIgnoreCase));
+                r.Contains('/')
+                    ? r.Equals(repo, StringComparison.OrdinalIgnoreCase)
+                    : r.Equals(repoShortName, StringComparison.OrdinalIgnoreCase));
             var orgMatch = rule.AllowedOrgs.Any(o =>
                 o.Equals(org, StringComparison.OrdinalIgnoreCase));
             var scopeOpen = rule.AllowedRepos.Count == 0 && rule.AllowedOrgs.Count == 0;
