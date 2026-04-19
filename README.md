@@ -209,6 +209,58 @@ Go to **Runner Profiles** and create a profile:
 
 Go to **Hosts**, click **Assign** on a connected host, select a profile and desired instance count. The orchestration engine will automatically deploy runners.
 
+### 5. Runner image/backend info in the GHA job log
+
+Every runner deployed by RunnerRunner surfaces its backend, image, host, and
+profile info into the provider's job log through two complementary channels:
+
+1. **`rr-*` metadata labels** — appended to the runner's label set so they
+   show up in the "Set up job" block's `Labels:` list:
+
+   ```
+   rr-backend:docker
+   rr-provider:GitHubActions
+   rr-profile:github-linux-builder
+   rr-host:mac-studio-01
+   rr-image:ghcr.io-myorg-runner-image
+   rr-tag:latest
+   ```
+
+   These are informational only — don't match them with `runs-on`. Toggle
+   per-profile via **Emit `rr-*` metadata labels** on the profile editor
+   (default: on).
+
+2. **Job-started banner hook** — RunnerRunner installs an
+   `ACTIONS_RUNNER_HOOK_JOB_STARTED` script inside every runner (bash on
+   Linux/macOS, PowerShell on Windows). It renders a collapsible
+   "RunnerRunner environment" section at the top of every job log:
+
+   ```
+   ▸ RunnerRunner environment
+     Backend:         docker
+     Host:            mac-studio-01
+     Profile:         github-linux-builder
+     Provider:        GitHubActions
+     Image:           ghcr.io/myorg/runner-image:latest
+     Agent version:   2.333.1
+     Instance:        7f1e8b52-...
+   ```
+
+   The hook script itself is static and reads `RR_META_*` env vars the
+   server seeds into the deploy command, so it works identically across
+   Docker (bind-mounted read-only), Tart (SCP'd into the guest), and
+   Native (written to the per-instance directory). Toggle per-profile
+   via **Install job-started banner hook** (default: on).
+
+**Caveats**
+
+- GitHub's "Set up job" header itself (runner name, runner version, OS,
+  machine name) is emitted by `actions/runner` — RunnerRunner cannot
+  inject extra lines into that specific block.
+- For dynamic (JIT) runs, the label set is baked into the JIT
+  registration token before the agent pulls the image, so the image
+  digest isn't currently included in `rr-*` labels.
+
 ## Deploying Agents
 
 ### Linux (Docker)

@@ -148,6 +148,22 @@
                 <label class="form-check-label" for="ephemeralCheck">Ephemeral (single-use runners)</label>
             </div>
 
+            <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" @bind="editProfile.EmitMetadataLabels" id="emitMetadataLabelsCheck" />
+                <label class="form-check-label" for="emitMetadataLabelsCheck">
+                    Emit <code>rr-*</code> metadata labels (backend, image, host, profile)
+                </label>
+                <div><small class="text-muted">Surfaces runner image/backend info in GitHub Actions' "Set up job" label list.</small></div>
+            </div>
+
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" @bind="editProfile.EmitJobStartedBanner" id="emitJobStartedBannerCheck" />
+                <label class="form-check-label" for="emitJobStartedBannerCheck">
+                    Install job-started banner hook
+                </label>
+                <div><small class="text-muted">Adds a collapsible "RunnerRunner environment" section to every job log via <code>ACTIONS_RUNNER_HOOK_JOB_STARTED</code>.</small></div>
+            </div>
+
             @* Native Backend Config *@
             @if (editProfile.ExecutionBackend == ExecutionBackend.Native)
             {
