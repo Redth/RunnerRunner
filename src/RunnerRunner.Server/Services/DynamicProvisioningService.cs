@@ -729,7 +729,7 @@ public class DynamicProvisioningService : BackgroundService
                 envVars[kv.Key] = kv.Value;
 
             var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
-            await runnerGrain.Initialize(hostSelection.Host.Id, profile.Id, runnerName, "dynamic", currentEvent.JobId, currentEvent.Id);
+            await runnerGrain.Initialize(hostSelection.Host.Id, profile.Id, runnerName, "dynamic", currentEvent.JobId, currentEvent.Id, currentEvent.BindingId);
             await runnerGrain.MarkStarting("Sending dynamic deploy command to host");
 
             await UpdateEventProgressAsync(

@@ -1,0 +1,481 @@
+@page "/jobs"
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Grains.Events
+@using RunnerRunner.Server.Services
+@inject IDocumentStore Store
+@inject IGrainFactory GrainFactory
+@implements IDisposable
+
+<PageTitle>Jobs - RunnerRunner</PageTitle>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-briefcase-fill"></i> Jobs</h1>
+        <span class="page-desc">View current and past runner jobs with lifecycle history.</span>
+    </div>
+</SectionContent>
+
+<div class="mb-3 d-flex flex-wrap align-items-end gap-2">
+    <div>
+        <label class="form-label mb-0 small text-muted">Search</label>
+        <input type="text" class="form-control form-control-sm" placeholder="Filter jobs…" @bind="searchText" @bind:event="oninput" style="min-width:180px;" />
+    </div>
+    <div>
+        <label class="form-label mb-0 small text-muted">Status</label>
+        <select class="form-select form-select-sm" @bind="filterStatus" style="min-width:120px;">
+            <option value="active">Active</option>
+            <option value="">All</option>
+            @foreach (var s in Enum.GetValues<RunnerInstanceStatus>())
+            {
+                <option value="@s">@s</option>
+            }
+        </select>
+    </div>
+    <div>
+        <label class="form-label mb-0 small text-muted">Mode</label>
+        <select class="form-select form-select-sm" @bind="filterMode" style="min-width:120px;">
+            <option value="">All</option>
+            <option value="static">Static</option>
+            <option value="dynamic">Dynamic</option>
+        </select>
+    </div>
+    <div>
+        <label class="form-label mb-0 small text-muted">Profile</label>
+        <select class="form-select form-select-sm" @bind="filterProfileId" style="min-width:140px;">
+            <option value="">All</option>
+            @foreach (var kv in profileNames.OrderBy(p => p.Value))
+            {
+                <option value="@kv.Key">@kv.Value</option>
+            }
+        </select>
+    </div>
+    <div>
+        <label class="form-label mb-0 small text-muted">Host</label>
+        <select class="form-select form-select-sm" @bind="filterHostId" style="min-width:140px;">
+            <option value="">All</option>
+            @foreach (var kv in hostNames.OrderBy(h => h.Value))
+            {
+                <option value="@kv.Key">@kv.Value</option>
+            }
+        </select>
+    </div>
+    <div>
+        <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </div>
+</div>
+
+@{
+    var filtered = GetFilteredInstances().ToList();
+    var sorted = ApplySort(filtered).ToList();
+}
+
+@if (!sorted.Any())
+{
+    <div class="text-center text-muted py-4">
+        @(HasActiveFilters()
+            ? "No jobs match the current filters."
+            : "No jobs found. Jobs appear when runners are provisioned.")
+    </div>
+}
+else
+{
+    <div class="table-responsive">
+    <table class="table table-striped resizable-table">
+        <thead>
+            <tr>
+                <th style="width:2rem;"></th>
+                <th role="button" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
+                <th role="button" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner @SortIndicator("RunnerName")</th>
+                <th role="button" @onclick='() => SetSort("Mode")' style="cursor:pointer; user-select:none;">Mode @SortIndicator("Mode")</th>
+                <th role="button" @onclick='() => SetSort("Rule")' style="cursor:pointer; user-select:none;">Provisioning Rule @SortIndicator("Rule")</th>
+                <th role="button" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
+                <th role="button" @onclick='() => SetSort("Host")' style="cursor:pointer; user-select:none;">Host @SortIndicator("Host")</th>
+                <th role="button" @onclick='() => SetSort("Created")' style="cursor:pointer; user-select:none;">Created @SortIndicator("Created")</th>
+                <th role="button" @onclick='() => SetSort("Duration")' style="cursor:pointer; user-select:none;">Duration @SortIndicator("Duration")</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var inst in sorted)
+            {
+                var isExpanded = expandedRows.Contains(inst.Id);
+                <tr class="job-row" role="button" @onclick="() => ToggleRow(inst.Id)" style="cursor:pointer;">
+                    <td><i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i></td>
+                    <td>
+                        <span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span>
+                        @if (!string.IsNullOrEmpty(inst.ErrorMessage))
+                        {
+                            <i class="bi bi-exclamation-triangle-fill text-danger ms-1" title="@inst.ErrorMessage"></i>
+                        }
+                    </td>
+                    <td>
+                        <span>@inst.RunnerName</span>
+                        @if (!string.IsNullOrEmpty(inst.JobId))
+                        {
+                            <br/><small class="text-muted">Job: @inst.JobId</small>
+                        }
+                    </td>
+                    <td><span class="badge @(inst.ProvisioningMode == "dynamic" ? "bg-warning text-dark" : "bg-secondary")">@(inst.ProvisioningMode == "dynamic" ? "Dynamic" : "Static")</span></td>
+                    <td>@(GetRuleName(inst))</td>
+                    <td>@(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))</td>
+                    <td>@(hostNames.GetValueOrDefault(inst.HostId, inst.HostId))</td>
+                    <td>@inst.CreatedAt.ToString("g")</td>
+                    <td>@FormatDuration(inst)</td>
+                </tr>
+                @if (isExpanded)
+                {
+                    <tr class="job-detail-row">
+                        <td colspan="9">
+                            <div class="job-detail p-3">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <h6><i class="bi bi-clock-history me-1"></i> Status History</h6>
+                                        @if (inst.StatusHistory.Any())
+                                        {
+                                            <div class="timeline">
+                                                @foreach (var entry in inst.StatusHistory)
+                                                {
+                                                    <div class="timeline-entry d-flex align-items-start gap-2 mb-2">
+                                                        <div class="timeline-dot">
+                                                            <span class="badge rounded-pill @GetStatusBadge(entry.Status)" style="font-size:0.65rem;">@entry.Status</span>
+                                                        </div>
+                                                        <div class="flex-grow-1">
+                                                            <div class="small">
+                                                                <strong>@entry.Timestamp.ToString("HH:mm:ss.fff")</strong>
+                                                                <span class="text-muted ms-1">(@entry.Source)</span>
+                                                            </div>
+                                                            @if (!string.IsNullOrEmpty(entry.StatusMessage))
+                                                            {
+                                                                <div class="small text-muted">@entry.StatusMessage</div>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <p class="text-muted small">No status history recorded yet.</p>
+                                        }
+                                    </div>
+
+                                    <div class="col-md-6">
+                                        <h6><i class="bi bi-info-circle me-1"></i> Details</h6>
+                                        <table class="table table-sm small mb-0">
+                                            <tbody>
+                                                <tr><td class="text-muted" style="width:40%;">Instance ID</td><td><code class="small">@inst.Id</code></td></tr>
+                                                @if (!string.IsNullOrEmpty(inst.StatusMessage))
+                                                {
+                                                    <tr><td class="text-muted">Status Message</td><td>@inst.StatusMessage</td></tr>
+                                                }
+                                                @if (!string.IsNullOrEmpty(inst.ErrorMessage))
+                                                {
+                                                    <tr><td class="text-muted">Error</td><td class="text-danger">@inst.ErrorMessage</td></tr>
+                                                }
+                                                <tr><td class="text-muted">Created</td><td>@inst.CreatedAt.ToString("O")</td></tr>
+                                                @if (inst.DeployedAt.HasValue)
+                                                {
+                                                    <tr><td class="text-muted">Deployed</td><td>@inst.DeployedAt.Value.ToString("O")</td></tr>
+                                                }
+                                                @if (inst.StartedAt.HasValue)
+                                                {
+                                                    <tr><td class="text-muted">Started</td><td>@inst.StartedAt.Value.ToString("O")</td></tr>
+                                                }
+                                                @if (inst.StoppedAt.HasValue)
+                                                {
+                                                    <tr><td class="text-muted">Stopped</td><td>@inst.StoppedAt.Value.ToString("O")</td></tr>
+                                                }
+                                                @if (inst.LastHealthCheck.HasValue)
+                                                {
+                                                    <tr><td class="text-muted">Last Health Check</td><td>@inst.LastHealthCheck.Value.ToString("O")</td></tr>
+                                                }
+                                                @if (!string.IsNullOrEmpty(inst.ContainerId))
+                                                {
+                                                    <tr><td class="text-muted">Container ID</td><td><code class="small">@inst.ContainerId</code></td></tr>
+                                                }
+                                                @if (!string.IsNullOrEmpty(inst.VmName))
+                                                {
+                                                    <tr><td class="text-muted">VM Name</td><td>@inst.VmName</td></tr>
+                                                }
+                                                @if (inst.ProcessId.HasValue)
+                                                {
+                                                    <tr><td class="text-muted">Process ID</td><td>@inst.ProcessId</td></tr>
+                                                }
+                                            </tbody>
+                                        </table>
+
+                                        @if (webhookEvents.TryGetValue(inst.WebhookEventId ?? "", out var whEvent))
+                                        {
+                                            <h6 class="mt-3"><i class="bi bi-webhook me-1"></i> Webhook Event</h6>
+                                            <table class="table table-sm small mb-0">
+                                                <tbody>
+                                                    <tr><td class="text-muted" style="width:40%;">Repository</td><td>@whEvent.Repository</td></tr>
+                                                    <tr><td class="text-muted">Workflow</td><td>@whEvent.WorkflowName</td></tr>
+                                                    <tr><td class="text-muted">Action</td><td>@whEvent.Action</td></tr>
+                                                    <tr><td class="text-muted">Job ID</td><td><code class="small">@whEvent.JobId</code></td></tr>
+                                                    <tr><td class="text-muted">Run ID</td><td><code class="small">@whEvent.RunId</code></td></tr>
+                                                    <tr><td class="text-muted">Labels</td><td>@string.Join(", ", whEvent.Labels)</td></tr>
+                                                    <tr><td class="text-muted">Webhook Status</td><td><span class="badge @GetWebhookStatusBadge(whEvent.Status)">@whEvent.Status</span></td></tr>
+                                                    <tr><td class="text-muted">Received</td><td>@whEvent.ReceivedAt.ToString("O")</td></tr>
+                                                    @if (whEvent.ResolvedAt.HasValue)
+                                                    {
+                                                        <tr><td class="text-muted">Resolved</td><td>@whEvent.ResolvedAt.Value.ToString("O")</td></tr>
+                                                    }
+                                                    @if (!string.IsNullOrEmpty(whEvent.Error))
+                                                    {
+                                                        <tr><td class="text-muted">Error</td><td class="text-danger">@whEvent.Error</td></tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+    </div>
+}
+
+<style>
+    tr.job-row:hover td {
+        background: var(--bg-tertiary, #f0f2f5);
+    }
+    tr.job-detail-row td {
+        background: var(--bg-secondary, #f8f9fc);
+        border-top: none;
+        padding: 0 !important;
+    }
+    .job-detail {
+        border-left: 3px solid var(--bs-primary, #0d6efd);
+    }
+    .timeline-entry {
+        border-left: 2px solid var(--border-color, #e5e7eb);
+        padding-left: 0.75rem;
+        margin-left: 0.25rem;
+    }
+    .timeline-entry:last-child {
+        border-left-color: transparent;
+    }
+</style>
+
+@code {
+    private List<RunnerInstance> instances = [];
+    private Dictionary<string, string> hostNames = new();
+    private Dictionary<string, string> profileNames = new();
+    private Dictionary<string, string> ruleNames = new();
+    private Dictionary<string, WebhookEvent> webhookEvents = new();
+
+    private string searchText = "";
+    private string filterStatus = "active";
+    private string filterMode = "";
+    private string filterProfileId = "";
+    private string filterHostId = "";
+
+    private string sortColumn = "Created";
+    private bool sortAscending = false;
+
+    private HashSet<string> expandedRows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+        StreamSubscriptionService.OnRunnerStatusChanged += OnStreamRunnerStatusChanged;
+    }
+
+    private void OnStreamRunnerStatusChanged(RunnerStatusChangedEvent evt)
+    {
+        InvokeAsync(async () => { await Refresh(); StateHasChanged(); });
+    }
+
+    public void Dispose()
+    {
+        StreamSubscriptionService.OnRunnerStatusChanged -= OnStreamRunnerStatusChanged;
+    }
+
+    private async Task Refresh()
+    {
+        var allInstances = (await Store.Query<RunnerInstance>().ToList()).ToList();
+        instances = allInstances
+            .Where(i => i.ManagedByRunnerRunner == true)
+            .ToList();
+
+        var hosts = (await Store.Query<Host>().ToList()).ToList();
+        var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        var rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+
+        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
+        profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
+        ruleNames = rules.ToDictionary(r => r.Id, r => r.Name);
+
+        // Load webhook events for dynamic jobs
+        var webhookEventIds = instances
+            .Where(i => !string.IsNullOrEmpty(i.WebhookEventId))
+            .Select(i => i.WebhookEventId!)
+            .Distinct()
+            .ToHashSet();
+
+        if (webhookEventIds.Count > 0)
+        {
+            var events = (await Store.Query<WebhookEvent>().ToList()).ToList();
+            webhookEvents = events
+                .Where(e => webhookEventIds.Contains(e.Id))
+                .ToDictionary(e => e.Id);
+        }
+        else
+        {
+            webhookEvents = new();
+        }
+    }
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(searchText) ||
+        (!string.IsNullOrWhiteSpace(filterStatus) && !string.Equals(filterStatus, "active", StringComparison.OrdinalIgnoreCase)) ||
+        !string.IsNullOrWhiteSpace(filterMode) ||
+        !string.IsNullOrWhiteSpace(filterProfileId) ||
+        !string.IsNullOrWhiteSpace(filterHostId);
+
+    private IEnumerable<RunnerInstance> GetFilteredInstances()
+    {
+        var q = instances.AsEnumerable();
+
+        if (string.Equals(filterStatus, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            q = q.Where(i => i.Status is RunnerInstanceStatus.Pending
+                or RunnerInstanceStatus.Starting
+                or RunnerInstanceStatus.Running
+                or RunnerInstanceStatus.Stopping);
+        }
+        else if (!string.IsNullOrWhiteSpace(filterStatus) && Enum.TryParse<RunnerInstanceStatus>(filterStatus, out var status))
+        {
+            q = q.Where(i => i.Status == status);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filterMode))
+            q = q.Where(i => i.ProvisioningMode == filterMode);
+
+        if (!string.IsNullOrWhiteSpace(filterProfileId))
+            q = q.Where(i => i.ProfileId == filterProfileId);
+
+        if (!string.IsNullOrWhiteSpace(filterHostId))
+            q = q.Where(i => i.HostId == filterHostId);
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            var term = searchText.Trim();
+            q = q.Where(i =>
+                i.RunnerName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (i.JobId ?? "").Contains(term, StringComparison.OrdinalIgnoreCase)
+                || hostNames.GetValueOrDefault(i.HostId, i.HostId).Contains(term, StringComparison.OrdinalIgnoreCase)
+                || profileNames.GetValueOrDefault(i.ProfileId, i.ProfileId).Contains(term, StringComparison.OrdinalIgnoreCase)
+                || GetRuleName(i).Contains(term, StringComparison.OrdinalIgnoreCase)
+                || i.Status.ToString().Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return q;
+    }
+
+    private IEnumerable<RunnerInstance> ApplySort(IEnumerable<RunnerInstance> items)
+    {
+        return sortColumn switch
+        {
+            "Status" => sortAscending ? items.OrderBy(i => i.Status) : items.OrderByDescending(i => i.Status),
+            "RunnerName" => sortAscending ? items.OrderBy(i => i.RunnerName) : items.OrderByDescending(i => i.RunnerName),
+            "Mode" => sortAscending ? items.OrderBy(i => i.ProvisioningMode) : items.OrderByDescending(i => i.ProvisioningMode),
+            "Rule" => sortAscending
+                ? items.OrderBy(i => GetRuleName(i))
+                : items.OrderByDescending(i => GetRuleName(i)),
+            "Profile" => sortAscending
+                ? items.OrderBy(i => profileNames.GetValueOrDefault(i.ProfileId, i.ProfileId))
+                : items.OrderByDescending(i => profileNames.GetValueOrDefault(i.ProfileId, i.ProfileId)),
+            "Host" => sortAscending
+                ? items.OrderBy(i => hostNames.GetValueOrDefault(i.HostId, i.HostId))
+                : items.OrderByDescending(i => hostNames.GetValueOrDefault(i.HostId, i.HostId)),
+            "Created" => sortAscending ? items.OrderBy(i => i.CreatedAt) : items.OrderByDescending(i => i.CreatedAt),
+            "Duration" => sortAscending ? items.OrderBy(i => GetDuration(i)) : items.OrderByDescending(i => GetDuration(i)),
+            _ => items.OrderByDescending(i => i.CreatedAt)
+        };
+    }
+
+    private void SetSort(string column)
+    {
+        if (sortColumn == column)
+            sortAscending = !sortAscending;
+        else
+        {
+            sortColumn = column;
+            sortAscending = true;
+        }
+    }
+
+    private MarkupString SortIndicator(string column)
+    {
+        if (sortColumn != column) return (MarkupString)"";
+        return (MarkupString)(sortAscending ? "▲" : "▼");
+    }
+
+    private void ToggleRow(string instanceId)
+    {
+        if (!expandedRows.Remove(instanceId))
+            expandedRows.Add(instanceId);
+    }
+
+    private string GetRuleName(RunnerInstance inst)
+    {
+        // Try direct rule ID first
+        if (!string.IsNullOrEmpty(inst.ProvisioningRuleId) && ruleNames.TryGetValue(inst.ProvisioningRuleId, out var name))
+            return name;
+
+        // Fall back to webhook event's binding ID
+        if (!string.IsNullOrEmpty(inst.WebhookEventId) && webhookEvents.TryGetValue(inst.WebhookEventId, out var whEvent)
+            && !string.IsNullOrEmpty(whEvent.BindingId) && ruleNames.TryGetValue(whEvent.BindingId, out var bindingName))
+            return bindingName;
+
+        return "—";
+    }
+
+    private TimeSpan GetDuration(RunnerInstance inst)
+    {
+        var end = inst.StoppedAt ?? DateTime.UtcNow;
+        return end - inst.CreatedAt;
+    }
+
+    private string FormatDuration(RunnerInstance inst)
+    {
+        var duration = GetDuration(inst);
+        if (duration.TotalDays >= 1)
+            return $"{(int)duration.TotalDays}d {duration.Hours}h {duration.Minutes}m";
+        if (duration.TotalHours >= 1)
+            return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        if (duration.TotalMinutes >= 1)
+            return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
+        return $"{(int)duration.TotalSeconds}s";
+    }
+
+    private static string GetStatusBadge(RunnerInstanceStatus status) => status switch
+    {
+        RunnerInstanceStatus.Running => "bg-success",
+        RunnerInstanceStatus.Starting => "bg-info",
+        RunnerInstanceStatus.Pending => "bg-secondary",
+        RunnerInstanceStatus.Stopping => "bg-warning",
+        RunnerInstanceStatus.Stopped => "bg-dark",
+        RunnerInstanceStatus.Failed => "bg-danger",
+        RunnerInstanceStatus.Crashed => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private static string GetWebhookStatusBadge(string status) => status switch
+    {
+        "completed" => "bg-success",
+        "provisioned" => "bg-info",
+        "in_progress" => "bg-primary",
+        "timed_out" => "bg-danger",
+        "rejected" => "bg-danger",
+        "ignored" => "bg-dark",
+        _ when status.StartsWith("pending") => "bg-warning text-dark",
+        _ => "bg-secondary"
+    };
+}

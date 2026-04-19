@@ -39,4 +39,10 @@ public class RunnerInstance
 
     /// <summary>Human-readable status detail, e.g. "Downloading runner v2.333.1", "Connected to GitHub"</summary>
     public string? StatusMessage { get; set; }
+
+    /// <summary>Provisioning rule ID that created this instance (if tracked).</summary>
+    public string? ProvisioningRuleId { get; set; }
+
+    /// <summary>Chronological log of status transitions for this instance.</summary>
+    public List<StatusHistoryEntry> StatusHistory { get; set; } = [];
 }
