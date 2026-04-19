@@ -53,6 +53,12 @@ public class RunnerStartRequest
 
     /// <summary>"static" or "dynamic" — determines lifecycle behavior.</summary>
     public string ProvisioningMode { get; set; } = "static";
+
+    /// <summary>
+    /// Custom provisioning steps to run on the host as part of runner startup
+    /// (PreRunner) and teardown (PostExit). Already env-resolved by the server.
+    /// </summary>
+    public List<ResolvedInitStep> InitSteps { get; set; } = [];
 }
 
 public class RunnerInstanceInfo

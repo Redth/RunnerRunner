@@ -126,11 +126,12 @@ public class DockerBackend : IRunnerBackend
                 isWindowsContainer,
                 originalEntrypoint,
                 originalCmd,
-                imageShell);
+                imageShell,
+                request.InitSteps);
             createParams.Cmd = new List<string>();
 
-            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} ({ContainerOs} container)",
-                imageName, isWindowsContainer ? "Windows" : "Linux");
+            _logger.LogInformation("JIT mode: overriding entrypoint for {Image} ({ContainerOs} container, {StepCount} init steps)",
+                imageName, isWindowsContainer ? "Windows" : "Linux", request.InitSteps.Count);
         }
 
         var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
@@ -284,15 +285,17 @@ public class DockerBackend : IRunnerBackend
         bool isWindowsContainer,
         IList<string>? entrypoint,
         IList<string>? cmd,
-        IList<string>? shell)
+        IList<string>? shell,
+        IList<Core.Models.ResolvedInitStep>? initSteps = null)
         => isWindowsContainer
-            ? BuildWindowsJitEntrypointOverride(entrypoint, cmd)
-            : BuildLinuxJitEntrypointOverride(entrypoint, cmd, shell);
+            ? BuildWindowsJitEntrypointOverride(entrypoint, cmd, initSteps)
+            : BuildLinuxJitEntrypointOverride(entrypoint, cmd, shell, initSteps);
 
     private static List<string> BuildLinuxJitEntrypointOverride(
         IList<string>? entrypoint,
         IList<string>? cmd,
-        IList<string>? shell)
+        IList<string>? shell,
+        IList<Core.Models.ResolvedInitStep>? initSteps)
     {
         var shellPath = DetectShell(entrypoint, cmd, shell);
         var execParts = new List<string>();
@@ -301,12 +304,26 @@ public class DockerBackend : IRunnerBackend
         if (cmd?.Count > 0)
             execParts.AddRange(cmd);
 
-        var execChain = execParts.Count > 0
-            ? "exec " + string.Join(" ", execParts.Select(QuoteShellArgument))
-            : "exec sleep 3600";
+        var pre = initSteps?.Where(s => s.Phase == Core.Models.InitStepPhase.PreRunner).ToList() ?? [];
+        var post = initSteps?.Where(s => s.Phase == Core.Models.InitStepPhase.PostExit).ToList() ?? [];
 
-        var wrapperScript =
-            "set -e; " +
+        var preFragment = pre.Count > 0
+            ? InitStepShellBuilder.BuildLinuxFragment(pre, "PreRunner")
+            : "";
+        var postFragment = post.Count > 0
+            ? InitStepShellBuilder.BuildLinuxFragment(post, "PostExit")
+            : "";
+
+        var wrapperScript = new System.Text.StringBuilder();
+        wrapperScript.Append("set -e; ");
+        if (!string.IsNullOrEmpty(preFragment))
+        {
+            wrapperScript.Append("set +e; ");
+            wrapperScript.Append(preFragment);
+            wrapperScript.Append(" set -e; ");
+        }
+
+        wrapperScript.Append(
             "runner_cmd=''; " +
             "for candidate in /actions-runner/run.sh /runner/run.sh ./run.sh /home/*/actions-runner/run.sh /home/*/runner/run.sh; do " +
             "  if [ -x \"$candidate\" ]; then runner_cmd=\"$candidate\"; break; fi; " +
@@ -315,32 +332,65 @@ public class DockerBackend : IRunnerBackend
             "  runner_cmd=$(find /home /actions-runner /runner -maxdepth 4 -type f \\( -path '*/actions-runner/run.sh' -o -path '*/runner/run.sh' \\) 2>/dev/null | head -n 1 || true); " +
             "fi; " +
             "if [ -n \"$runner_cmd\" ] && [ -n \"${RR_JIT_CONFIG:-}\" ]; then " +
-            "  echo \"[RunnerRunner] Starting GitHub runner via JIT config: $runner_cmd\"; cd \"$(dirname \"$runner_cmd\")\"; exec \"$runner_cmd\" --jitconfig \"$RR_JIT_CONFIG\"; " +
+            "  echo \"[RunnerRunner] Starting GitHub runner via JIT config: $runner_cmd\"; cd \"$(dirname \"$runner_cmd\")\"; ");
+
+        if (string.IsNullOrEmpty(postFragment))
+        {
+            wrapperScript.Append("exec \"$runner_cmd\" --jitconfig \"$RR_JIT_CONFIG\"; ");
+        }
+        else
+        {
+            wrapperScript.Append("\"$runner_cmd\" --jitconfig \"$RR_JIT_CONFIG\"; rr_rc=$?; ");
+            wrapperScript.Append("set +e; ");
+            wrapperScript.Append(postFragment);
+            wrapperScript.Append(" exit $rr_rc; ");
+        }
+
+        wrapperScript.Append(
             "fi; " +
             "echo '[RunnerRunner] ERROR: No GitHub JIT runner script was found in the container image'; " +
             "echo '[RunnerRunner] Refusing to idle on the image entrypoint because this would consume capacity without registering a runner'; " +
-            "exit 91";
+            "exit 91");
 
-        return [shellPath, "-lc", wrapperScript];
+        _ = execParts; // (not used in JIT path — runner_cmd is auto-discovered)
+        return [shellPath, "-lc", wrapperScript.ToString()];
     }
 
     private static List<string> BuildWindowsJitEntrypointOverride(
         IList<string>? entrypoint,
-        IList<string>? cmd)
+        IList<string>? cmd,
+        IList<Core.Models.ResolvedInitStep>? initSteps)
     {
+        var pre = initSteps?.Where(s => s.Phase == Core.Models.InitStepPhase.PreRunner).ToList() ?? [];
+        var post = initSteps?.Where(s => s.Phase == Core.Models.InitStepPhase.PostExit).ToList() ?? [];
+        var preFragment = pre.Count > 0 ? InitStepShellBuilder.BuildWindowsFragment(pre, "PreRunner") : "";
+        var postFragment = post.Count > 0 ? InitStepShellBuilder.BuildWindowsFragment(post, "PostExit") : "";
+
         var fallbackInvocation = BuildPowerShellFallbackInvocation(entrypoint, cmd);
-        var wrapperScript = string.Join("; ", new[]
+        _ = fallbackInvocation;
+
+        var scriptLines = new List<string>
         {
             "$ErrorActionPreference = 'Stop'",
+        };
+        if (!string.IsNullOrEmpty(preFragment))
+        {
+            scriptLines.Add(preFragment);
+        }
+        scriptLines.AddRange(new[]
+        {
             "$candidates = @('C:\\actions-runner\\run.cmd', 'C:\\runner\\run.cmd', '.\\run.cmd')",
             "$runCmd = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1",
             "if (-not $runCmd) { $runCmd = Get-ChildItem -Path C:\\ -Filter 'run.cmd' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'actions-runner|runner' } | Select-Object -First 1 -ExpandProperty FullName }",
-            "if ($runCmd -and $env:RR_JIT_CONFIG) { Write-Host '[RunnerRunner] Starting Windows GitHub runner via JIT config'; Set-Location (Split-Path -Parent $runCmd); & $runCmd --jitconfig $env:RR_JIT_CONFIG; exit $LASTEXITCODE }",
-            "Write-Host '[RunnerRunner] ERROR: No Windows GitHub JIT runner script was found in the container image'",
-            "Write-Host '[RunnerRunner] Refusing to idle on the image entrypoint because this would consume capacity without registering a runner'",
-            "exit 91"
+            "if ($runCmd -and $env:RR_JIT_CONFIG) { Write-Host '[RunnerRunner] Starting Windows GitHub runner via JIT config'; Set-Location (Split-Path -Parent $runCmd); & $runCmd --jitconfig $env:RR_JIT_CONFIG; $rrRc = $LASTEXITCODE } else { Write-Host '[RunnerRunner] ERROR: No Windows GitHub JIT runner script was found in the container image'; Write-Host '[RunnerRunner] Refusing to idle on the image entrypoint because this would consume capacity without registering a runner'; exit 91 }",
         });
+        if (!string.IsNullOrEmpty(postFragment))
+        {
+            scriptLines.Add(postFragment);
+        }
+        scriptLines.Add("exit $rrRc");
 
+        var wrapperScript = string.Join("; ", scriptLines);
         return ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", wrapperScript];
     }
 

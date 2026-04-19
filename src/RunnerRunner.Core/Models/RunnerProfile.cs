@@ -56,4 +56,9 @@ public class RunnerProfile
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     [Id(19)]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // Ordered list of custom provisioning steps executed on the host as part of runner
+    // startup (and teardown for PostExit steps). See RunnerInitStep.
+    [Id(20)]
+    public List<RunnerInitStep> InitSteps { get; set; } = [];
 }

@@ -231,6 +231,9 @@ public class OrchestrationEngine : BackgroundService
         }
 
         // Send deploy command to agent
+        var initSteps = await InitStepResolver.ResolveAsync(
+            store, profile, envVars, profile.ExecutionBackend, host?.Platform ?? HostPlatform.Linux);
+
         var command = new DeployRunnerCommand
         {
             InstanceId = instanceId,
@@ -248,7 +251,8 @@ public class OrchestrationEngine : BackgroundService
             RegistrationToken = registrationToken,
             RunnerUrl = runnerUrl,
             RunnerBasePath = host?.RunnerBasePath,
-            WorkDirectory = host?.WorkDirectory
+            WorkDirectory = host?.WorkDirectory,
+            InitSteps = initSteps
         };
 
         await runnerGrain.MarkStarting("Sending deploy command to host");

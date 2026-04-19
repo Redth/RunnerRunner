@@ -192,6 +192,15 @@ public class TartBackend : IRunnerBackend
     {
         _logger.LogInformation("Setting up runner in Tart VM {VM} ({IP}) via SSH", vmName, vmIp);
 
+        // Pre-runner init steps: run via SSH before runner bits are touched.
+        var preSteps = request.InitSteps.Where(s => s.Phase == Core.Models.InitStepPhase.PreRunner).ToList();
+        if (preSteps.Count > 0)
+        {
+            var preFragment = InitStepShellBuilder.BuildLinuxFragment(preSteps, "PreRunner");
+            _logger.LogInformation("Running {Count} pre-runner init step(s) in Tart VM {VM}", preSteps.Count, vmName);
+            await SshExec(sshUser, vmIp, sshPassword, "set +e; " + preFragment + " exit 0", ct);
+        }
+
         // Export env vars into the SSH session
         var envExports = string.Join(" ", request.EnvironmentVariables
             .Select(kv => $"export {kv.Key}='{EscapeShell(kv.Value)}'"));
@@ -244,12 +253,9 @@ public class TartBackend : IRunnerBackend
             await SshExec(sshUser, vmIp, sshPassword,
                 $"echo '{EscapeShell(request.JitConfig)}' > /tmp/jitconfig.txt", ct);
 
-            // Start runner reading from file
-            var jitScript =
-                $"cd {runnerDir} && " +
-                $"JIT_CONFIG=$(cat /tmp/jitconfig.txt) && " +
-                $"nohup ./run.sh --jitconfig \"$JIT_CONFIG\" > /tmp/runner.log 2>&1 &";
-            await SshExec(sshUser, vmIp, sshPassword, jitScript, ct);
+            var runnerCmd = $"./run.sh --jitconfig \"$JIT_CONFIG\"";
+            var preamble = $"cd {runnerDir} && JIT_CONFIG=$(cat /tmp/jitconfig.txt)";
+            await LaunchRunnerWithPostStepsAsync(sshUser, vmIp, sshPassword, preamble, runnerCmd, request, ct);
 
             // Wait a moment, then check the log for confirmation
             await Task.Delay(5000, ct);
@@ -272,8 +278,9 @@ public class TartBackend : IRunnerBackend
                 $"--labels '{labels}' --unattended --replace{ephemeralFlag}";
             await SshExec(sshUser, vmIp, sshPassword, configScript, ct);
 
-            var runScript = $"{envExports} && cd {runnerDir} && nohup ./run.sh > /tmp/runner.log 2>&1 &";
-            await SshExec(sshUser, vmIp, sshPassword, runScript, ct);
+            await LaunchRunnerWithPostStepsAsync(
+                sshUser, vmIp, sshPassword,
+                $"{envExports} && cd {runnerDir}", "./run.sh", request, ct);
         }
 
         _logger.LogInformation("Runner started in Tart VM for {RunnerName}", request.RunnerName);
@@ -302,10 +309,47 @@ public class TartBackend : IRunnerBackend
             $"--name '{request.RunnerName}' --no-interactive{ephemeralFlag}";
         await SshExec(sshUser, vmIp, sshPassword, registerScript, ct);
 
-        var runScript = $"{envExports} && cd {runnerDir} && nohup ./act_runner daemon > /tmp/runner.log 2>&1 &";
-        await SshExec(sshUser, vmIp, sshPassword, runScript, ct);
+        await LaunchRunnerWithPostStepsAsync(
+            sshUser, vmIp, sshPassword,
+            $"{envExports} && cd {runnerDir}", "./act_runner daemon", request, ct);
 
         _logger.LogInformation("Gitea runner started in Tart VM");
+    }
+
+    /// <summary>
+    /// Writes a wrapper script on the VM that runs the given runner command then
+    /// executes PostExit init steps, and launches it via nohup. If there are no
+    /// post steps, falls back to direct nohup of the runner command.
+    /// </summary>
+    private async Task LaunchRunnerWithPostStepsAsync(
+        string sshUser, string vmIp, string? sshPassword,
+        string preamble, string runnerCmd, RunnerStartRequest request, CancellationToken ct)
+    {
+        var postSteps = request.InitSteps.Where(s => s.Phase == Core.Models.InitStepPhase.PostExit).ToList();
+        if (postSteps.Count == 0)
+        {
+            var runScript = $"{preamble} && nohup {runnerCmd} > /tmp/runner.log 2>&1 &";
+            await SshExec(sshUser, vmIp, sshPassword, runScript, ct);
+            return;
+        }
+
+        var postFragment = InitStepShellBuilder.BuildLinuxFragment(postSteps, "PostExit");
+        var wrapperBody = new System.Text.StringBuilder();
+        wrapperBody.AppendLine("#!/usr/bin/env bash");
+        wrapperBody.AppendLine("set +e");
+        wrapperBody.AppendLine(preamble.Replace(" && ", "\n"));
+        wrapperBody.AppendLine(runnerCmd);
+        wrapperBody.AppendLine("rr_rc=$?");
+        wrapperBody.AppendLine("echo \"[RunnerRunner] runner exited rc=$rr_rc; running PostExit steps\"");
+        wrapperBody.Append(postFragment);
+        wrapperBody.AppendLine("exit $rr_rc");
+
+        var encoded = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(wrapperBody.ToString()));
+        var writeWrapper = $"echo '{encoded}' | base64 -d > /tmp/rr-runner-wrapper.sh && chmod +x /tmp/rr-runner-wrapper.sh";
+        await SshExec(sshUser, vmIp, sshPassword, writeWrapper, ct);
+
+        var launchWrapper = "nohup /tmp/rr-runner-wrapper.sh > /tmp/runner.log 2>&1 &";
+        await SshExec(sshUser, vmIp, sshPassword, launchWrapper, ct);
     }
 
     private async Task SshExec(string sshUser, string vmIp, string? sshPassword, string script, CancellationToken ct)
