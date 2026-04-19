@@ -78,7 +78,8 @@ RunnerRunner is a self-hosted CI/CD runner orchestration platform that manages G
 | `RunnerProfile` | Runner config: provider, backend, images, env vars, labels |
 | `ProvisioningRule` | Unified provisioning (Static/ScaleSet/Webhook/Scheduled) |
 | `Host` | Machine with labels, capabilities, resource limits, group membership |
-| `RunnerInstance` | Lifecycle-tracked runner with DeployedAt, StatusMessage, health tracking |
+| `RunnerInstance` | Lifecycle-tracked runner with DeployedAt, StatusMessage, health tracking, and StatusHistory timeline |
+| `StatusHistoryEntry` | Records a single status transition: timestamp, status, message, source (grain_call/timer/webhook/health_check) |
 | `ProviderCredential` | GitHub/Gitea/AzDO authentication credentials |
 | `EnvironmentVariableSet` | Reusable env var collections composable into profiles |
 | `WebhookEvent` | Audit log for received webhook events |
@@ -190,13 +191,14 @@ Operational notes:
 - A host backend limit of **0** means that backend is disabled on that host.
 - The web UI now surfaces the current blocker as **FIFO**, **Rule**, **Profile**, or **Host** on the Events, Provisioning Rules, Hosts, Runners, and Profiles pages.
 
-## Web UI (14 pages)
+## Web UI (15 pages)
 
 | Page | Route | Purpose |
 |------|-------|---------|
 | Dashboard | `/` | Overview cards, cluster status, connected agents |
 | Hosts | `/hosts` | Host management, labels, resource limits |
 | Runners | `/runners` | Runner instances grouped by host, auto-refresh via streams |
+| Jobs | `/jobs` | Job-centric view with lifecycle history, provisioning context, and webhook details |
 | Profiles | `/profiles` | Runner profile CRUD with env var composition |
 | Provisioning Rules | `/provisioning-rules` | Unified Static/ScaleSet/Webhook/Scheduled rules |
 | Images | `/images` | Docker/Tart image management per host (split pane) |

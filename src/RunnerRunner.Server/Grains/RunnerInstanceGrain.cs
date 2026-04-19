@@ -41,7 +41,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public Task<RunnerInstanceGrainState> GetState() => Task.FromResult(_state.State);
 
-    public async Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null)
+    public async Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null)
     {
         _state.State.HostId = hostId;
         _state.State.ProfileId = profileId;
@@ -49,8 +49,11 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         _state.State.ProvisioningMode = provisioningMode;
         _state.State.JobId = jobId;
         _state.State.WebhookEventId = webhookEventId;
+        _state.State.ProvisioningRuleId = provisioningRuleId;
         _state.State.Status = RunnerInstanceStatus.Pending;
         _state.State.CreatedAt = DateTime.UtcNow;
+
+        RecordStatusTransition(RunnerInstanceStatus.Pending, "Instance created", "grain_call");
 
         // Look up the profile to get the backend
         var profileGrain = GrainFactory.GetGrain<IProfileGrain>(profileId);
@@ -71,7 +74,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
     public async Task MarkDeployed()
     {
         _state.State.DeployedAt = DateTime.UtcNow;
-        // Status stays Starting (set by MarkStarting) or Pending → Starting transition
+        RecordStatusTransition(_state.State.Status, "Deployed to host", "grain_call");
         await _state.WriteStateAsync();
 
         _logger.LogInformation("Runner instance {InstanceId} deployed", this.GetPrimaryKeyString());
@@ -89,6 +92,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         if (statusMessage != null)
             _state.State.StatusMessage = statusMessage;
 
+        RecordStatusTransition(RunnerInstanceStatus.Starting, statusMessage ?? "Starting", "grain_call");
         await _state.WriteStateAsync();
 
         if (!wasActive)
@@ -110,6 +114,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         if (statusMessage != null)
             _state.State.StatusMessage = statusMessage;
 
+        RecordStatusTransition(RunnerInstanceStatus.Running, statusMessage ?? "Running", "grain_call");
         await _state.WriteStateAsync();
 
         _logger.LogInformation("Runner instance {InstanceId} running", this.GetPrimaryKeyString());
@@ -130,6 +135,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
     public async Task MarkStopping()
     {
         _state.State.Status = RunnerInstanceStatus.Stopping;
+        RecordStatusTransition(RunnerInstanceStatus.Stopping, "Stopping", "grain_call");
         await _state.WriteStateAsync();
 
         _logger.LogInformation("Runner instance {InstanceId} stopping", this.GetPrimaryKeyString());
@@ -145,6 +151,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Stopped;
         _state.State.StoppedAt = DateTime.UtcNow;
+        RecordStatusTransition(RunnerInstanceStatus.Stopped, "Stopped", "grain_call");
         await _state.WriteStateAsync();
 
         _logger.LogInformation("Runner instance {InstanceId} stopped", this.GetPrimaryKeyString());
@@ -163,6 +170,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Failed;
         _state.State.ErrorMessage = error;
+        RecordStatusTransition(RunnerInstanceStatus.Failed, error, "timer");
         await _state.WriteStateAsync();
 
         _logger.LogWarning("Runner instance {InstanceId} failed: {Error}", this.GetPrimaryKeyString(), error);
@@ -181,6 +189,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Crashed;
         _state.State.ErrorMessage = reason;
+        RecordStatusTransition(RunnerInstanceStatus.Crashed, reason, "health_check");
         await _state.WriteStateAsync();
 
         _logger.LogWarning("Runner instance {InstanceId} crashed: {Reason}", this.GetPrimaryKeyString(), reason);
@@ -386,6 +395,21 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
     private static bool IsConsumingHostCapacity(RunnerInstanceStatus status) =>
         status is RunnerInstanceStatus.Starting or RunnerInstanceStatus.Running or RunnerInstanceStatus.Stopping;
 
+    private void RecordStatusTransition(RunnerInstanceStatus status, string? message, string source)
+    {
+        _state.State.StatusHistory.Add(new StatusHistoryEntry
+        {
+            Timestamp = DateTime.UtcNow,
+            Status = status,
+            StatusMessage = message,
+            Source = source
+        });
+
+        // Cap history at 50 entries
+        if (_state.State.StatusHistory.Count > 50)
+            _state.State.StatusHistory.RemoveRange(0, _state.State.StatusHistory.Count - 50);
+    }
+
     private async Task SyncToDocumentDb()
     {
         try
@@ -439,6 +463,15 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         instance.StartedAt = _state.State.StartedAt;
         instance.StoppedAt = _state.State.StoppedAt;
         instance.LastHealthCheck = _state.State.LastHealthCheck;
+        instance.ProvisioningRuleId = _state.State.ProvisioningRuleId;
+        instance.StatusHistory = _state.State.StatusHistory
+            .Select(e => new StatusHistoryEntry
+            {
+                Timestamp = e.Timestamp,
+                Status = e.Status,
+                StatusMessage = e.StatusMessage,
+                Source = e.Source
+            }).ToList();
     }
 
     private async Task NotifyHostIncrement()
@@ -498,11 +531,11 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
                 Status = _state.State.Status
             });
 
-            await store.Remove<RunnerInstance>(this.GetPrimaryKeyString());
+            // Keep the DocumentDB entry for job history; only remove provider registration
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to remove dynamic runner projection for {InstanceId}", this.GetPrimaryKeyString());
+            _logger.LogDebug(ex, "Failed to clean up dynamic runner registration for {InstanceId}", this.GetPrimaryKeyString());
         }
 
         try

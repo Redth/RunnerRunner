@@ -351,7 +351,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
 
         var provisioningMode = _state.State.Config.Type == ProvisioningType.Webhook ? "dynamic" : "static";
 
-        await runnerGrain.Initialize(hostId, _state.State.Config.ProfileId, runnerName, provisioningMode, jobId);
+        await runnerGrain.Initialize(hostId, _state.State.Config.ProfileId, runnerName, provisioningMode, jobId, provisioningRuleId: this.GetPrimaryKeyString());
 
         _state.State.ManagedInstanceIds.Add(instanceId);
         await _state.WriteStateAsync();

@@ -43,7 +43,7 @@ public interface IHostGroupGrain : IGrainWithStringKey
 public interface IRunnerInstanceGrain : IGrainWithStringKey
 {
     Task<RunnerInstanceGrainState> GetState();
-    Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null);
+    Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null);
     Task MarkDeployed();
     Task MarkStarting(string? statusMessage = null);
     Task MarkRunning(string? containerId = null, string? vmName = null, int? processId = null, string? statusMessage = null);

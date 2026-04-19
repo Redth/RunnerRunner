@@ -72,6 +72,10 @@ public class RunnerInstanceGrainState
     [Id(18)] public List<string> RecentLogs { get; set; } = [];
 
     [Id(19)] public ExecutionBackend Backend { get; set; }
+
+    [Id(20)] public List<StatusHistoryEntry> StatusHistory { get; set; } = [];
+
+    [Id(21)] public string? ProvisioningRuleId { get; set; }
 }
 
 [GenerateSerializer]
