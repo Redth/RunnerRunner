@@ -69,7 +69,11 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         // Find a rule where HMAC signature matches AND repo/org is in scope.
         // Multiple rules may share the same webhook secret, so we must check all
         // of them rather than stopping at the first HMAC match.
+        // Most-specific match wins: explicit repo > org > open scope.
         ProvisioningRule? matchedRule = null;
+        ProvisioningRule? repoMatchRule = null;
+        ProvisioningRule? orgMatchRule = null;
+        ProvisioningRule? openScopeRule = null;
         var hmacMatchCount = 0;
         foreach (var rule in candidateRules)
         {
@@ -81,19 +85,23 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
             hmacMatchCount++;
 
-            // Check repo/org scope
+            // Check repo/org scope — classify by specificity
             var repoMatch = rule.AllowedRepos.Any(r =>
                 r.Equals(repo, StringComparison.OrdinalIgnoreCase));
             var orgMatch = rule.AllowedOrgs.Any(o =>
                 o.Equals(org, StringComparison.OrdinalIgnoreCase));
             var scopeOpen = rule.AllowedRepos.Count == 0 && rule.AllowedOrgs.Count == 0;
 
-            if (repoMatch || orgMatch || scopeOpen)
-            {
-                matchedRule = rule;
-                break;
-            }
+            if (repoMatch)
+                repoMatchRule ??= rule;
+            else if (orgMatch)
+                orgMatchRule ??= rule;
+            else if (scopeOpen)
+                openScopeRule ??= rule;
         }
+
+        // Prefer the most specific scope match
+        matchedRule = repoMatchRule ?? orgMatchRule ?? openScopeRule;
 
         if (matchedRule == null)
         {
