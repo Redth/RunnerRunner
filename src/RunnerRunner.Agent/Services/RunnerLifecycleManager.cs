@@ -52,7 +52,8 @@ public class RunnerLifecycleManager
             RunnerBasePath = command.RunnerBasePath,
             WorkDirectory = command.WorkDirectory,
             JitConfig = command.JitConfig,
-            ProvisioningMode = command.ProvisioningMode
+            ProvisioningMode = command.ProvisioningMode,
+            InitSteps = command.InitSteps
         };
 
         var info = await backend.StartRunnerAsync(request, ct);

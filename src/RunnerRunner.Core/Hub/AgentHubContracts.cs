@@ -89,6 +89,13 @@ public class DeployRunnerCommand
     /// <summary>"static" or "dynamic" — determines lifecycle behavior.</summary>
     [Id(17)]
     public string ProvisioningMode { get; set; } = "static";
+
+    /// <summary>
+    /// Ordered list of custom provisioning steps to run on the host as part of runner
+    /// startup (PreRunner) and teardown (PostExit). See <see cref="ResolvedInitStep"/>.
+    /// </summary>
+    [Id(18)]
+    public List<ResolvedInitStep> InitSteps { get; set; } = [];
 }
 
 [GenerateSerializer]

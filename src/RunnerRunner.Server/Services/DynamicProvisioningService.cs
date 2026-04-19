@@ -739,6 +739,9 @@ public class DynamicProvisioningService : BackgroundService
                 $"Dispatching runner '{runnerName}' to host '{hostSelection.Host.Label}'",
                 now);
 
+            var initSteps = await InitStepResolver.ResolveAsync(
+                store, profile, envVars, profile.ExecutionBackend, hostSelection.Host.Platform);
+
             var command = new DeployRunnerCommand
             {
                 InstanceId = instanceId,
@@ -757,7 +760,8 @@ public class DynamicProvisioningService : BackgroundService
                 ProvisioningMode = "dynamic",
                 RunnerUrl = credential != null ? GetRunnerUrl(credential) : null,
                 RunnerBasePath = hostSelection.Host.RunnerBasePath,
-                WorkDirectory = hostSelection.Host.WorkDirectory
+                WorkDirectory = hostSelection.Host.WorkDirectory,
+                InitSteps = initSteps
             };
 
             try

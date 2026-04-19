@@ -97,6 +97,16 @@ public class NativeBackend : IRunnerBackend
             _logger.LogDebug("Installed job-started hook at {Path}", hookPath);
         }
 
+        // Pre-runner init steps (fail-fast unless the step has ContinueOnError).
+        var instanceLogFile = Path.Combine(instanceDir, "runner.log");
+        var initExecutor = new InitStepExecutor(_logger);
+        var preSteps = request.InitSteps.Where(s => s.Phase == Core.Models.InitStepPhase.PreRunner).ToList();
+        if (preSteps.Count > 0)
+        {
+            _logger.LogInformation("Running {Count} pre-runner init step(s) for {RunnerName}", preSteps.Count, request.RunnerName);
+            await initExecutor.RunAsync(preSteps, Core.Models.InitStepPhase.PreRunner, workDir, request.EnvironmentVariables, instanceLogFile, ct);
+        }
+
         // Step 4: Configure and start based on provider
         Process runProcess;
 
@@ -139,20 +149,21 @@ public class NativeBackend : IRunnerBackend
 
         var instanceHandle = runProcess.Id.ToString();
         await File.WriteAllTextAsync(Path.Combine(instanceDir, "rr.pid"), runProcess.Id.ToString());
-        var logFile = Path.Combine(instanceDir, "runner.log");
         _runners[instanceHandle] = new ManagedNativeRunner
         {
             Process = runProcess,
             InstanceDir = instanceDir,
             WorkDir = workDir,
             RunnerName = request.RunnerName,
-            LogFile = logFile
+            LogFile = instanceLogFile,
+            PostExitSteps = request.InitSteps.Where(s => s.Phase == Core.Models.InitStepPhase.PostExit).ToList(),
+            RunnerEnvironment = new Dictionary<string, string>(request.EnvironmentVariables)
         };
 
         // Pipe stdout/stderr to log file
-        _ = Task.Run(() => PipeOutputToLogFile(runProcess, logFile), ct);
+        _ = Task.Run(() => PipeOutputToLogFile(runProcess, instanceLogFile), ct);
 
-        _logger.LogInformation("Native runner {RunnerName} started (PID: {PID}, log: {LogFile})", request.RunnerName, runProcess.Id, logFile);
+        _logger.LogInformation("Native runner {RunnerName} started (PID: {PID}, log: {LogFile})", request.RunnerName, runProcess.Id, instanceLogFile);
 
         return new RunnerInstanceInfo
         {
@@ -201,6 +212,28 @@ public class NativeBackend : IRunnerBackend
         }
 
         runner.Process.Dispose();
+
+        // Run PostExit init steps before wiping the instance dir.
+        if (runner.PostExitSteps.Count > 0)
+        {
+            _logger.LogInformation("Running {Count} post-exit init step(s) for {RunnerName}",
+                runner.PostExitSteps.Count, runner.RunnerName);
+            try
+            {
+                var executor = new InitStepExecutor(_logger);
+                await executor.RunAsync(
+                    runner.PostExitSteps,
+                    Core.Models.InitStepPhase.PostExit,
+                    runner.WorkDir,
+                    runner.RunnerEnvironment,
+                    runner.LogFile,
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Post-exit init steps failed for {RunnerName}", runner.RunnerName);
+            }
+        }
 
         // Clean up instance directory
         try
@@ -714,6 +747,8 @@ public class NativeBackend : IRunnerBackend
         public required string WorkDir { get; set; }
         public required string RunnerName { get; set; }
         public string? LogFile { get; set; }
+        public List<Core.Models.ResolvedInitStep> PostExitSteps { get; set; } = [];
+        public Dictionary<string, string> RunnerEnvironment { get; set; } = new();
     }
 
     /// <summary>

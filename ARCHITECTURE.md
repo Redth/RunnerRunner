@@ -431,6 +431,49 @@ Variables are composed in 5 layers (later layers override earlier):
 
 Then `$VAR` / `${VAR}` expansion runs (3-pass chaining).
 
+## Profile Init Steps
+
+Each `RunnerProfile` may carry an ordered `InitSteps` list of user-defined script
+fragments that run as part of runner provisioning — **in addition to** whatever the
+base image/host already provides. This lets operators layer small customizations
+(e.g. `install sentry-cli`, `gh`, custom CA certs) without rebuilding a container
+image or re-baking a Tart VM.
+
+### Model
+
+- `RunnerInitStep` (Core) — `Name`, `Phase` (PreRunner/PostExit), `Shell`
+  (Auto/Bash/Sh/PowerShell/Cmd), `Script` body, `TimeoutSeconds`,
+  `ContinueOnError`, optional `WorkingDirectory`, plus its own env composition
+  (`EnvironmentVariableSetIds` + `EnvironmentOverrides` + `EnvironmentOverrideSecretKeys`).
+- `ResolvedInitStep` (Core) — transport DTO sent to the agent: env already composed,
+  `Auto` shell already collapsed.
+
+### Server resolution (`InitStepResolver`)
+
+For each enabled step the server builds its env as:
+
+1. Base runner env (everything the runner itself would see)
+2. Step's referenced `EnvironmentVariableSet`s (priority-ordered)
+3. Step-level overrides
+
+`Auto` shell resolves to Bash on Linux/Tart, PowerShell on Windows.
+
+### Agent execution
+
+- **Docker**: `InitStepShellBuilder` emits inline shell fragments that are inlined
+  into the JIT entrypoint wrapper. Pre steps run before the auto-discovered
+  `run.sh`/`run.cmd`; post steps run after, and the runner's exit code is preserved.
+- **Tart**: Pre steps run via SSH before `config.sh`/`run.sh`/`act_runner`. Post
+  steps are written as a base64-encoded wrapper script to `/tmp/rr-runner-wrapper.sh`
+  on the VM, which `nohup` executes; this is required because the SSH session
+  disconnects before the runner exits.
+- **Native**: `InitStepExecutor` runs each step as a local child process. Pre steps
+  run in `StartRunnerAsync` before the provider's Configure/Start; post steps run
+  in `StopRunnerAsync` before the instance dir is cleaned up.
+
+All steps honor per-step `TimeoutSeconds` and `ContinueOnError`. Step output is
+prefixed `[init:<name>]` in the runner log.
+
 ## Web UI
 
 Blazor Server with InteractiveServer render mode. 12 pages:

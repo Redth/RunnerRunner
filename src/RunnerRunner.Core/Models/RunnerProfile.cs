@@ -74,4 +74,9 @@ public class RunnerProfile
     /// </summary>
     [Id(21)]
     public bool EmitJobStartedBanner { get; set; } = true;
+
+    // Ordered list of custom provisioning steps executed on the host as part of runner
+    // startup (and teardown for PostExit steps). See RunnerInitStep.
+    [Id(22)]
+    public List<RunnerInitStep> InitSteps { get; set; } = [];
 }
