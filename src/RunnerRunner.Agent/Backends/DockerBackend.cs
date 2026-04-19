@@ -1,6 +1,8 @@
 using Docker.DotNet;
 using Docker.DotNet.Models;
+using System.Formats.Tar;
 using System.Runtime.InteropServices;
+using System.Text;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 
@@ -88,44 +90,47 @@ public class DockerBackend : IRunnerBackend
             envVars.Add($"RR_PROVISIONING_MODE={request.ProvisioningMode}");
         }
 
-        // Install the job-started banner hook if requested. We write the
-        // script to a unique host directory and bind-mount it read-only
-        // into the container, then set ACTIONS_RUNNER_HOOK_JOB_STARTED.
-        var hookBinds = new List<string>();
+        // Install the job-started banner hook if requested. We copy the
+        // script directly into the container after it's created (via tar
+        // archive extract) instead of bind-mounting from the host — that
+        // way it works whether the agent is running on the Docker daemon's
+        // host or inside another container talking to a remote daemon.
+        string? hookScriptBody = null;
+        string? hookContainerDir = null;
+        string? hookScriptFileName = null;
+        string? hookContainerScriptPath = null;
+        bool hookIsWindows = false;
         if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
         {
             // Peek at the image to decide bash-vs-powershell; fall back to
             // Linux (bash) if the inspect fails or there's no image yet.
-            var isWindowsContainer = false;
             try
             {
                 var imageInspect = await _client.Images.InspectImageAsync(imageName, ct);
-                isWindowsContainer = IsWindowsContainerImage(imageInspect.Os);
+                hookIsWindows = IsWindowsContainerImage(imageInspect.Os);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Unable to inspect image {Image} for hook platform; defaulting to bash", imageName);
             }
 
-            var hostHookDir = Path.Combine(Path.GetTempPath(), "runnerrunner-hooks", request.InstanceId);
-            string hostScriptPath;
-            string containerScriptPath;
-            if (isWindowsContainer)
+            if (hookIsWindows)
             {
-                hostScriptPath = Services.JobHookScriptBuilder.WritePowerShellScript(hostHookDir);
-                containerScriptPath = "C:\\runnerrunner\\" + Services.JobHookScriptBuilder.PowerShellFileName;
-                hookBinds.Add($"{hostHookDir}:C:\\runnerrunner:ro");
+                hookScriptBody = Services.JobHookScriptBuilder.BuildPowerShellScript();
+                hookScriptFileName = Services.JobHookScriptBuilder.PowerShellFileName;
+                hookContainerDir = "runnerrunner";
+                hookContainerScriptPath = "C:\\runnerrunner\\" + hookScriptFileName;
             }
             else
             {
-                hostScriptPath = Services.JobHookScriptBuilder.WriteBashScript(hostHookDir);
-                containerScriptPath = "/runnerrunner/" + Services.JobHookScriptBuilder.BashFileName;
-                hookBinds.Add($"{hostHookDir}:/runnerrunner:ro");
+                hookScriptBody = Services.JobHookScriptBuilder.BuildBashScript();
+                hookScriptFileName = Services.JobHookScriptBuilder.BashFileName;
+                hookContainerDir = "runnerrunner";
+                hookContainerScriptPath = "/runnerrunner/" + hookScriptFileName;
             }
 
-            envVars.Add($"{Services.JobHookScriptBuilder.HookEnvVarName}={containerScriptPath}");
-            _logger.LogDebug("Installed job-started hook at host:{Host} -> container:{Container}",
-                hostScriptPath, containerScriptPath);
+            envVars.Add($"{Services.JobHookScriptBuilder.HookEnvVarName}={hookContainerScriptPath}");
+            _logger.LogDebug("Will install job-started hook inside container at {Path}", hookContainerScriptPath);
         }
 
         // Create and start container with RunnerRunner labels for tracking
@@ -146,7 +151,7 @@ public class DockerBackend : IRunnerBackend
                 // Keep managed containers until RunnerRunner explicitly removes them so
                 // reconciliation and logs can distinguish "exited" from "never existed".
                 AutoRemove = false,
-                Binds = hookBinds.Count > 0 ? hookBinds : null,
+                Binds = null,
                 RestartPolicy = request.Ephemeral
                     ? new RestartPolicy { Name = RestartPolicyKind.No }
                     : new RestartPolicy { Name = RestartPolicyKind.UnlessStopped }
@@ -176,6 +181,29 @@ public class DockerBackend : IRunnerBackend
         }
 
         var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
+
+        // Copy the job-started hook script into the container filesystem.
+        // This avoids any dependency on host-side paths being visible to dockerd.
+        if (hookScriptBody is not null && hookContainerDir is not null && hookScriptFileName is not null)
+        {
+            try
+            {
+                using var tarStream = BuildHookTarArchive(hookContainerDir, hookScriptFileName, hookScriptBody, hookIsWindows);
+                var targetPath = hookIsWindows ? "C:\\" : "/";
+                await _client.Containers.ExtractArchiveToContainerAsync(
+                    createResponse.ID,
+                    new ContainerPathStatParameters { Path = targetPath, AllowOverwriteDirWithFile = false },
+                    tarStream,
+                    ct);
+                _logger.LogDebug("Copied job-started hook into container {ContainerId}: {Path}",
+                    createResponse.ID[..12], hookContainerScriptPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to install job-started hook into container {ContainerId}; job banner will be missing but runner will continue",
+                    createResponse.ID[..12]);
+            }
+        }
 
         await _client.Containers.StartContainerAsync(createResponse.ID, null, ct);
 
@@ -319,6 +347,42 @@ public class DockerBackend : IRunnerBackend
     /// Detect the shell available in the image by inspecting its SHELL config,
     /// entrypoint, and cmd. Prefers /bin/bash if the image uses it, falls back to /bin/sh.
     /// </summary>
+    /// <summary>
+    /// Builds an in-memory tar archive containing a single executable script
+    /// at <c>{dirName}/{fileName}</c>, for use with Docker's
+    /// <c>ExtractArchiveToContainerAsync</c>. Docker accepts a POSIX tar
+    /// stream for both Linux and Windows container copy operations.
+    /// </summary>
+    internal static Stream BuildHookTarArchive(string dirName, string fileName, string scriptBody, bool isWindows)
+    {
+        var ms = new MemoryStream();
+        using (var writer = new TarWriter(ms, TarEntryFormat.Ustar, leaveOpen: true))
+        {
+            // Directory entry. Docker tolerates either / or \ but POSIX tar wants /.
+            var dirEntry = new UstarTarEntry(TarEntryType.Directory, dirName + "/")
+            {
+                Mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                     | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                     | UnixFileMode.OtherRead | UnixFileMode.OtherExecute,
+            };
+            writer.WriteEntry(dirEntry);
+
+            var scriptBytes = Encoding.UTF8.GetBytes(scriptBody);
+            var fileEntry = new UstarTarEntry(TarEntryType.RegularFile, dirName + "/" + fileName)
+            {
+                // Executable on Linux; Windows ignores mode but it's harmless.
+                Mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                     | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                     | UnixFileMode.OtherRead | UnixFileMode.OtherExecute,
+                DataStream = new MemoryStream(scriptBytes),
+            };
+            writer.WriteEntry(fileEntry);
+            _ = isWindows; // reserved for future per-platform tweaks
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
     internal static bool IsWindowsContainerImage(string? imageOs)
         => string.Equals(imageOs, "windows", StringComparison.OrdinalIgnoreCase);
 
