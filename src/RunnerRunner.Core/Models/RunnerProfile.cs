@@ -57,8 +57,26 @@ public class RunnerProfile
     [Id(19)]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// When true (default), RunnerRunner appends descriptive <c>rr-*</c> metadata
+    /// labels (backend, image, tag, host, profile, provider) to the runner's
+    /// label set. These show up in GitHub Actions' "Set up job" block and are
+    /// informational only — job authors shouldn't match them with runs-on.
+    /// </summary>
+    [Id(20)]
+    public bool EmitMetadataLabels { get; set; } = true;
+
+    /// <summary>
+    /// When true (default), RunnerRunner installs a job-started hook
+    /// (<c>ACTIONS_RUNNER_HOOK_JOB_STARTED</c>) that logs a collapsible
+    /// "RunnerRunner environment" banner at the top of every job, surfacing
+    /// the backend, image, host, profile, and runner agent version.
+    /// </summary>
+    [Id(21)]
+    public bool EmitJobStartedBanner { get; set; } = true;
+
     // Ordered list of custom provisioning steps executed on the host as part of runner
     // startup (and teardown for PostExit steps). See RunnerInitStep.
-    [Id(20)]
+    [Id(22)]
     public List<RunnerInitStep> InitSteps { get; set; } = [];
 }

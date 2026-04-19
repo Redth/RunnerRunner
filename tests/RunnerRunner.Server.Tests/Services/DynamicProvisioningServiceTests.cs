@@ -16,12 +16,60 @@ public class DynamicProvisioningServiceTests
         var profile = new RunnerProfile
         {
             Name = "linux-tests",
-            Labels = ["Linux", "docker", "self-hosted"]
+            Labels = ["Linux", "docker", "self-hosted"],
+            EmitMetadataLabels = false // isolate the merge/dedup behavior
         };
 
         var result = DynamicProvisioningService.BuildDynamicRunnerLabels(evt, profile);
 
         Assert.Equal(["self-hosted", "linux", "tests", "docker"], result);
+    }
+
+    [Fact]
+    public void BuildDynamicRunnerLabels_AppendsMetadataLabels_WhenProfileOptsIn()
+    {
+        var evt = new WebhookEvent { Labels = ["self-hosted"] };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-tests",
+            ExecutionBackend = ExecutionBackend.Docker,
+            Provider = RunnerProvider.GitHubActions,
+            Labels = [],
+            DockerConfig = new DockerImageConfig
+            {
+                RegistryUrl = "ghcr.io",
+                ImageName = "acme/ubuntu-runner",
+                Tag = "24.04"
+            }
+        };
+        var host = new RunnerRunner.Core.Models.Host { Name = "mac-studio-01" };
+
+        var result = DynamicProvisioningService.BuildDynamicRunnerLabels(evt, profile, host);
+
+        Assert.Contains("self-hosted", result);
+        Assert.Contains("rr-backend:docker", result);
+        Assert.Contains("rr-provider:GitHubActions", result);
+        Assert.Contains("rr-profile:linux-tests", result);
+        Assert.Contains("rr-host:mac-studio-01", result);
+        Assert.Contains("rr-image:ghcr.io-acme-ubuntu-runner", result);
+        Assert.Contains("rr-tag:24.04", result);
+    }
+
+    [Fact]
+    public void BuildDynamicRunnerLabels_SuppressesMetadataLabels_WhenProfileOptsOut()
+    {
+        var evt = new WebhookEvent { Labels = ["self-hosted"] };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-tests",
+            ExecutionBackend = ExecutionBackend.Docker,
+            EmitMetadataLabels = false,
+            Labels = ["custom"]
+        };
+
+        var result = DynamicProvisioningService.BuildDynamicRunnerLabels(evt, profile, host: null);
+
+        Assert.DoesNotContain(result, l => l.StartsWith("rr-"));
     }
 
     [Fact]

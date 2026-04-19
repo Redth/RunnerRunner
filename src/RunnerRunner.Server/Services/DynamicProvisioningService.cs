@@ -684,7 +684,7 @@ public class DynamicProvisioningService : BackgroundService
                 isRecoveryAttempt);
 
             JitConfigResult? jitResult = null;
-            var effectiveLabels = BuildDynamicRunnerLabels(currentEvent, profile);
+            var effectiveLabels = BuildDynamicRunnerLabels(currentEvent, profile, hostSelection.Host);
             if (credential != null)
             {
                 await UpdateEventProgressAsync(
@@ -717,6 +717,16 @@ public class DynamicProvisioningService : BackgroundService
             var instanceId = Guid.NewGuid().ToString();
             envVars["RR_INSTANCE_ID"] = instanceId;
             envVars["RR_RUNNER_NAME"] = runnerName;
+
+            // Inform the agent if the profile wants a job-started banner hook
+            // installed; the agent picks the right filesystem path per backend.
+            if (profile.EmitJobStartedBanner)
+                envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
+
+            // Seed RR_META_* describing this deployment so the banner and any
+            // other consumers can read a consistent metadata bag.
+            foreach (var kv in RunnerMetadataBuilder.BuildMetadataEnv(profile, hostSelection.Host, null, instanceId))
+                envVars[kv.Key] = kv.Value;
 
             var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
             await runnerGrain.Initialize(hostSelection.Host.Id, profile.Id, runnerName, "dynamic", currentEvent.JobId, currentEvent.Id);
@@ -799,6 +809,9 @@ public class DynamicProvisioningService : BackgroundService
     }
 
     internal static List<string> BuildDynamicRunnerLabels(WebhookEvent evt, RunnerProfile profile)
+        => BuildDynamicRunnerLabels(evt, profile, host: null);
+
+    internal static List<string> BuildDynamicRunnerLabels(WebhookEvent evt, RunnerProfile profile, Host? host)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var labels = new List<string>();
@@ -820,6 +833,15 @@ public class DynamicProvisioningService : BackgroundService
 
         if (seen.Add("self-hosted"))
             labels.Insert(0, "self-hosted");
+
+        if (profile.EmitMetadataLabels)
+        {
+            foreach (var metaLabel in RunnerMetadataBuilder.BuildMetadataLabels(profile, host))
+            {
+                if (seen.Add(metaLabel))
+                    labels.Add(metaLabel);
+            }
+        }
 
         return labels;
     }

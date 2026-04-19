@@ -230,6 +230,19 @@ public class OrchestrationEngine : BackgroundService
                     agentVersion, profile.Provider);
         }
 
+        // Install RR_HOOK_* sentinel + RR_META_* bag before the deploy command
+        // is built so the agent can both honor the job-started banner request
+        // and populate it with consistent metadata.
+        if (profile.EmitJobStartedBanner)
+            envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
+
+        foreach (var kv in RunnerMetadataBuilder.BuildMetadataEnv(profile, host, agentVersion, instanceId))
+            envVars[kv.Key] = kv.Value;
+
+        // Enrich labels with rr-* metadata so the "Set up job" block surfaces
+        // backend/image/host info without bloating the runner name.
+        var effectiveLabels = RunnerMetadataBuilder.MergeMetadataLabels(profile.Labels, profile, host);
+
         // Send deploy command to agent
         var initSteps = await InitStepResolver.ResolveAsync(
             store, profile, envVars, profile.ExecutionBackend, host?.Platform ?? HostPlatform.Linux);
@@ -245,7 +258,7 @@ public class OrchestrationEngine : BackgroundService
             RunnerAgentVersion = agentVersion,
             DockerConfig = profile.DockerConfig,
             TartConfig = profile.TartConfig,
-            Labels = profile.Labels,
+            Labels = effectiveLabels,
             RunnerGroup = profile.RunnerGroup,
             Ephemeral = profile.Ephemeral,
             RegistrationToken = registrationToken,
