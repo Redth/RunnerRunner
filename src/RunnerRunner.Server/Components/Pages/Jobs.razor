@@ -2,10 +2,14 @@
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
+@using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Grains.Events
+@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Server.Services
+@using Microsoft.AspNetCore.SignalR
 @inject IDocumentStore Store
 @inject IGrainFactory GrainFactory
+@inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @implements IDisposable
 
 <PageTitle>Jobs - RunnerRunner</PageTitle>
@@ -214,6 +218,14 @@ else
 
                                     @* Right column: details *@
                                     <div class="col-md-6">
+                                        @if (job.Instance != null)
+                                        {
+                                            <div class="mb-2">
+                                                <button class="btn btn-sm btn-outline-primary" @onclick="() => ShowLogs(job)" @onclick:stopPropagation="true">
+                                                    <i class="bi bi-terminal me-1"></i> View Logs
+                                                </button>
+                                            </div>
+                                        }
                                         <h6><i class="bi bi-info-circle me-1"></i> Details</h6>
                                         <table class="table table-sm small mb-0">
                                             <tbody>
@@ -319,6 +331,46 @@ else
     </div>
 }
 
+@* Log viewer modal *@
+@if (showLogModal)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" @onclick="CloseLogModal" @onclick:stopPropagation="false">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h6 class="modal-title">
+                        <i class="bi bi-terminal me-1"></i> Logs — @logModalTitle
+                    </h6>
+                    <div class="d-flex align-items-center gap-2 ms-auto">
+                        <select class="form-select form-select-sm" style="width: auto;" @bind="logTailLines">
+                            <option value="50">50 lines</option>
+                            <option value="100">100 lines</option>
+                            <option value="200">200 lines</option>
+                            <option value="500">500 lines</option>
+                            <option value="1000">1000 lines</option>
+                        </select>
+                        <button class="btn btn-sm btn-outline-primary" @onclick="RefreshLogs" disabled="@isLoadingLogs">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                        <button type="button" class="btn-close" @onclick="CloseLogModal"></button>
+                    </div>
+                </div>
+                <div class="modal-body p-0">
+                    @if (isLoadingLogs)
+                    {
+                        <div class="text-center py-4">
+                            <span class="spinner-border spinner-border-sm text-primary me-2"></span>
+                            Fetching logs from agent…
+                        </div>
+                    }
+                    <pre class="log-viewer-pre mb-0">@logContent</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 <style>
     tr.job-row:hover td {
         background: var(--bg-tertiary, #f0f2f5);
@@ -339,10 +391,24 @@ else
     .timeline-entry:last-child {
         border-left-color: transparent;
     }
+    .log-viewer-pre {
+        background: #1a1b26;
+        color: #c0caf5;
+        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        font-size: 0.8rem;
+        line-height: 1.4;
+        padding: 1rem;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 70vh;
+        overflow-y: auto;
+        min-height: 200px;
+    }
 </style>
 
 @code {
     private List<JobView> jobs = [];
+    private List<Host> allHosts = [];
     private Dictionary<string, string> hostNames = new();
     private Dictionary<string, string> profileNames = new();
     private Dictionary<string, string> ruleNames = new();
@@ -358,6 +424,15 @@ else
 
     private HashSet<string> expandedRows = new();
 
+    // Log viewer modal state
+    private bool showLogModal;
+    private string logModalTitle = "";
+    private string logContent = "";
+    private bool isLoadingLogs;
+    private int logTailLines = 200;
+    private JobView? logModalJob;
+    private TaskCompletionSource<string>? _runnerLogsTcs;
+
     // Auto-refresh timer for queued webhook events
     private PeriodicTimer? _refreshTimer;
     private CancellationTokenSource? _refreshCts;
@@ -366,6 +441,7 @@ else
     {
         await Refresh();
         StreamSubscriptionService.OnRunnerStatusChanged += OnStreamRunnerStatusChanged;
+        AgentHub.OnRunnerLogsReceived += OnRunnerLogsReceived;
 
         // Refresh every 10s for queued events progress
         _refreshCts = new CancellationTokenSource();
@@ -393,6 +469,7 @@ else
     public void Dispose()
     {
         StreamSubscriptionService.OnRunnerStatusChanged -= OnStreamRunnerStatusChanged;
+        AgentHub.OnRunnerLogsReceived -= OnRunnerLogsReceived;
         _refreshCts?.Cancel();
         _refreshCts?.Dispose();
         _refreshTimer?.Dispose();
@@ -405,12 +482,12 @@ else
             .Where(i => i.ManagedByRunnerRunner == true)
             .ToList();
 
-        var hosts = (await Store.Query<Host>().ToList()).ToList();
+        allHosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         var rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
         var allWebhookEvents = (await Store.Query<WebhookEvent>().ToList()).ToList();
 
-        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
+        hostNames = allHosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         ruleNames = rules.ToDictionary(r => r.Id, r => r.Name);
 
@@ -704,4 +781,110 @@ else
         public bool IsQueued { get; set; }
         public int SortPriority { get; set; }
     }
+
+    // --- Log viewer ---
+
+    private async Task ShowLogs(JobView job)
+    {
+        logModalJob = job;
+        logModalTitle = job.RunnerName ?? job.JobId ?? job.Id;
+        showLogModal = true;
+        logContent = "";
+        StateHasChanged();
+        await FetchRunnerLogs(job);
+    }
+
+    private async Task RefreshLogs()
+    {
+        if (logModalJob != null)
+            await FetchRunnerLogs(logModalJob);
+    }
+
+    private void CloseLogModal()
+    {
+        showLogModal = false;
+        logModalJob = null;
+        logContent = "";
+    }
+
+    private async Task FetchRunnerLogs(JobView job)
+    {
+        if (job.Instance == null) return;
+
+        isLoadingLogs = true;
+        StateHasChanged();
+
+        try
+        {
+            var host = allHosts.FirstOrDefault(h => h.Id == job.Instance.HostId);
+            if (host == null)
+            {
+                logContent = "Host not found for this runner instance.";
+                return;
+            }
+
+            var agent = FindConnectedAgent(host);
+            if (agent == null)
+            {
+                var lines = new List<string>
+                {
+                    $"=== Runner: {job.Instance.RunnerName} ===",
+                    $"Host: {host.Label}",
+                    $"Status: {job.Instance.Status}",
+                    ""
+                };
+
+                if (!string.IsNullOrWhiteSpace(job.Instance.StatusMessage))
+                    lines.Add($"Status message: {job.Instance.StatusMessage}");
+                if (!string.IsNullOrWhiteSpace(job.Instance.ErrorMessage))
+                    lines.Add($"Error: {job.Instance.ErrorMessage}");
+
+                lines.Add("");
+                lines.Add("⚠ Live log streaming is unavailable — the host agent is not connected.");
+
+                if (host.Platform == HostPlatform.Linux)
+                {
+                    lines.Add("");
+                    lines.Add("Manual log access:");
+                    var cid = job.Instance.ContainerId ?? job.Instance.RunnerName;
+                    lines.Add($"  ssh root@{host.Name} 'docker logs {cid} 2>&1 | tail -200'");
+                }
+
+                logContent = string.Join("\n", lines);
+                return;
+            }
+
+            var handle = job.Instance.ContainerId ?? job.Instance.RunnerName;
+            _runnerLogsTcs = new TaskCompletionSource<string>();
+            var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = logTailLines };
+
+            await HubContext.Clients.Client(agent.ConnectionId).GetRunnerLogs(command);
+
+            var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+            logContent = completedTask == _runnerLogsTcs.Task
+                ? await _runnerLogsTcs.Task
+                : "⚠ Timeout waiting for logs from agent.";
+        }
+        catch (Exception ex)
+        {
+            logContent = $"Error fetching logs: {ex.Message}";
+        }
+        finally
+        {
+            isLoadingLogs = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnRunnerLogsReceived(RunnerLogsEvent evt)
+    {
+        _runnerLogsTcs?.TrySetResult(evt.Logs ?? "(empty)");
+        InvokeAsync(StateHasChanged);
+    }
+
+    private ConnectedAgent? FindConnectedAgent(Host host) =>
+        AgentHub.GetConnectedAgents().Values.FirstOrDefault(a =>
+            a.AgentInfo.Name == host.Name
+            || a.AgentInfo.AgentId == host.Name
+            || a.AgentInfo.AgentId == host.Id);
 }
