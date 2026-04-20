@@ -59,6 +59,12 @@ public class RunnerStartRequest
     /// (PreRunner) and teardown (PostExit). Already env-resolved by the server.
     /// </summary>
     public List<ResolvedInitStep> InitSteps { get; set; } = [];
+
+    /// <summary>Resolved registry username for pulling the Docker image.</summary>
+    public string? RegistryUsername { get; set; }
+
+    /// <summary>Resolved registry password/token for pulling the Docker image.</summary>
+    public string? RegistryPassword { get; set; }
 }
 
 public class RunnerInstanceInfo

@@ -742,6 +742,9 @@ public class DynamicProvisioningService : BackgroundService
             var initSteps = await InitStepResolver.ResolveAsync(
                 store, profile, envVars, profile.ExecutionBackend, hostSelection.Host.Platform);
 
+            // Resolve registry credentials for Docker image pulls
+            var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
+
             var command = new DeployRunnerCommand
             {
                 InstanceId = instanceId,
@@ -761,7 +764,9 @@ public class DynamicProvisioningService : BackgroundService
                 RunnerUrl = credential != null ? GetRunnerUrl(credential) : null,
                 RunnerBasePath = hostSelection.Host.RunnerBasePath,
                 WorkDirectory = hostSelection.Host.WorkDirectory,
-                InitSteps = initSteps
+                InitSteps = initSteps,
+                RegistryUsername = registryCred?.Username,
+                RegistryPassword = registryCred?.Password
             };
 
             try

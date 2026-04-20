@@ -53,7 +53,9 @@ public class RunnerLifecycleManager
             WorkDirectory = command.WorkDirectory,
             JitConfig = command.JitConfig,
             ProvisioningMode = command.ProvisioningMode,
-            InitSteps = command.InitSteps
+            InitSteps = command.InitSteps,
+            RegistryUsername = command.RegistryUsername,
+            RegistryPassword = command.RegistryPassword
         };
 
         var info = await backend.StartRunnerAsync(request, ct);

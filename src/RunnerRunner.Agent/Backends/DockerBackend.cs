@@ -69,9 +69,19 @@ public class DockerBackend : IRunnerBackend
             (config.PullPolicy == PullPolicy.IfNotPresent && !await ImageExistsAsync(imageName, ct)))
         {
             _logger.LogInformation("Pulling image {Image}", imageName);
+            AuthConfig? authConfig = null;
+            if (!string.IsNullOrEmpty(request.RegistryUsername))
+            {
+                authConfig = new AuthConfig
+                {
+                    Username = request.RegistryUsername,
+                    Password = request.RegistryPassword ?? ""
+                };
+                _logger.LogInformation("Using registry credentials (user: {User}) for image pull", request.RegistryUsername);
+            }
             await _client.Images.CreateImageAsync(
                 new ImagesCreateParameters { FromImage = repository, Tag = config.Tag },
-                null, new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)), ct);
+                authConfig, new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)), ct);
         }
 
         // Build environment variables

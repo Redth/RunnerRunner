@@ -96,6 +96,14 @@ public class DeployRunnerCommand
     /// </summary>
     [Id(18)]
     public List<ResolvedInitStep> InitSteps { get; set; } = [];
+
+    /// <summary>Resolved registry username for pulling the Docker image.</summary>
+    [Id(19)]
+    public string? RegistryUsername { get; set; }
+
+    /// <summary>Resolved registry password/token for pulling the Docker image.</summary>
+    [Id(20)]
+    public string? RegistryPassword { get; set; }
 }
 
 [GenerateSerializer]
