@@ -684,7 +684,24 @@ public class DynamicProvisioningService : BackgroundService
                 isRecoveryAttempt);
 
             JitConfigResult? jitResult = null;
+
+            // Apply webhook-supplied image tag override when permitted. We
+            // copy the image configs before mutating so the shared profile
+            // document / grain cache stays untouched. Done early so the
+            // override label can be added to the runner's label set below —
+            // GitHub Actions routes jobs by matching every label in
+            // `runs-on`, so the runner must advertise the `rr-image-tag=...`
+            // label for the queued job to pick it up.
+            var (dockerConfig, tartConfig, appliedTagOverride) =
+                ApplyImageTagOverride(profile, currentEvent.ImageTagOverride);
+
             var effectiveLabels = BuildDynamicRunnerLabels(currentEvent, profile, hostSelection.Host);
+            if (!string.IsNullOrEmpty(appliedTagOverride))
+            {
+                var overrideLabel = $"rr-image-tag={appliedTagOverride}";
+                if (!effectiveLabels.Contains(overrideLabel, StringComparer.OrdinalIgnoreCase))
+                    effectiveLabels.Add(overrideLabel);
+            }
             if (credential != null)
             {
                 await UpdateEventProgressAsync(
@@ -722,12 +739,6 @@ public class DynamicProvisioningService : BackgroundService
             // installed; the agent picks the right filesystem path per backend.
             if (profile.EmitJobStartedBanner)
                 envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
-
-            // Apply webhook-supplied image tag override when permitted. We
-            // copy the image configs before mutating so the shared profile
-            // document / grain cache stays untouched.
-            var (dockerConfig, tartConfig, appliedTagOverride) =
-                ApplyImageTagOverride(profile, currentEvent.ImageTagOverride);
 
             // Seed RR_META_* describing this deployment so the banner and any
             // other consumers can read a consistent metadata bag.
