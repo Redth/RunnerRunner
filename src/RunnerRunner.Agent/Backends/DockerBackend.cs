@@ -482,6 +482,15 @@ public class DockerBackend : IRunnerBackend
             "    echo '[RunnerRunner] Non-root user; skipping dependency install (expecting image to provide libicu/openssl/git/jq).'; " +
             "  fi; " +
 
+            // Fallback: if libicu is still not present, enable .NET invariant globalization so the runner can start.
+            "  rr_has_libicu=0; " +
+            "  if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -qi libicu; then rr_has_libicu=1; fi; " +
+            "  if [ \"$rr_has_libicu\" = \"0\" ] && ls /usr/lib/libicu* /usr/lib64/libicu* /usr/lib/*/libicu* /lib/*/libicu* 2>/dev/null | grep -q .; then rr_has_libicu=1; fi; " +
+            "  if [ \"$rr_has_libicu\" = \"0\" ]; then " +
+            "    echo '[RunnerRunner] libicu not detected; enabling DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 fallback.'; " +
+            "    export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1; " +
+            "  fi; " +
+
             // Resolve latest version from GitHub API if not specified
             "  if [ -z \"$rr_version\" ]; then " +
             "    echo '[RunnerRunner] No runner found in image; resolving latest runner version...'; " +
