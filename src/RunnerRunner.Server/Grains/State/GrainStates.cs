@@ -76,6 +76,8 @@ public class RunnerInstanceGrainState
     [Id(20)] public List<StatusHistoryEntry> StatusHistory { get; set; } = [];
 
     [Id(21)] public string? ProvisioningRuleId { get; set; }
+
+    [Id(22)] public string? ImageTagOverride { get; set; }
 }
 
 [GenerateSerializer]

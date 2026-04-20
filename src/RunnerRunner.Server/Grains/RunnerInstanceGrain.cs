@@ -41,7 +41,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public Task<RunnerInstanceGrainState> GetState() => Task.FromResult(_state.State);
 
-    public async Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null)
+    public async Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null, string? imageTagOverride = null)
     {
         _state.State.HostId = hostId;
         _state.State.ProfileId = profileId;
@@ -50,6 +50,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         _state.State.JobId = jobId;
         _state.State.WebhookEventId = webhookEventId;
         _state.State.ProvisioningRuleId = provisioningRuleId;
+        _state.State.ImageTagOverride = imageTagOverride;
         _state.State.Status = RunnerInstanceStatus.Pending;
         _state.State.CreatedAt = DateTime.UtcNow;
 
@@ -464,6 +465,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         instance.StoppedAt = _state.State.StoppedAt;
         instance.LastHealthCheck = _state.State.LastHealthCheck;
         instance.ProvisioningRuleId = _state.State.ProvisioningRuleId;
+        instance.ImageTagOverride = _state.State.ImageTagOverride;
         instance.StatusHistory = _state.State.StatusHistory
             .Select(e => new StatusHistoryEntry
             {

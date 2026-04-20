@@ -47,6 +47,7 @@ else
                 <th>Workflow</th>
                 <th>Rule</th>
                 <th>Labels</th>
+                <th>Image Tag</th>
                 <th>Matched Profile</th>
                 <th>Status</th>
                 <th>Instance</th>
@@ -68,6 +69,24 @@ else
                                 <span class="badge bg-secondary">@label</span>
                             }
                         </div>
+                    </td>
+                    <td>
+                        @if (!string.IsNullOrEmpty(evt.ImageTagOverride))
+                        {
+                            <span class="badge bg-info text-dark" title="Webhook-supplied image tag override (rr-image-tag label)">@evt.ImageTagOverride</span>
+                            @if (!string.IsNullOrEmpty(evt.ImageTagOverrideRejectedReason))
+                            {
+                                <div><small class="text-danger" title="@evt.ImageTagOverrideRejectedReason">ignored</small></div>
+                            }
+                        }
+                        else if (!string.IsNullOrEmpty(evt.ImageTagOverrideRejectedReason))
+                        {
+                            <small class="text-danger" title="@evt.ImageTagOverrideRejectedReason">rejected</small>
+                        }
+                        else
+                        {
+                            <span class="text-muted">—</span>
+                        }
                     </td>
                     <td>@(evt.MatchedProfileName ?? "—")</td>
                      <td>

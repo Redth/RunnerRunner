@@ -49,6 +49,23 @@ public class WebhookEvent
     public string? InstanceId { get; set; }
 
     /// <summary>
+    /// Image tag override supplied by the webhook via a magic
+    /// <c>rr-image-tag=&lt;value&gt;</c> label on the job's <c>runs-on</c>.
+    /// Populated whenever the label is seen, even if the matched profile
+    /// didn't opt in — so operators can debug. The override is only applied
+    /// at dispatch time when the profile has
+    /// <see cref="RunnerProfile.AllowWebhookImageTagOverride"/> enabled.
+    /// </summary>
+    public string? ImageTagOverride { get; set; }
+
+    /// <summary>
+    /// Human-readable reason the supplied tag override was not applied
+    /// (e.g. "profile did not opt in" or "invalid tag format"). Null when
+    /// the override was either absent or successfully applied.
+    /// </summary>
+    public string? ImageTagOverrideRejectedReason { get; set; }
+
+    /// <summary>
     /// pending*, matching/preparing/dispatching, no_match, rejected, provisioned, in_progress, completed, timed_out, ignored
     /// </summary>
     public string Status { get; set; } = "";

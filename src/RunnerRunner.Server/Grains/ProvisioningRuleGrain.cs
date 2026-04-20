@@ -92,7 +92,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
         await _state.WriteStateAsync();
     }
 
-    public async Task HandleWebhookEvent(string jobId, string repo, List<string> labels, string? jitConfig)
+    public async Task HandleWebhookEvent(string jobId, string repo, List<string> labels, string? jitConfig, string? imageTagOverride = null)
     {
         if (_state.State.Config.Type is not (ProvisioningType.Webhook or ProvisioningType.ScaleSet))
         {
@@ -101,15 +101,28 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
             return;
         }
 
-        // Try to find an idle warm runner to assign
-        var idleInstanceId = await FindIdleInstance();
-        if (idleInstanceId != null)
+        // If the webhook supplied an image tag override, don't reuse a warm
+        // runner — warm runners were pre-pulled with the profile's default
+        // tag and can't be retagged mid-life. Skip straight to provisioning a
+        // fresh JIT runner so the caller actually gets the tag they asked for.
+        if (string.IsNullOrEmpty(imageTagOverride))
         {
-            _logger.LogInformation("Assigning idle runner {InstanceId} to job {JobId}",
-                idleInstanceId, jobId);
-            var grain = GrainFactory.GetGrain<IRunnerInstanceGrain>(idleInstanceId);
-            await grain.UpdateStatusMessage($"Assigned to job {jobId}");
-            return;
+            // Try to find an idle warm runner to assign
+            var idleInstanceId = await FindIdleInstance();
+            if (idleInstanceId != null)
+            {
+                _logger.LogInformation("Assigning idle runner {InstanceId} to job {JobId}",
+                    idleInstanceId, jobId);
+                var grain = GrainFactory.GetGrain<IRunnerInstanceGrain>(idleInstanceId);
+                await grain.UpdateStatusMessage($"Assigned to job {jobId}");
+                return;
+            }
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Skipping warm runner reuse for job {JobId}: webhook requested image tag override '{Tag}'",
+                jobId, imageTagOverride);
         }
 
         // Check capacity

@@ -26,6 +26,14 @@ public class RunnerInstance
     public string? JobId { get; set; }
 
     /// <summary>
+    /// When the webhook supplied an image tag override (via
+    /// <c>rr-image-tag=</c>) and the profile opted in, this holds the tag
+    /// that was applied to the deploy command. Null for static runners or
+    /// when the default profile tag was used.
+    /// </summary>
+    public string? ImageTagOverride { get; set; }
+
+    /// <summary>
     /// True when this instance lifecycle was created and is actively managed by RunnerRunner.
     /// Null/false entries are treated as external or legacy records in the UI/capacity views.
     /// </summary>

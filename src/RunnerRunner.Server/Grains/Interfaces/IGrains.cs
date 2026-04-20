@@ -43,7 +43,7 @@ public interface IHostGroupGrain : IGrainWithStringKey
 public interface IRunnerInstanceGrain : IGrainWithStringKey
 {
     Task<RunnerInstanceGrainState> GetState();
-    Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null);
+    Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null, string? imageTagOverride = null);
     Task MarkDeployed();
     Task MarkStarting(string? statusMessage = null);
     Task MarkRunning(string? containerId = null, string? vmName = null, int? processId = null, string? statusMessage = null);
@@ -78,7 +78,7 @@ public interface IProvisioningRuleGrain : IGrainWithStringKey
     Task Enable();
     Task Disable();
     Task Reconcile(); // check desired vs actual and act
-    Task HandleWebhookEvent(string jobId, string repo, List<string> labels, string? jitConfig);
+    Task HandleWebhookEvent(string jobId, string repo, List<string> labels, string? jitConfig, string? imageTagOverride = null);
     Task HandleJobCompleted(string jobId);
     Task<List<string>> GetManagedInstanceIds();
 }

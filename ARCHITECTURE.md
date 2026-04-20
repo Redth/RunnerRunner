@@ -421,6 +421,34 @@ GitHub/Gitea ──POST──► /api/webhooks/{provider}
 - **Docker**: JIT config written to env var `RR_JIT_CONFIG`, entrypoint overridden to find and use `run.sh --jitconfig`
 - **Tart**: JIT config written to temp file in VM via SSH stdin, runner reads and starts with `--jitconfig`
 
+### Webhook-supplied image tag override
+
+Callers that build their own base images per job (e.g. Flutter/React Native
+images tagged with a version) can tell RunnerRunner to pull a specific tag of
+the matched profile's image by adding a magic label to the job's `runs-on`:
+
+```yaml
+runs-on: [self-hosted, my-profile, rr-image-tag=2025.11.07-abc123]
+```
+
+Rules:
+- The feature is **opt-in per profile** via `AllowWebhookImageTagOverride`
+  (default `false`). Profiles that don't opt in ignore the label but still
+  record it on the `WebhookEvent` audit row (`ImageTagOverrideRejectedReason`).
+- Only the **tag** is overridden — registry, repository and image name stay
+  pinned to the profile. Arbitrary image substitution is not possible.
+- The tag must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` (Docker tag rules).
+  Invalid values are rejected and the profile's default tag is used instead.
+- The `rr-image-tag=…` label is stripped before profile matching and before
+  being attached to the runner (so profiles don't need to encode the volatile
+  tag in their label set).
+- Warm/idle runner fast-path is **skipped** when an override is in effect,
+  since pre-pulled warm runners can't be retagged mid-life.
+- The applied override is surfaced in `RR_META_TAG`, on the `RunnerInstance`
+  (for traceability), and on the Events page (with rejection reason when the
+  profile has not opted in).
+
+
 ## Environment Variable Composition
 
 Variables are composed in 5 layers (later layers override earlier):
