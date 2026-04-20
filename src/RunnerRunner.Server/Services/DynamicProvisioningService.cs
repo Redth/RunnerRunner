@@ -745,6 +745,18 @@ public class DynamicProvisioningService : BackgroundService
             // Resolve registry credentials for Docker image pulls
             var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
 
+            // Resolve runner agent version (for Docker auto-install)
+            var agentVersion = profile.RunnerAgentVersion;
+            if (string.IsNullOrEmpty(agentVersion) || agentVersion == "latest")
+            {
+                var versions = (await store.Query<RunnerAgentVersion>().ToList())
+                    .Where(v => v.Provider == profile.Provider)
+                    .OrderByDescending(v => v.IsLatest)
+                    .ThenByDescending(v => v.Version)
+                    .ToList();
+                agentVersion = versions.FirstOrDefault()?.Version;
+            }
+
             var command = new DeployRunnerCommand
             {
                 InstanceId = instanceId,
@@ -753,6 +765,7 @@ public class DynamicProvisioningService : BackgroundService
                 Backend = profile.ExecutionBackend,
                 Provider = profile.Provider,
                 EnvironmentVariables = envVars,
+                RunnerAgentVersion = agentVersion,
                 DockerConfig = profile.DockerConfig,
                 TartConfig = profile.TartConfig,
                 Labels = effectiveLabels,

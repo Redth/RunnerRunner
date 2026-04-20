@@ -98,6 +98,9 @@ public class DockerBackend : IRunnerBackend
         {
             envVars.Add($"RR_JIT_CONFIG={request.JitConfig}");
             envVars.Add($"RR_PROVISIONING_MODE={request.ProvisioningMode}");
+            if (!string.IsNullOrEmpty(request.RunnerAgentVersion))
+                envVars.Add($"RR_RUNNER_AGENT_VERSION={request.RunnerAgentVersion}");
+            envVars.Add($"RR_RUNNER_PROVIDER={request.Provider}");
         }
 
         // Install the job-started banner hook if requested. We copy the
@@ -446,6 +449,52 @@ public class DockerBackend : IRunnerBackend
             "if [ -z \"$runner_cmd\" ]; then " +
             "  runner_cmd=$(find /home /actions-runner /runner -maxdepth 4 -type f \\( -path '*/actions-runner/run.sh' -o -path '*/runner/run.sh' \\) 2>/dev/null | head -n 1 || true); " +
             "fi; " +
+
+            // Auto-download runner agent if not found in image
+            "if [ -z \"$runner_cmd\" ] && [ -n \"${RR_JIT_CONFIG:-}\" ]; then " +
+            "  rr_version=\"${RR_RUNNER_AGENT_VERSION:-}\"; " +
+            "  rr_provider=\"${RR_RUNNER_PROVIDER:-GitHubActions}\"; " +
+            "  rr_arch=$(uname -m); " +
+            "  case \"$rr_arch\" in aarch64|arm64) rr_arch=arm64;; x86_64|amd64) rr_arch=x64;; esac; " +
+            "  rr_install_dir=/actions-runner; " +
+
+            // Resolve latest version from GitHub API if not specified
+            "  if [ -z \"$rr_version\" ]; then " +
+            "    echo '[RunnerRunner] No runner found in image; resolving latest runner version...'; " +
+            "    if [ \"$rr_provider\" = 'GitHubActions' ] || [ \"$rr_provider\" = '0' ]; then " +
+            "      rr_version=$(curl -sL https://api.github.com/repos/actions/runner/releases/latest | " +
+            "        grep -o '\"tag_name\":\\s*\"v[^\"]*\"' | head -1 | sed 's/.*\"v\\([^\"]*\\)\".*/\\1/' || true); " +
+            "    elif [ \"$rr_provider\" = 'GiteaActions' ] || [ \"$rr_provider\" = '2' ]; then " +
+            "      rr_version=$(curl -sL https://gitea.com/api/v1/repos/gitea/act_runner/releases/latest | " +
+            "        grep -o '\"tag_name\":\\s*\"v[^\"]*\"' | head -1 | sed 's/.*\"v\\([^\"]*\\)\".*/\\1/' || true); " +
+            "    fi; " +
+            "  fi; " +
+
+            // Download and extract
+            "  if [ -n \"$rr_version\" ]; then " +
+            "    echo \"[RunnerRunner] Downloading runner agent v${rr_version} (${rr_arch})...\"; " +
+            "    mkdir -p \"$rr_install_dir\"; " +
+            "    if [ \"$rr_provider\" = 'GitHubActions' ] || [ \"$rr_provider\" = '0' ]; then " +
+            "      rr_url=\"https://github.com/actions/runner/releases/download/v${rr_version}/actions-runner-linux-${rr_arch}-${rr_version}.tar.gz\"; " +
+            "      curl -sL \"$rr_url\" | tar xz -C \"$rr_install_dir\"; " +
+            "    elif [ \"$rr_provider\" = 'GiteaActions' ] || [ \"$rr_provider\" = '2' ]; then " +
+            "      rr_url=\"https://gitea.com/gitea/act_runner/releases/download/v${rr_version}/act_runner-${rr_version}-linux-${rr_arch}\"; " +
+            "      curl -sL -o \"$rr_install_dir/act_runner\" \"$rr_url\" && chmod +x \"$rr_install_dir/act_runner\"; " +
+            "    elif [ \"$rr_provider\" = 'AzureDevOps' ] || [ \"$rr_provider\" = '1' ]; then " +
+            "      rr_url=\"https://vstsagentpackage.azureedge.net/agent/${rr_version}/vsts-agent-linux-${rr_arch}-${rr_version}.tar.gz\"; " +
+            "      curl -sL \"$rr_url\" | tar xz -C \"$rr_install_dir\"; " +
+            "    fi; " +
+            "    echo '[RunnerRunner] Runner agent installed to '\"$rr_install_dir\"; " +
+
+            // Re-search for the runner after install
+            "    for candidate in \"$rr_install_dir/run.sh\" \"$rr_install_dir/act_runner\"; do " +
+            "      if [ -x \"$candidate\" ]; then runner_cmd=\"$candidate\"; break; fi; " +
+            "    done; " +
+            "  else " +
+            "    echo '[RunnerRunner] ERROR: Could not resolve runner agent version for auto-install'; " +
+            "  fi; " +
+            "fi; " +
+
             "if [ -n \"$runner_cmd\" ] && [ -n \"${RR_JIT_CONFIG:-}\" ]; then " +
             "  echo \"[RunnerRunner] Starting GitHub runner via JIT config: $runner_cmd\"; cd \"$(dirname \"$runner_cmd\")\"; ");
 
@@ -463,8 +512,8 @@ public class DockerBackend : IRunnerBackend
 
         wrapperScript.Append(
             "fi; " +
-            "echo '[RunnerRunner] ERROR: No GitHub JIT runner script was found in the container image'; " +
-            "echo '[RunnerRunner] Refusing to idle on the image entrypoint because this would consume capacity without registering a runner'; " +
+            "echo '[RunnerRunner] ERROR: No GitHub JIT runner script was found and auto-install failed'; " +
+            "echo '[RunnerRunner] Ensure the image has a runner agent or that RR_RUNNER_AGENT_VERSION is set'; " +
             "exit 91");
 
         _ = execParts; // (not used in JIT path — runner_cmd is auto-discovered)
