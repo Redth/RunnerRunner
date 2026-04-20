@@ -232,6 +232,29 @@ else
                                                 @if (job.Instance != null)
                                                 {
                                                     <tr><td class="text-muted" style="width:40%;">Instance ID</td><td><code class="small">@job.Instance.Id</code></td></tr>
+                                                    var instProfile = profilesById.GetValueOrDefault(job.Instance.ProfileId);
+                                                    if (instProfile != null)
+                                                    {
+                                                        <tr><td class="text-muted">Backend</td><td><span class="badge bg-secondary text-uppercase">@instProfile.ExecutionBackend</span></td></tr>
+                                                        var imageRef = BuildImageReference(instProfile, job.Instance.ImageTagOverride);
+                                                        if (!string.IsNullOrEmpty(imageRef))
+                                                        {
+                                                            <tr>
+                                                                <td class="text-muted">Image</td>
+                                                                <td>
+                                                                    <code class="small">@imageRef</code>
+                                                                    @if (!string.IsNullOrEmpty(job.Instance.ImageTagOverride))
+                                                                    {
+                                                                        <span class="badge bg-info text-dark ms-1" title="Webhook-supplied image tag override">override</span>
+                                                                    }
+                                                                </td>
+                                                            </tr>
+                                                        }
+                                                        if (!string.IsNullOrEmpty(instProfile.RunnerAgentVersion))
+                                                        {
+                                                            <tr><td class="text-muted">Agent Version</td><td><code class="small">@instProfile.RunnerAgentVersion</code></td></tr>
+                                                        }
+                                                    }
                                                     @if (!string.IsNullOrEmpty(job.Instance.StatusMessage))
                                                     {
                                                         <tr><td class="text-muted">Status Message</td><td>@job.Instance.StatusMessage</td></tr>
@@ -411,6 +434,7 @@ else
     private List<Host> allHosts = [];
     private Dictionary<string, string> hostNames = new();
     private Dictionary<string, string> profileNames = new();
+    private Dictionary<string, RunnerProfile> profilesById = new();
     private Dictionary<string, string> ruleNames = new();
 
     private string searchText = "";
@@ -489,6 +513,7 @@ else
 
         hostNames = allHosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
+        profilesById = profiles.ToDictionary(p => p.Id, p => p);
         ruleNames = rules.ToDictionary(r => r.Id, r => r.Name);
 
         // Index webhook events by ID
@@ -728,6 +753,27 @@ else
         "Stopped" or "completed" or "ignored" => 6,
         _ => 7
     };
+
+    private static string? BuildImageReference(RunnerProfile profile, string? tagOverride)
+    {
+        switch (profile.ExecutionBackend)
+        {
+            case ExecutionBackend.Docker when profile.DockerConfig is { } d:
+                return FormatImageRef(d.RegistryUrl, d.ImageName, tagOverride ?? d.Tag);
+            case ExecutionBackend.Tart when profile.TartConfig is { } t:
+                return FormatImageRef(t.RegistryUrl, t.ImageName, tagOverride ?? t.Tag);
+            default:
+                return null;
+        }
+    }
+
+    private static string FormatImageRef(string? registry, string? image, string? tag)
+    {
+        var registryPart = string.IsNullOrWhiteSpace(registry) ? "" : registry.TrimEnd('/') + "/";
+        var imagePart = (image ?? "").TrimStart('/');
+        var tagPart = string.IsNullOrWhiteSpace(tag) ? "" : ":" + tag;
+        return $"{registryPart}{imagePart}{tagPart}";
+    }
 
     private static string GetInstanceStatusBadge(RunnerInstanceStatus status) => status switch
     {
