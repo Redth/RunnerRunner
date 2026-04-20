@@ -483,9 +483,18 @@ public class DockerBackend : IRunnerBackend
             "  fi; " +
 
             // Fallback: if libicu is still not present, enable .NET invariant globalization so the runner can start.
+            // Detection must survive minimal PATH (non-root often lacks /sbin) and varying layouts (Debian multiarch, Alpine, RHEL).
             "  rr_has_libicu=0; " +
-            "  if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -qi libicu; then rr_has_libicu=1; fi; " +
-            "  if [ \"$rr_has_libicu\" = \"0\" ] && ls /usr/lib/libicu* /usr/lib64/libicu* /usr/lib/*/libicu* /lib/*/libicu* 2>/dev/null | grep -q .; then rr_has_libicu=1; fi; " +
+            "  for rr_ldc in /sbin/ldconfig /usr/sbin/ldconfig ldconfig; do " +
+            "    if command -v \"$rr_ldc\" >/dev/null 2>&1; then " +
+            "      if \"$rr_ldc\" -p 2>/dev/null | grep -qi libicu; then rr_has_libicu=1; fi; break; " +
+            "    fi; " +
+            "  done; " +
+            "  if [ \"$rr_has_libicu\" = \"0\" ]; then " +
+            "    for rr_p in /usr/lib/libicu* /usr/lib64/libicu* /usr/lib/x86_64-linux-gnu/libicu* /usr/lib/aarch64-linux-gnu/libicu* /lib/x86_64-linux-gnu/libicu* /lib/aarch64-linux-gnu/libicu* /usr/local/lib/libicu*; do " +
+            "      if [ -e \"$rr_p\" ]; then rr_has_libicu=1; break; fi; " +
+            "    done; " +
+            "  fi; " +
             "  if [ \"$rr_has_libicu\" = \"0\" ]; then " +
             "    echo '[RunnerRunner] libicu not detected; enabling DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 fallback.'; " +
             "    export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1; " +
