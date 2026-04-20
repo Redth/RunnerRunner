@@ -93,6 +93,9 @@ public class DockerBackend : IRunnerBackend
         envVars.Add($"RR_INSTANCE_ID={request.InstanceId}");
         envVars.Add($"RR_RUNNER_NAME={request.RunnerName}");
 
+        // GitHub Actions runner refuses to run as root without this
+        envVars.Add("RUNNER_ALLOW_RUNASROOT=1");
+
         // Pass JIT config for dynamic provisioning
         if (!string.IsNullOrEmpty(request.JitConfig))
         {
