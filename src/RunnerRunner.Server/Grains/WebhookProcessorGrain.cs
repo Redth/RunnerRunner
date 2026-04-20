@@ -4,6 +4,7 @@ using System.Text.Json;
 using Orleans.Concurrency;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
+using RunnerRunner.Server.Webhooks;
 using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
@@ -52,8 +53,18 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         var workflowJob = json.GetProperty("workflow_job");
         var jobId = workflowJob.GetProperty("id").GetInt64().ToString();
         var runId = workflowJob.GetProperty("run_id").GetInt64().ToString();
-        var labels = workflowJob.GetProperty("labels").EnumerateArray()
+        var rawLabels = workflowJob.GetProperty("labels").EnumerateArray()
             .Select(l => l.GetString() ?? "").Where(l => l.Length > 0).ToList();
+
+        // Strip recognized magic labels (e.g. rr-image-tag=...) so they don't
+        // pollute profile label-mapping comparisons or end up on the runner.
+        // The raw labels are still audited on the persisted WebhookEvent via
+        // the cleaned list (we don't need the unfiltered set once the magic
+        // bits are lifted into dedicated fields).
+        var magic = WebhookLabelParser.Extract(rawLabels);
+        var labels = magic.CleanLabels;
+        var imageTagOverride = magic.ImageTagOverride;
+        var imageTagOverrideRejectedReason = magic.ImageTagOverrideRejectedReason;
         var workflowName = workflowJob.TryGetProperty("workflow_name", out var wn)
             ? wn.GetString() ?? "" : "";
         var repo = json.GetProperty("repository").GetProperty("full_name").GetString() ?? "";
@@ -227,7 +238,9 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                     Repository = repo,
                     WorkflowName = workflowName,
                     Labels = labels,
-                    Status = "no_match"
+                    Status = "no_match",
+                    ImageTagOverride = imageTagOverride,
+                    ImageTagOverrideRejectedReason = imageTagOverrideRejectedReason
                 });
 
                 return new WebhookProcessResult { Success = false, Status = "no_match", Message = "No profile matched" };
@@ -237,6 +250,21 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             var profileGrain = GrainFactory.GetGrain<IProfileGrain>(profileId);
             var profile = await profileGrain.GetProfile();
             var profileName = profile?.Name;
+
+            // Apply opt-in gate for tag override: when the profile didn't opt
+            // in, drop the accepted tag and surface a rejection reason in the
+            // audit record (so operators can debug "why didn't my override
+            // apply"). Invalid tags are rejected regardless of opt-in.
+            var effectiveOverride = imageTagOverride;
+            var effectiveRejection = imageTagOverrideRejectedReason;
+            if (!string.IsNullOrEmpty(imageTagOverride) && profile is { AllowWebhookImageTagOverride: false })
+            {
+                effectiveOverride = null;
+                effectiveRejection ??= "Profile does not have AllowWebhookImageTagOverride enabled";
+                _logger.LogInformation(
+                    "Webhook supplied image tag '{Tag}' for job {JobId} but profile '{Profile}' does not allow overrides — ignored",
+                    imageTagOverride, jobId, profileName ?? profileId);
+            }
 
             var webhookEvent = new WebhookEvent
             {
@@ -250,11 +278,13 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 Labels = labels,
                 MatchedProfileId = profileId,
                 MatchedProfileName = profileName,
-                Status = "provisioned"
+                Status = "provisioned",
+                ImageTagOverride = effectiveOverride,
+                ImageTagOverrideRejectedReason = effectiveRejection
             };
             await store.Insert(webhookEvent);
 
-            await ruleGrain.HandleWebhookEvent(jobId, repo, labels, jitConfig: null);
+            await ruleGrain.HandleWebhookEvent(jobId, repo, labels, jitConfig: null, imageTagOverride: effectiveOverride);
 
             _logger.LogInformation(
                 "Webhook matched: {Repo} job {JobId} -> profile {ProfileName} ({ProfileId}) via rule {RuleId}",

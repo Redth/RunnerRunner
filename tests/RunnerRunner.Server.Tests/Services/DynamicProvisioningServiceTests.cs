@@ -168,4 +168,76 @@ public class DynamicProvisioningServiceTests
 
         Assert.True(shouldBlock);
     }
+
+    [Fact]
+    public void ApplyImageTagOverride_ProfileOptedIn_OverridesDockerTag()
+    {
+        var docker = new DockerImageConfig
+        {
+            RegistryUrl = "ghcr.io",
+            ImageName = "acme/runner",
+            Tag = "default",
+            CredentialId = "cred1"
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "p",
+            AllowWebhookImageTagOverride = true,
+            DockerConfig = docker
+        };
+
+        var (d, t, applied) = DynamicProvisioningService.ApplyImageTagOverride(profile, "v2025.11");
+
+        Assert.Equal("v2025.11", applied);
+        Assert.NotSame(docker, d);
+        Assert.Equal("v2025.11", d!.Tag);
+        Assert.Equal("ghcr.io", d.RegistryUrl);
+        Assert.Equal("acme/runner", d.ImageName);
+        Assert.Equal("cred1", d.CredentialId);
+        Assert.Null(t);
+        // Shared profile config must not be mutated.
+        Assert.Equal("default", docker.Tag);
+    }
+
+    [Fact]
+    public void ApplyImageTagOverride_ProfileNotOptedIn_NoChange()
+    {
+        var docker = new DockerImageConfig
+        {
+            RegistryUrl = "ghcr.io",
+            ImageName = "acme/runner",
+            Tag = "default"
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "p",
+            AllowWebhookImageTagOverride = false,
+            DockerConfig = docker
+        };
+
+        var (d, _, applied) = DynamicProvisioningService.ApplyImageTagOverride(profile, "v2025.11");
+
+        Assert.Null(applied);
+        Assert.Same(docker, d);
+        Assert.Equal("default", d!.Tag);
+    }
+
+    [Fact]
+    public void ApplyImageTagOverride_NoOverride_NoChange()
+    {
+        var profile = new RunnerProfile
+        {
+            Name = "p",
+            AllowWebhookImageTagOverride = true,
+            DockerConfig = new DockerImageConfig
+            {
+                RegistryUrl = "ghcr.io",
+                ImageName = "acme/runner",
+                Tag = "default"
+            }
+        };
+
+        var (_, _, applied) = DynamicProvisioningService.ApplyImageTagOverride(profile, null);
+        Assert.Null(applied);
+    }
 }

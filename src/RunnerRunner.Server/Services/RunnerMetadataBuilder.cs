@@ -24,7 +24,8 @@ public static class RunnerMetadataBuilder
         RunnerProfile profile,
         Host? host,
         string? runnerAgentVersion,
-        string? instanceId)
+        string? instanceId,
+        string? imageTagOverride = null)
     {
         var env = new Dictionary<string, string>();
         Set(env, "RR_META_BACKEND", profile.ExecutionBackend.ToString().ToLowerInvariant());
@@ -36,7 +37,7 @@ public static class RunnerMetadataBuilder
 
         var (imageRef, imageTag) = ExtractImageRef(profile);
         Set(env, "RR_META_IMAGE", imageRef);
-        Set(env, "RR_META_TAG", imageTag);
+        Set(env, "RR_META_TAG", string.IsNullOrWhiteSpace(imageTagOverride) ? imageTag : imageTagOverride);
 
         return env;
     }

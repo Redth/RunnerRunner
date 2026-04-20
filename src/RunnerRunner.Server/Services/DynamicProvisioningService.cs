@@ -723,13 +723,19 @@ public class DynamicProvisioningService : BackgroundService
             if (profile.EmitJobStartedBanner)
                 envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
 
+            // Apply webhook-supplied image tag override when permitted. We
+            // copy the image configs before mutating so the shared profile
+            // document / grain cache stays untouched.
+            var (dockerConfig, tartConfig, appliedTagOverride) =
+                ApplyImageTagOverride(profile, currentEvent.ImageTagOverride);
+
             // Seed RR_META_* describing this deployment so the banner and any
             // other consumers can read a consistent metadata bag.
-            foreach (var kv in RunnerMetadataBuilder.BuildMetadataEnv(profile, hostSelection.Host, null, instanceId))
+            foreach (var kv in RunnerMetadataBuilder.BuildMetadataEnv(profile, hostSelection.Host, null, instanceId, appliedTagOverride))
                 envVars[kv.Key] = kv.Value;
 
             var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
-            await runnerGrain.Initialize(hostSelection.Host.Id, profile.Id, runnerName, "dynamic", currentEvent.JobId, currentEvent.Id, currentEvent.BindingId);
+            await runnerGrain.Initialize(hostSelection.Host.Id, profile.Id, runnerName, "dynamic", currentEvent.JobId, currentEvent.Id, currentEvent.BindingId, appliedTagOverride);
             await runnerGrain.MarkStarting("Sending dynamic deploy command to host");
 
             await UpdateEventProgressAsync(
@@ -743,7 +749,7 @@ public class DynamicProvisioningService : BackgroundService
                 store, profile, envVars, profile.ExecutionBackend, hostSelection.Host.Platform);
 
             // Resolve registry credentials for Docker image pulls
-            var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
+            var registryCred = await RegistryCredentialResolver.ResolveAsync(store, dockerConfig, _logger);
 
             // Resolve runner agent version (for Docker auto-install)
             var agentVersion = profile.RunnerAgentVersion;
@@ -766,8 +772,8 @@ public class DynamicProvisioningService : BackgroundService
                 Provider = profile.Provider,
                 EnvironmentVariables = envVars,
                 RunnerAgentVersion = agentVersion,
-                DockerConfig = profile.DockerConfig,
-                TartConfig = profile.TartConfig,
+                DockerConfig = dockerConfig,
+                TartConfig = tartConfig,
                 Labels = effectiveLabels,
                 RunnerGroup = profile.RunnerGroup,
                 Ephemeral = true,
@@ -806,14 +812,69 @@ public class DynamicProvisioningService : BackgroundService
             await store.Update(currentEvent);
 
             _logger.LogInformation(
-                "Dynamic runner {RunnerName} dispatched to {HostName} for job {JobId} with labels [{Labels}] (event {EventId})",
-                runnerName, hostSelection.Host.Name, currentEvent.JobId, string.Join(", ", effectiveLabels), currentEvent.Id);
+                "Dynamic runner {RunnerName} dispatched to {HostName} for job {JobId} with labels [{Labels}] (event {EventId}){OverrideDetail}",
+                runnerName, hostSelection.Host.Name, currentEvent.JobId, string.Join(", ", effectiveLabels), currentEvent.Id,
+                appliedTagOverride != null ? $" with image tag override '{appliedTagOverride}'" : "");
             return QueueProcessingOutcome.Advanced;
         }
         finally
         {
             gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Produces copies of the profile's image configs with the override tag
+    /// applied when the profile opts in. The profile document itself is never
+    /// mutated (it's a shared Orleans-cached object). Returns the applied tag
+    /// alongside, or null when no override was applied.
+    /// </summary>
+    internal static (DockerImageConfig? Docker, TartImageConfig? Tart, string? AppliedTag) ApplyImageTagOverride(
+        RunnerProfile profile,
+        string? imageTagOverride)
+    {
+        var docker = profile.DockerConfig;
+        var tart = profile.TartConfig;
+
+        if (string.IsNullOrEmpty(imageTagOverride) || !profile.AllowWebhookImageTagOverride)
+            return (docker, tart, null);
+
+        string? applied = null;
+
+        if (docker != null)
+        {
+            docker = new DockerImageConfig
+            {
+                Id = docker.Id,
+                RegistryUrl = docker.RegistryUrl,
+                ImageName = docker.ImageName,
+                Tag = imageTagOverride,
+                PullPolicy = docker.PullPolicy,
+                CredentialId = docker.CredentialId
+            };
+            applied = imageTagOverride;
+        }
+
+        if (tart != null)
+        {
+            tart = new TartImageConfig
+            {
+                Id = tart.Id,
+                RegistryUrl = tart.RegistryUrl,
+                ImageName = tart.ImageName,
+                Tag = imageTagOverride,
+                DiskSizeGb = tart.DiskSizeGb,
+                CpuCount = tart.CpuCount,
+                MemorySizeGb = tart.MemorySizeGb,
+                Display = tart.Display,
+                SharedDirs = tart.SharedDirs,
+                SshUser = tart.SshUser,
+                SshPassword = tart.SshPassword
+            };
+            applied = imageTagOverride;
+        }
+
+        return (docker, tart, applied);
     }
 
     private static string? GetRunnerUrl(ProviderCredential credential)

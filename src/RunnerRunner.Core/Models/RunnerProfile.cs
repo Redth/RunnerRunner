@@ -79,4 +79,16 @@ public class RunnerProfile
     // startup (and teardown for PostExit steps). See RunnerInitStep.
     [Id(22)]
     public List<RunnerInitStep> InitSteps { get; set; } = [];
+
+    /// <summary>
+    /// When true, a webhook may supply an override image tag via a magic
+    /// <c>rr-image-tag=&lt;value&gt;</c> label on the job's <c>runs-on</c>. The
+    /// override replaces <see cref="DockerImageConfig.Tag"/> (or
+    /// <see cref="TartImageConfig.Tag"/>) at dispatch time for that single
+    /// runner only; the profile's own tag is left untouched. Registry and
+    /// image name always stay pinned to the profile so the webhook cannot
+    /// point runners at an arbitrary image. Default <c>false</c>.
+    /// </summary>
+    [Id(23)]
+    public bool AllowWebhookImageTagOverride { get; set; }
 }

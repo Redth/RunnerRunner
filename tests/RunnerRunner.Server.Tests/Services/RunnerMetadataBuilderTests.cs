@@ -62,6 +62,28 @@ public class RunnerMetadataBuilderTests
     }
 
     [Fact]
+    public void BuildMetadataEnv_WithImageTagOverride_PrefersOverrideTag()
+    {
+        var profile = new RunnerProfile
+        {
+            Name = "linux-large",
+            Provider = RunnerProvider.GitHubActions,
+            ExecutionBackend = ExecutionBackend.Docker,
+            DockerConfig = new DockerImageConfig
+            {
+                RegistryUrl = "ghcr.io",
+                ImageName = "acme/runner",
+                Tag = "v1.2.3"
+            }
+        };
+
+        var env = RunnerMetadataBuilder.BuildMetadataEnv(profile, host: null, runnerAgentVersion: null, instanceId: "i", imageTagOverride: "v2025.11-abc");
+
+        Assert.Equal("ghcr.io/acme/runner", env["RR_META_IMAGE"]);
+        Assert.Equal("v2025.11-abc", env["RR_META_TAG"]);
+    }
+
+    [Fact]
     public void BuildMetadataEnv_OmitsUnknownValues()
     {
         var profile = new RunnerProfile
