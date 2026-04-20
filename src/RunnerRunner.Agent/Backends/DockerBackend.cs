@@ -459,18 +459,27 @@ public class DockerBackend : IRunnerBackend
             "  rr_provider=\"${RR_RUNNER_PROVIDER:-GitHubActions}\"; " +
             "  rr_arch=$(uname -m); " +
             "  case \"$rr_arch\" in aarch64|arm64) rr_arch=arm64;; x86_64|amd64) rr_arch=x64;; esac; " +
-            "  rr_install_dir=/actions-runner; " +
+            "  rr_uid=$(id -u 2>/dev/null || echo 0); " +
+            "  if [ \"$rr_uid\" = \"0\" ]; then rr_install_dir=/actions-runner; rr_sudo=''; " +
+            "  else rr_install_dir=\"${HOME:-/tmp}/actions-runner\"; " +
+            "    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then rr_sudo='sudo -n'; else rr_sudo=''; fi; " +
+            "  fi; " +
 
-            // Install runner dependencies (libicu for .NET globalization, plus other common needs)
-            "  echo '[RunnerRunner] Installing runner dependencies...'; " +
-            "  if command -v apt-get >/dev/null 2>&1; then " +
-            "    apt-get update -qq && apt-get install -y -qq libicu-dev libssl-dev git jq >/dev/null 2>&1 || true; " +
-            "  elif command -v apk >/dev/null 2>&1; then " +
-            "    apk add --no-cache icu-libs openssl git jq >/dev/null 2>&1 || true; " +
-            "  elif command -v dnf >/dev/null 2>&1; then " +
-            "    dnf install -y libicu openssl git jq >/dev/null 2>&1 || true; " +
-            "  elif command -v yum >/dev/null 2>&1; then " +
-            "    yum install -y libicu openssl git jq >/dev/null 2>&1 || true; " +
+            // Install runner dependencies (libicu for .NET globalization, plus other common needs).
+            // Only attempt when we have root or passwordless sudo; otherwise assume the image has them.
+            "  if [ \"$rr_uid\" = \"0\" ] || [ -n \"$rr_sudo\" ]; then " +
+            "    echo '[RunnerRunner] Installing runner dependencies...'; " +
+            "    if command -v apt-get >/dev/null 2>&1; then " +
+            "      $rr_sudo apt-get update -qq && $rr_sudo apt-get install -y -qq libicu-dev libssl-dev git jq >/dev/null 2>&1 || true; " +
+            "    elif command -v apk >/dev/null 2>&1; then " +
+            "      $rr_sudo apk add --no-cache icu-libs openssl git jq >/dev/null 2>&1 || true; " +
+            "    elif command -v dnf >/dev/null 2>&1; then " +
+            "      $rr_sudo dnf install -y libicu openssl git jq >/dev/null 2>&1 || true; " +
+            "    elif command -v yum >/dev/null 2>&1; then " +
+            "      $rr_sudo yum install -y libicu openssl git jq >/dev/null 2>&1 || true; " +
+            "    fi; " +
+            "  else " +
+            "    echo '[RunnerRunner] Non-root user; skipping dependency install (expecting image to provide libicu/openssl/git/jq).'; " +
             "  fi; " +
 
             // Resolve latest version from GitHub API if not specified
