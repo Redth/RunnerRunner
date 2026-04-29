@@ -1302,6 +1302,27 @@ public class DynamicProvisioningService : BackgroundService
 
     private async Task MarkWebhookEventTimedOutAsync(IDocumentStore store, WebhookEvent evt, DateTime now)
     {
+        // Matrix.max-parallel guard: if a sibling job in the same workflow run
+        // is currently in_progress on a managed runner, GitHub is serializing
+        // matrix execution. The queued event for our job is legitimately
+        // waiting — defer timeout instead of cancelling the whole run.
+        if (await ShouldDeferQueueTimeoutForActiveSiblingAsync(store, evt))
+        {
+            // Mark as open-ended (pending_fifo) so HasExpired returns false
+            // until the sibling completes. The sweep will re-evaluate each
+            // tick; once the sibling finishes, normal dispatch resumes.
+            evt.ExpiresAt = null;
+            evt.NextRetryAt = now.Add(_retrySweepInterval);
+            evt.Status = "pending_fifo";
+            evt.Error = $"Deferring timeout: a sibling job in workflow run {evt.RunId} is in_progress (matrix.max-parallel)";
+            evt.UpdatedAt = now;
+            await store.Update(evt);
+            _logger.LogInformation(
+                "Deferred queue timeout for job {JobId} in run {RunId}: a sibling matrix job is currently in_progress",
+                evt.JobId, evt.RunId);
+            return;
+        }
+
         var reason = $"Timed out waiting for a runner to start within {_pendingTimeout.TotalMinutes:0} minute(s)";
         evt.Status = "timed_out";
         evt.Error = reason;
@@ -1309,10 +1330,49 @@ public class DynamicProvisioningService : BackgroundService
         evt.NextRetryAt = null;
         await store.Update(evt);
 
+        InvalidateGitHubBackfillCache(evt);
         await TryCancelProviderJobAsync(store, evt, reason);
         await CleanupDynamicRunnersForJobAsync(store, evt.JobId, reason, removeRecords: true);
 
         _logger.LogWarning("Webhook event {EventId} for job {JobId} timed out", evt.Id, evt.JobId);
+    }
+
+    /// <summary>
+    /// Returns true when another job in the same workflow run is currently
+    /// in_progress on a managed runner. This is a strong signal that GitHub
+    /// is serializing matrix execution (matrix.max-parallel) and our queued
+    /// event is legitimately waiting — not stuck.
+    /// </summary>
+    private async Task<bool> ShouldDeferQueueTimeoutForActiveSiblingAsync(IDocumentStore store, WebhookEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RunId))
+            return false;
+
+        var runEvents = (await store.Query<WebhookEvent>().ToList())
+            .Where(e => string.Equals(e.RunId, evt.RunId, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(e.JobId, evt.JobId, StringComparison.Ordinal))
+            .ToList();
+
+        return runEvents.Any(e =>
+            string.Equals(e.Status?.Trim(), "in_progress", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(e.Action?.Trim(), "in_progress", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void InvalidateGitHubBackfillCache(WebhookEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.Repository))
+            return;
+
+        var repoSegment = $"/repos/{evt.Repository}/actions/runs";
+        foreach (var key in _runsEtagCache.Keys.Where(k => k.Contains(repoSegment, StringComparison.OrdinalIgnoreCase)))
+            _runsEtagCache.TryRemove(key, out _);
+
+        if (string.IsNullOrWhiteSpace(evt.RunId))
+            return;
+
+        var jobsSegment = $"{repoSegment}/{evt.RunId}/jobs";
+        foreach (var key in _jobsEtagCache.Keys.Where(k => k.Contains(jobsSegment, StringComparison.OrdinalIgnoreCase)))
+            _jobsEtagCache.TryRemove(key, out _);
     }
 
     private async Task TryCancelProviderJobAsync(IDocumentStore store, WebhookEvent evt, string reason)
@@ -1322,6 +1382,18 @@ public class DynamicProvisioningService : BackgroundService
             || string.IsNullOrWhiteSpace(evt.Repository)
             || !evt.Repository.Contains('/'))
         {
+            return;
+        }
+
+        var runEvents = (await store.Query<WebhookEvent>().ToList())
+            .Where(e => e.RunId == evt.RunId)
+            .ToList();
+        if (!ShouldCancelProviderRunForTimedOutEvent(evt, runEvents))
+        {
+            _logger.LogInformation(
+                "Skipping cancellation for timed-out job {JobId} in workflow run {RunId} because another job in the run is already active",
+                evt.JobId,
+                evt.RunId);
             return;
         }
 
@@ -1384,12 +1456,24 @@ public class DynamicProvisioningService : BackgroundService
         }
     }
 
-    private async void HandleJobCompleted(string jobId, string conclusion)
+    internal static bool ShouldCancelProviderRunForTimedOutEvent(WebhookEvent timedOutEvent, IEnumerable<WebhookEvent> runEvents)
+    {
+        if (string.IsNullOrWhiteSpace(timedOutEvent.RunId))
+            return false;
+
+        return !runEvents.Any(e =>
+            e.JobId != timedOutEvent.JobId
+            && string.Equals(e.RunId, timedOutEvent.RunId, StringComparison.OrdinalIgnoreCase)
+            && (string.Equals(e.Status?.Trim(), "in_progress", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(e.Action?.Trim(), "in_progress", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private async void HandleJobCompleted(string jobId, string conclusion, string? runnerName)
     {
         try
         {
-            _logger.LogInformation("Job {JobId} completed ({Conclusion}), looking for dynamic runner to clean up",
-                jobId, conclusion);
+            _logger.LogInformation("Job {JobId} completed ({Conclusion}, runner={Runner}), looking for dynamic runner to clean up",
+                jobId, conclusion, runnerName ?? "(unknown)");
 
             using var scope = _services.CreateScope();
             var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
@@ -1405,7 +1489,12 @@ public class DynamicProvisioningService : BackgroundService
                 await store.Update(queuedEvent);
             }
 
-            await CleanupDynamicRunnersForJobAsync(store, jobId, $"Job completed ({conclusion})", removeRecords: true);
+            await CleanupDynamicRunnersForJobAsync(
+                store,
+                jobId,
+                $"Job completed ({conclusion})",
+                removeRecords: true,
+                runnerName: runnerName);
             TriggerQueueSweep();
         }
         catch (Exception ex)
@@ -1418,20 +1507,64 @@ public class DynamicProvisioningService : BackgroundService
         IDocumentStore store,
         string jobId,
         string reason,
-        bool removeRecords)
+        bool removeRecords,
+        string? runnerName = null)
     {
-        var instances = (await store.Query<RunnerInstance>().ToList())
-            .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
+        var allDynamic = (await store.Query<RunnerInstance>().ToList())
+            .Where(i => i.ProvisioningMode == "dynamic")
             .ToList();
+
+        // Prefer matching by RunnerName when provided — that's the
+        // authoritative identity GitHub reports, and it's robust against
+        // dispatch-time intent being wrong (when GitHub assigns our JIT
+        // runner to a different job than we intended).
+        List<RunnerInstance> instances;
+        if (!string.IsNullOrWhiteSpace(runnerName))
+        {
+            instances = allDynamic
+                .Where(i => string.Equals(i.RunnerName, runnerName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (instances.Count == 0)
+            {
+                instances = allDynamic.Where(i => i.JobId == jobId).ToList();
+                if (instances.Count > 0)
+                {
+                    _logger.LogDebug(
+                        "No instance matched runner_name '{RunnerName}' for job {JobId}; falling back to JobId match ({Count} instance(s))",
+                        runnerName, jobId, instances.Count);
+                }
+            }
+        }
+        else
+        {
+            instances = allDynamic.Where(i => i.JobId == jobId).ToList();
+        }
 
         if (!instances.Any())
         {
-            _logger.LogDebug("No dynamic runner found for job {JobId}", jobId);
+            _logger.LogDebug("No dynamic runner found for job {JobId} (runner_name={Runner})",
+                jobId, runnerName ?? "(none)");
             return;
         }
 
         foreach (var instance in instances)
         {
+            // Safety: when we don't have an authoritative runner_name from
+            // the provider (e.g. a queued-event timeout), refuse to stop
+            // any instance whose Status is Running. The runner may have
+            // been bound by GitHub to a different job than we intended at
+            // dispatch time; killing it would cancel an unrelated live job.
+            // The completion webhook for the actual job will handle cleanup
+            // (with runner_name) when it eventually arrives.
+            if (string.IsNullOrWhiteSpace(runnerName)
+                && instance.Status == RunnerInstanceStatus.Running)
+            {
+                _logger.LogWarning(
+                    "Skipping cleanup for running runner {RunnerName} (instance {InstanceId}) for job {JobId}: no runner_name was provided and the runner is actively executing — it may be bound to a different job",
+                    instance.RunnerName, instance.Id, jobId);
+                continue;
+            }
+
             _logger.LogInformation(
                 "Cleaning up dynamic runner {RunnerName} for job {JobId}: {Reason}",
                 instance.RunnerName, jobId, reason);

@@ -56,11 +56,19 @@ if (-not (Test-Path $exePath)) {
 $stdout = Join-Path $logsPath "hostsilo.out.log"
 $stderr = Join-Path $logsPath "hostsilo.err.log"
 
-Start-Process `
+$process = Start-Process `
     -FilePath $exePath `
     -WorkingDirectory $deployPath `
     -WindowStyle Hidden `
     -RedirectStandardOutput $stdout `
-    -RedirectStandardError $stderr | Out-Null
+    -RedirectStandardError $stderr `
+    -PassThru
 
-Write-Host "Windows HostSilo started in native mode."
+Start-Sleep -Seconds 2
+if ($process.HasExited) {
+    $stdoutText = if (Test-Path $stdout) { Get-Content $stdout -Raw } else { "" }
+    $stderrText = if (Test-Path $stderr) { Get-Content $stderr -Raw } else { "" }
+    throw "Windows HostSilo exited immediately with code $($process.ExitCode). Stdout: $stdoutText Stderr: $stderrText"
+}
+
+Write-Host "Windows HostSilo started in native mode (PID $($process.Id))."

@@ -16,7 +16,7 @@ public static class WebhookEndpoints
     /// Parameters: (WebhookEvent, profileId)
     /// </summary>
     public static event Action<WebhookEvent, string>? OnJobQueued;
-    public static event Action<string, string>? OnJobCompleted; // jobId, conclusion
+    public static event Action<string, string, string?>? OnJobCompleted; // jobId, conclusion, runnerName
 
     public static IEndpointRouteBuilder MapWebhookEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -88,10 +88,15 @@ public static class WebhookEndpoints
                 var json = JsonDocument.Parse(body).RootElement;
                 var jobId = json.GetProperty("workflow_job").GetProperty("id").GetInt64().ToString();
                 var conclusion = "";
-                if (json.TryGetProperty("workflow_job", out var wfJob2) &&
-                    wfJob2.TryGetProperty("conclusion", out var conclusionProp))
-                    conclusion = conclusionProp.GetString() ?? "";
-                OnJobCompleted?.Invoke(jobId, conclusion);
+                string? runnerName = null;
+                if (json.TryGetProperty("workflow_job", out var wfJob2))
+                {
+                    if (wfJob2.TryGetProperty("conclusion", out var conclusionProp))
+                        conclusion = conclusionProp.GetString() ?? "";
+                    if (wfJob2.TryGetProperty("runner_name", out var rn) && rn.ValueKind == JsonValueKind.String)
+                        runnerName = rn.GetString();
+                }
+                OnJobCompleted?.Invoke(jobId, conclusion, runnerName ?? result.RunnerName);
             }
             catch (Exception ex)
             {

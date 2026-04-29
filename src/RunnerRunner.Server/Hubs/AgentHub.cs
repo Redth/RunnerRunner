@@ -40,7 +40,10 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
         var agentId = ConnectedAgents.Values
             .FirstOrDefault(a => a.ConnectionId == Context.ConnectionId)?.AgentInfo.AgentId;
 
-        if (agentId != null && ConnectedAgents.TryRemove(agentId, out var agent))
+        if (agentId != null
+            && ConnectedAgents.TryGetValue(agentId, out var currentAgent)
+            && currentAgent.ConnectionId == Context.ConnectionId
+            && ConnectedAgents.TryRemove(agentId, out var agent))
         {
             _logger.LogInformation("Agent disconnected: {AgentName} ({AgentId})", agent.AgentInfo.Name, agentId);
 

@@ -170,6 +170,54 @@ public class DynamicProvisioningServiceTests
     }
 
     [Fact]
+    public void ShouldCancelProviderRunForTimedOutEvent_ReturnsFalseWhenSiblingJobIsInProgress()
+    {
+        var timedOut = new WebhookEvent
+        {
+            RunId = "run-1",
+            JobId = "job-queued",
+            Status = "timed_out"
+        };
+        var sibling = new WebhookEvent
+        {
+            RunId = "run-1",
+            JobId = "job-active",
+            Action = "in_progress",
+            Status = "in_progress"
+        };
+
+        var shouldCancel = DynamicProvisioningService.ShouldCancelProviderRunForTimedOutEvent(
+            timedOut,
+            [timedOut, sibling]);
+
+        Assert.False(shouldCancel);
+    }
+
+    [Fact]
+    public void ShouldCancelProviderRunForTimedOutEvent_ReturnsTrueWhenNoSiblingJobIsInProgress()
+    {
+        var timedOut = new WebhookEvent
+        {
+            RunId = "run-1",
+            JobId = "job-queued",
+            Status = "timed_out"
+        };
+        var sibling = new WebhookEvent
+        {
+            RunId = "run-1",
+            JobId = "job-completed",
+            Action = "completed",
+            Status = "completed"
+        };
+
+        var shouldCancel = DynamicProvisioningService.ShouldCancelProviderRunForTimedOutEvent(
+            timedOut,
+            [timedOut, sibling]);
+
+        Assert.True(shouldCancel);
+    }
+
+    [Fact]
     public void ApplyImageTagOverride_ProfileOptedIn_OverridesDockerTag()
     {
         var docker = new DockerImageConfig

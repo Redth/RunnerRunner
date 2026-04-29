@@ -226,6 +226,25 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         await SyncToDocumentDb();
     }
 
+    public async Task RebindJob(string jobId, string? webhookEventId)
+    {
+        if (string.Equals(_state.State.JobId, jobId, StringComparison.Ordinal))
+            return;
+
+        var oldJobId = _state.State.JobId;
+        _state.State.JobId = jobId;
+        if (!string.IsNullOrWhiteSpace(webhookEventId))
+            _state.State.WebhookEventId = webhookEventId;
+
+        await _state.WriteStateAsync();
+
+        _logger.LogWarning(
+            "Runner instance {InstanceId} ({RunnerName}) rebound from job {OldJob} to job {NewJob}",
+            this.GetPrimaryKeyString(), _state.State.RunnerName, oldJobId ?? "(none)", jobId);
+
+        await SyncToDocumentDb();
+    }
+
     public async Task DeployLocally(DeployRunnerCommand command)
     {
         _logger.LogInformation(

@@ -63,13 +63,13 @@ REGISTRY_URL="${REGISTRY_URL:-ghcr.io}"
 REGISTRY_REPO="${REGISTRY_REPO:-redth/runnerrunner}"
 DEFAULT_SSH_KEY="${SSH_IDENTITY_FILE:-${HOME}/.ssh/id_ed25519}"
 
-# --- SSH wrapper: prefer explicit/default SSH keys over password auth ---
+# --- SSH wrapper: prefer explicit SSH keys, then password auth, then the default key ---
 remote_ssh() {
     local user="$1" host="$2" password="$3"
     shift 3
     local port="${REMOTE_SSH_PORT:-22}"
     local key="${REMOTE_SSH_KEY:-}"
-    if [[ -z "${key}" && -f "${DEFAULT_SSH_KEY}" ]]; then
+    if [[ -z "${key}" && -z "${password}" && -f "${DEFAULT_SSH_KEY}" ]]; then
         key="${DEFAULT_SSH_KEY}"
     fi
     if [[ -n "${key}" ]]; then
@@ -96,7 +96,7 @@ remote_scp() {
     local user="$1" host="$2" password="$3" src="$4" dest="$5"
     local port="${REMOTE_SSH_PORT:-22}"
     local key="${REMOTE_SSH_KEY:-}"
-    if [[ -z "${key}" && -f "${DEFAULT_SSH_KEY}" ]]; then
+    if [[ -z "${key}" && -z "${password}" && -f "${DEFAULT_SSH_KEY}" ]]; then
         key="${DEFAULT_SSH_KEY}"
     fi
     if [[ -n "${key}" ]]; then
@@ -148,6 +148,7 @@ fi
 
 if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "linux" ]]; then
 REMOTE_SSH_PORT="${LINUX_SSH_PORT}"
+REMOTE_SSH_KEY="${LINUX_SSH_KEY:-${REMOTE_SSH_KEY:-}}"
 
 # ============================================================
 # PHASE 1: Build container images for Linux stack
@@ -200,6 +201,7 @@ services:
   postgres:
     image: postgres:17
     container_name: runnerrunner-postgres
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       - POSTGRES_DB=runnerrunner
       - POSTGRES_USER=runnerrunner
@@ -309,6 +311,7 @@ fi # end linux
 
 if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "macos" ]]; then
 REMOTE_SSH_PORT="${MACOS_SSH_PORT}"
+REMOTE_SSH_KEY="${MACOS_SSH_KEY:-${REMOTE_SSH_KEY:-}}"
 
 # ============================================================
 # PHASE 4: Deploy HostSilo to macOS host
@@ -383,6 +386,7 @@ fi # end macos
 
 if [[ "${DEPLOY_TARGET}" == "windows" || ( "${DEPLOY_TARGET}" == "all" && -n "${WINDOWS_HOST}" ) ]]; then
 REMOTE_SSH_PORT="${WINDOWS_SSH_PORT}"
+REMOTE_SSH_KEY="${WINDOWS_SSH_KEY:-${REMOTE_SSH_KEY:-}}"
 
 # ============================================================
 # PHASE 5: Deploy HostSilo to Windows host

@@ -96,17 +96,16 @@ public class AgentService : BackgroundService
             });
         };
 
-        // Connect to server
-        await _signalR.ConnectAsync(stoppingToken);
-
-        // Register with server
-        await RegisterWithServer();
+        await EnsureSignalRConnected(stoppingToken);
 
         // Heartbeat loop
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
+                if (!await EnsureSignalRConnected(stoppingToken))
+                    continue;
+
                 var metrics = _healthReporter.CollectMetrics(_agentId);
                 await _signalR.SendHeartbeat(metrics);
 
@@ -159,6 +158,24 @@ public class AgentService : BackgroundService
 
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
         }
+    }
+
+    private async Task<bool> EnsureSignalRConnected(CancellationToken stoppingToken)
+    {
+        if (_signalR.IsConnected)
+            return true;
+
+        _logger.LogWarning("SignalR connection is {State}; reconnecting before sending host updates", _signalR.State);
+        await _signalR.ConnectAsync(stoppingToken);
+
+        if (!_signalR.IsConnected)
+        {
+            _logger.LogWarning("SignalR connection is still offline after reconnect attempt");
+            return false;
+        }
+
+        await RegisterWithServer();
+        return true;
     }
 
     private async Task HandleDeployRunner(DeployRunnerCommand command)

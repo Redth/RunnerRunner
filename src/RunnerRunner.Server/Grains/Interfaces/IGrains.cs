@@ -54,6 +54,12 @@ public interface IRunnerInstanceGrain : IGrainWithStringKey
     Task UpdateHealth(string? statusMessage = null);
     Task UpdateStatusMessage(string message);
     Task DeployLocally(DeployRunnerCommand command);
+    /// <summary>
+    /// Updates the bound JobId / WebhookEventId for this runner. Used to
+    /// correct dispatch-time intent when GitHub assigns the runner to a
+    /// different job than the one it was provisioned for.
+    /// </summary>
+    Task RebindJob(string jobId, string? webhookEventId);
 }
 
 /// <summary>
@@ -111,4 +117,10 @@ public class WebhookProcessResult
     [Id(3)] public string? ProfileId { get; set; }
     [Id(4)] public string? InstanceId { get; set; }
     [Id(5)] public string? EventId { get; set; }
+    /// <summary>
+    /// Runner name reported by the provider on in_progress / completed
+    /// webhooks. Lets downstream cleanup target the actual runner rather
+    /// than relying on the (sometimes-stale) RunnerInstance.JobId field.
+    /// </summary>
+    [Id(6)] public string? RunnerName { get; set; }
 }

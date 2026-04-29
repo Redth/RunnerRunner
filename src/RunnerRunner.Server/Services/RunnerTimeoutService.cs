@@ -153,7 +153,10 @@ public class RunnerTimeoutService : BackgroundService
             && !string.IsNullOrWhiteSpace(instance.WebhookEventId))
         {
             var linkedEvent = await store.Get<WebhookEvent>(instance.WebhookEventId);
-            var eventStatus = linkedEvent?.Status?.Trim();
+            IEnumerable<WebhookEvent> eventsForJob = [];
+            if (!string.IsNullOrWhiteSpace(instance.JobId))
+                eventsForJob = (await store.Query<WebhookEvent>().ToList()).Where(e => e.JobId == instance.JobId).ToList();
+            var eventStatus = GetEffectiveEventStatus(linkedEvent, eventsForJob);
             if (eventStatus is "completed" or "timed_out" or "ignored" or "rejected")
             {
                 _logger.LogWarning(
@@ -239,6 +242,32 @@ public class RunnerTimeoutService : BackgroundService
             }
         }
     }
+
+    internal static string? GetEffectiveEventStatus(WebhookEvent? linkedEvent, IEnumerable<WebhookEvent> eventsForJob)
+    {
+        var linkedStatus = linkedEvent?.Status?.Trim();
+        if (IsTerminalEventStatus(linkedStatus))
+            return linkedStatus;
+
+        var terminalStatus = eventsForJob
+            .Select(e => e.Status?.Trim())
+            .FirstOrDefault(IsTerminalEventStatus);
+        if (terminalStatus != null)
+            return terminalStatus;
+
+        if (string.Equals(linkedStatus, "in_progress", StringComparison.OrdinalIgnoreCase)
+            || eventsForJob.Any(e =>
+                string.Equals(e.Status?.Trim(), "in_progress", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(e.Action?.Trim(), "in_progress", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "in_progress";
+        }
+
+        return linkedStatus;
+    }
+
+    private static bool IsTerminalEventStatus(string? status) =>
+        status is "completed" or "timed_out" or "ignored" or "rejected";
 
     private async Task CheckStoppingTimeout(IDocumentStore store, RunnerInstance instance, DateTime now)
     {

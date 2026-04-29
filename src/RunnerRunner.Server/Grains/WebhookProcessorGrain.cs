@@ -53,6 +53,12 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         var workflowJob = json.GetProperty("workflow_job");
         var jobId = workflowJob.GetProperty("id").GetInt64().ToString();
         var runId = workflowJob.GetProperty("run_id").GetInt64().ToString();
+        // GitHub populates runner_name on in_progress / completed payloads with the
+        // actual runner that GitHub bound to the job. We use it to correct any
+        // mis-binding between our dispatch-time intent and the runner GitHub picked.
+        var runnerName = workflowJob.TryGetProperty("runner_name", out var rn)
+            ? rn.ValueKind == JsonValueKind.String ? rn.GetString() : null
+            : null;
         var rawLabels = workflowJob.GetProperty("labels").EnumerateArray()
             .Select(l => l.GetString() ?? "").Where(l => l.Length > 0).ToList();
 
@@ -157,7 +163,18 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         // Handle "in_progress"
         if (action == "in_progress")
         {
-            var instances = (await store.Query<RunnerInstance>().ToList())
+            var now = DateTime.UtcNow;
+            var allInstances = (await store.Query<RunnerInstance>().ToList()).ToList();
+            var allEvents = (await store.Query<WebhookEvent>().ToList()).ToList();
+
+            // ROOT CAUSE FIX: When multiple JIT runners are dispatched with the same
+            // labels, GitHub may bind a runner to a different job than the one we
+            // intended at dispatch. Correct the binding here, before any cleanup or
+            // timeout logic runs against the (now-stale) JobId field.
+            await RebindRunnerInstanceForJobAsync(store, allInstances, allEvents, runnerName, jobId, now);
+
+            // After rebinding, the instance for this job is identifiable by JobId.
+            var instances = allInstances
                 .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
                 .ToList();
 
@@ -168,6 +185,12 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 await instanceGrain.MarkRunning(statusMessage: "Job in progress");
                 instanceId ??= inst.Id;
             }
+
+            var queuedEvents = allEvents
+                .Where(e => e.Action == "queued" && e.JobId == jobId)
+                .ToList();
+            foreach (var evt in MarkQueuedEventsInProgress(queuedEvents, instances, now))
+                await store.Update(evt);
 
             await store.Insert(new WebhookEvent
             {
@@ -197,6 +220,18 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         // Handle "completed"
         if (action == "completed")
         {
+            // Rebind on completed too: a fast job may complete before its
+            // in_progress webhook caused us to correct the binding (or it may
+            // have been missed). Without this, completion cleanup uses the
+            // dispatch-time intended JobId and stops the wrong runner.
+            if (!string.IsNullOrWhiteSpace(runnerName))
+            {
+                var allInstancesC = (await store.Query<RunnerInstance>().ToList()).ToList();
+                var allEventsC = (await store.Query<WebhookEvent>().ToList()).ToList();
+                await RebindRunnerInstanceForJobAsync(
+                    store, allInstancesC, allEventsC, runnerName, jobId, DateTime.UtcNow);
+            }
+
             await store.Insert(new WebhookEvent
             {
                 BindingId = matchedRule.Id,
@@ -214,7 +249,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
             _logger.LogInformation("Job {JobId} completed, cleanup delegated to ProvisioningRuleGrain {RuleId}",
                 jobId, matchedRule.Id);
-            return new WebhookProcessResult { Success = true, Status = "completed", Message = "Job completed, cleanup triggered" };
+            return new WebhookProcessResult { Success = true, Status = "completed", Message = "Job completed, cleanup triggered", RunnerName = runnerName };
         }
 
         // Handle "queued"
@@ -320,6 +355,134 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             Status = "ignored",
             Message = $"Action '{action}' ignored"
         };
+    }
+
+    /// <summary>
+    /// Corrects RunnerInstance ↔ Job binding when GitHub assigns a JIT runner to a
+    /// different job than we intended at dispatch. Called on workflow_job
+    /// in_progress / completed (the first time the provider tells us which runner
+    /// is actually executing the job).
+    ///
+    /// Without this, fast-completing or 10-min-timed-out jobs cause cleanup to
+    /// stop the wrong (still-running) runner.
+    /// </summary>
+    internal async Task RebindRunnerInstanceForJobAsync(
+        IDocumentStore store,
+        IReadOnlyList<RunnerInstance> allInstances,
+        IReadOnlyList<WebhookEvent> allEvents,
+        string? runnerName,
+        string jobId,
+        DateTime nowUtc)
+    {
+        var decision = ComputeRebindDecision(allInstances, allEvents, runnerName, jobId);
+        if (decision == null)
+            return;
+
+        var actualInstance = decision.Instance;
+        var oldJobId = actualInstance.JobId;
+        var oldEventId = actualInstance.WebhookEventId;
+        actualInstance.JobId = jobId;
+        if (decision.NewWebhookEventId != null)
+            actualInstance.WebhookEventId = decision.NewWebhookEventId;
+        await store.Update(actualInstance);
+
+        // Also update the grain state so its persistent state agrees with the
+        // RunnerInstance document; otherwise grain-side queries
+        // (e.g. ProvisioningRuleGrain.HandleJobCompleted) still see the old JobId.
+        try
+        {
+            var instanceGrain = GrainFactory.GetGrain<IRunnerInstanceGrain>(actualInstance.Id);
+            await instanceGrain.RebindJob(jobId, decision.NewWebhookEventId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to update grain state for rebound instance {InstanceId} ({RunnerName})",
+                actualInstance.Id, actualInstance.RunnerName);
+        }
+
+        _logger.LogWarning(
+            "Rebound runner {RunnerName} (instance {InstanceId}) from job {OldJobId} (event {OldEventId}) to job {NewJobId} (event {NewEventId}); GitHub assigned this runner to a different job than dispatched",
+            actualInstance.RunnerName,
+            actualInstance.Id,
+            oldJobId ?? "(none)",
+            oldEventId ?? "(none)",
+            jobId,
+            decision.NewWebhookEventId ?? "(none)");
+    }
+
+    internal sealed record RebindDecision(RunnerInstance Instance, string? NewWebhookEventId);
+
+    /// <summary>
+    /// Pure decision function: returns the rebind action to apply, or null if
+    /// no rebind is needed. Extracted for testability.
+    /// </summary>
+    internal static RebindDecision? ComputeRebindDecision(
+        IReadOnlyList<RunnerInstance> allInstances,
+        IReadOnlyList<WebhookEvent> allEvents,
+        string? runnerName,
+        string jobId)
+    {
+        if (string.IsNullOrWhiteSpace(runnerName) || string.IsNullOrWhiteSpace(jobId))
+            return null;
+
+        var actualInstance = allInstances.FirstOrDefault(i =>
+            i.ProvisioningMode == "dynamic"
+            && string.Equals(i.RunnerName, runnerName, StringComparison.OrdinalIgnoreCase));
+        if (actualInstance == null)
+            return null;
+
+        if (string.Equals(actualInstance.JobId, jobId, StringComparison.Ordinal))
+            return null;
+
+        var queuedEventForJob = allEvents
+            .Where(e => e.Action == "queued"
+                && string.Equals(e.JobId, jobId, StringComparison.Ordinal)
+                && e.Status is not "completed" and not "timed_out" and not "rejected" and not "ignored")
+            .OrderByDescending(e => e.ReceivedAt)
+            .FirstOrDefault();
+
+        return new RebindDecision(actualInstance, queuedEventForJob?.Id);
+    }
+
+    internal static IReadOnlyList<WebhookEvent> MarkQueuedEventsInProgress(
+        IEnumerable<WebhookEvent> queuedEvents,
+        IReadOnlyCollection<RunnerInstance> dynamicInstances,
+        DateTime nowUtc)
+    {
+        var instancesByEventId = dynamicInstances
+            .Where(i => !string.IsNullOrWhiteSpace(i.WebhookEventId))
+            .GroupBy(i => i.WebhookEventId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var instancesById = dynamicInstances
+            .GroupBy(i => i.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var updated = new List<WebhookEvent>();
+        foreach (var evt in queuedEvents)
+        {
+            if (!string.Equals(evt.Action, "queued", StringComparison.OrdinalIgnoreCase)
+                || evt.Status is "completed" or "timed_out" or "ignored" or "rejected")
+            {
+                continue;
+            }
+
+            RunnerInstance? linkedInstance = null;
+            if (!string.IsNullOrWhiteSpace(evt.Id))
+                instancesByEventId.TryGetValue(evt.Id, out linkedInstance);
+            if (linkedInstance == null
+                && !string.IsNullOrWhiteSpace(evt.InstanceId))
+            {
+                instancesById.TryGetValue(evt.InstanceId, out linkedInstance);
+            }
+
+            evt.MarkResolved("in_progress", nowUtc, linkedInstance?.Id ?? evt.InstanceId);
+            if (linkedInstance != null && string.IsNullOrWhiteSpace(evt.MatchedProfileId))
+                evt.MatchedProfileId = linkedInstance.ProfileId;
+            updated.Add(evt);
+        }
+
+        return updated;
     }
 
     private static bool ValidateHmac(string body, string secret, string? signatureHeader, string provider)

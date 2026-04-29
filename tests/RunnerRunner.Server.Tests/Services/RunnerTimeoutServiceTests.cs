@@ -55,4 +55,65 @@ public class RunnerTimeoutServiceTests
         Assert.Equal("in_progress", evt.Status);
         Assert.Equal("inst-2", evt.InstanceId);
     }
+
+    [Fact]
+    public void GetEffectiveEventStatus_UsesRecordedInProgressEvent()
+    {
+        var linkedEvent = new WebhookEvent
+        {
+            Id = "evt-queued",
+            Action = "queued",
+            Status = "provisioned",
+            JobId = "job-1"
+        };
+        var eventsForJob = new[]
+        {
+            linkedEvent,
+            new WebhookEvent
+            {
+                Id = "evt-progress",
+                Action = "in_progress",
+                Status = "in_progress",
+                JobId = "job-1"
+            }
+        };
+
+        var status = RunnerTimeoutService.GetEffectiveEventStatus(linkedEvent, eventsForJob);
+
+        Assert.Equal("in_progress", status);
+    }
+
+    [Fact]
+    public void GetEffectiveEventStatus_UsesRecordedTerminalEventBeforeInProgress()
+    {
+        var linkedEvent = new WebhookEvent
+        {
+            Id = "evt-queued",
+            Action = "queued",
+            Status = "provisioned",
+            JobId = "job-1"
+        };
+        var eventsForJob = new[]
+        {
+            linkedEvent,
+            new WebhookEvent
+            {
+                Id = "evt-completed",
+                Action = "completed",
+                Status = "completed",
+                JobId = "job-1"
+            },
+            new WebhookEvent
+            {
+                Id = "evt-progress",
+                Action = "in_progress",
+                Status = "in_progress",
+                JobId = "job-1"
+            }
+        };
+
+        var status = RunnerTimeoutService.GetEffectiveEventStatus(linkedEvent, eventsForJob);
+
+        Assert.Equal("completed", status);
+    }
 }

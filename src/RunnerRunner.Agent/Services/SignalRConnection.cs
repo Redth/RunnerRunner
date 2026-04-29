@@ -28,6 +28,7 @@ public class SignalRConnection : IAsyncDisposable
     public event Func<Task>? OnReconnected;
 
     public bool IsConnected => _connection?.State == HubConnectionState.Connected;
+    public HubConnectionState State => _connection?.State ?? HubConnectionState.Disconnected;
 
     public SignalRConnection(ILogger<SignalRConnection> logger, IConfiguration configuration)
     {
@@ -50,7 +51,16 @@ public class SignalRConnection : IAsyncDisposable
         {
             try
             {
+                if (_connection?.State == HubConnectionState.Connected)
+                    return;
+
                 // Recreate connection for each attempt to avoid stale state
+                if (_connection is not null)
+                {
+                    await _connection.DisposeAsync();
+                    _connection = null;
+                }
+
                 _connection = BuildConnection(hubUrl);
                 await _connection.StartAsync(ct);
                 _logger.LogInformation("Connected to RunnerRunner server at {Url}", hubUrl);
