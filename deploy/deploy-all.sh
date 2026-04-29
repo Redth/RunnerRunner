@@ -340,7 +340,7 @@ cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
     "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}"
   },
   "Database": {
-    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
+    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner;SSL Mode=Disable;Trust Server Certificate=true"
   },
   "Orleans": {
     "AdvertisedIPAddress": "${MACOS_HOST}"
@@ -414,7 +414,7 @@ cat > "${WINDOWS_PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
     "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}"
   },
   "Database": {
-    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
+    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner;SSL Mode=Disable;Trust Server Certificate=true"
   },
   "Orleans": {
     "AdvertisedIPAddress": "${WINDOWS_HOST}"
