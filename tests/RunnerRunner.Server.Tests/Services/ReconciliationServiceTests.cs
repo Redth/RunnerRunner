@@ -66,6 +66,56 @@ public class ReconciliationServiceTests
     }
 
     [Fact]
+    public void ResolveProfileForOrphan_MatchesByJitNamePrefix()
+    {
+        var profiles = new List<RunnerProfile>
+        {
+            new() { Id = "p1", Name = "MacOS-Native" },
+            new() { Id = "p2", Name = "Ailoha-ReactNative-Linux" },
+        };
+
+        var discovered = new DiscoveredRunnerInfo
+        {
+            RunnerName = "MacOS-Native-jit-5494609f",
+            Backend = ExecutionBackend.Native,
+            IsRunning = true,
+            Status = "running"
+        };
+
+        var profile = ReconciliationService.ResolveProfileForOrphan(discovered, profiles);
+        Assert.NotNull(profile);
+        Assert.Equal("p1", profile!.Id);
+    }
+
+    [Fact]
+    public void ResolveProfileForOrphan_ReturnsNull_WhenNameDoesNotContainJitMarker()
+    {
+        var profiles = new List<RunnerProfile> { new() { Id = "p1", Name = "MacOS-Native" } };
+        var discovered = new DiscoveredRunnerInfo
+        {
+            RunnerName = "manually-named-runner",
+            Backend = ExecutionBackend.Native,
+            Status = "running"
+        };
+
+        Assert.Null(ReconciliationService.ResolveProfileForOrphan(discovered, profiles));
+    }
+
+    [Fact]
+    public void ResolveProfileForOrphan_ReturnsNull_WhenProfileMissing()
+    {
+        var profiles = new List<RunnerProfile> { new() { Id = "p1", Name = "OtherProfile" } };
+        var discovered = new DiscoveredRunnerInfo
+        {
+            RunnerName = "DeletedProfile-jit-abc12345",
+            Backend = ExecutionBackend.Native,
+            Status = "running"
+        };
+
+        Assert.Null(ReconciliationService.ResolveProfileForOrphan(discovered, profiles));
+    }
+
+    [Fact]
     public void TryPrepareDynamicWebhookRetry_RequeuesProvisionedQueuedEvent()
     {
         var instance = new RunnerInstance
