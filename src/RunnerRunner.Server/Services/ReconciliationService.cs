@@ -315,7 +315,7 @@ public class ReconciliationService : IHostedService, IDisposable
             StatusMessage = "Adopted on host reconciliation (silo lost track of dispatched runner)"
         };
 
-        await store.Update(instance);
+        await store.Insert(instance);
 
         _logger.LogWarning(
             "Adopted running orphan runner {RunnerName} on host {Host} as instance {InstanceId} (profile {ProfileName}); silo had lost track but the runner is mid-job",
