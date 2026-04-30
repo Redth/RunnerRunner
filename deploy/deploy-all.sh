@@ -382,7 +382,31 @@ remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
 # would leave the mac silo offline indefinitely until manual intervention.
 step "Installing launchd auto-restart..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
-    "mkdir -p \$HOME/Library/LaunchAgents && cat > \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist <<'PLIST_EOF'
+    "cat > /opt/runnerrunner/run-host-silo.sh <<'WRAPPER_EOF'
+#!/bin/bash
+# Wrapper that primes the kernel routing/ARP cache before launching the silo.
+# Under launchd, the .NET runtime sometimes gets EHOSTUNREACH on its very
+# first outbound TCP connection to LAN hosts (postgres, peer silos) even
+# though the launchd context itself can reach them. Doing a TCP probe first
+# warms whatever per-process socket state matters and the silo then connects
+# cleanly. Without this, the silo crashes during startup and launchd just
+# respawns it forever.
+PG_HOST=\${RUNNERRUNNER_PG_HOST:-192.168.2.4}
+PG_PORT=\${RUNNERRUNNER_PG_PORT:-5433}
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if /usr/bin/nc -z -G 3 \"\$PG_HOST\" \"\$PG_PORT\" 2>/dev/null; then
+        echo \"[wrapper] postgres reachable on attempt \$i\"
+        break
+    fi
+    echo \"[wrapper] postgres probe \$i failed; retrying\"
+    sleep 2
+done
+cd /opt/runnerrunner
+export DOTNET_ENVIRONMENT=Production
+exec /opt/runnerrunner/RunnerRunner.HostSilo
+WRAPPER_EOF
+chmod +x /opt/runnerrunner/run-host-silo.sh
+mkdir -p \$HOME/Library/LaunchAgents && cat > \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist <<'PLIST_EOF'
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\">
@@ -390,7 +414,7 @@ remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
     <key>Label</key><string>com.runnerrunner.hostsilo</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/runnerrunner/RunnerRunner.HostSilo</string>
+        <string>/opt/runnerrunner/run-host-silo.sh</string>
     </array>
     <key>WorkingDirectory</key><string>/opt/runnerrunner</string>
     <key>EnvironmentVariables</key>
@@ -400,11 +424,11 @@ remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
-    <!-- ProcessType=Interactive + SessionCreate=true are REQUIRED so the silo
-         runs in a full Aqua user session. Without them, launchd-spawned
-         processes get EHOSTUNREACH on outbound TCP to the LAN (postgres,
-         peer silos) even though the same connection works fine from an
-         interactive shell. The actions.runner plist uses the same flags. -->
+    <!-- ProcessType=Interactive + SessionCreate=true match the actions.runner
+         LaunchAgent on the same machine and put the silo in a full Aqua user
+         session. The wrapper script (run-host-silo.sh) does a TCP probe to
+         postgres before exec'ing the binary, which warms the per-process
+         socket state and avoids the EHOSTUNREACH-on-first-connect race. -->
     <key>ProcessType</key><string>Interactive</string>
     <key>SessionCreate</key><true/>
     <key>StandardOutPath</key><string>/tmp/runnerrunner-hostsilo.log</string>
@@ -412,8 +436,9 @@ remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
 </dict>
 </plist>
 PLIST_EOF
+launchctl bootout gui/\$(id -u)/com.runnerrunner.hostsilo 2>/dev/null || true
 launchctl unload \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist 2>/dev/null || true
-launchctl load   \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist"
+launchctl bootstrap gui/\$(id -u) \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist"
 
 success "macOS HostSilo deployed"
 
