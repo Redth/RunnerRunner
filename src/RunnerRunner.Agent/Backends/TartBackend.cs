@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using RunnerRunner.Agent.Services;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 
@@ -12,12 +13,14 @@ namespace RunnerRunner.Agent.Backends;
 public class TartBackend : IRunnerBackend
 {
     private readonly ILogger<TartBackend> _logger;
+    private readonly ImagePullCoordinator _pullCoordinator;
 
     public ExecutionBackend BackendType => ExecutionBackend.Tart;
 
-    public TartBackend(ILogger<TartBackend> logger)
+    public TartBackend(ILogger<TartBackend> logger, ImagePullCoordinator pullCoordinator)
     {
         _logger = logger;
+        _pullCoordinator = pullCoordinator;
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
@@ -42,6 +45,19 @@ public class TartBackend : IRunnerBackend
         var vmName = request.RunnerName.StartsWith("rr-", StringComparison.OrdinalIgnoreCase)
             ? request.RunnerName
             : $"rr-{request.RunnerName}";
+
+        // Pre-pull the source image through the coordinator so concurrent
+        // deploys of the same image share one underlying `tart pull` rather
+        // than triggering parallel implicit pulls inside `tart clone`.
+        var pullKey = $"tart:{sourceImage}";
+        await _pullCoordinator.PullOnceAsync(
+            pullKey,
+            async () =>
+            {
+                var pullResult = await RunCommandAsync("tart", $"pull {sourceImage}", CancellationToken.None);
+                EnsureSuccess(pullResult, $"tart pull {sourceImage}");
+            },
+            ct);
 
         // Clone the base image for this runner instance
         _logger.LogInformation("Cloning tart image {Source} → {VM}", sourceImage, vmName);

@@ -23,6 +23,7 @@ public class AgentService : BackgroundService
     private readonly IRunnerBackend _tartBackend;
     private readonly IRunnerBackend _nativeBackend;
     private readonly ImageManager _imageManager;
+    private readonly ImagePullCoordinator _pullCoordinator;
 
     private string _agentId = "";
     private string _agentName = "";
@@ -34,6 +35,7 @@ public class AgentService : BackgroundService
         RunnerLifecycleManager lifecycleManager,
         HealthReporter healthReporter,
         ImageManager imageManager,
+        ImagePullCoordinator pullCoordinator,
         ILoggerFactory loggerFactory)
     {
         _logger = logger;
@@ -42,9 +44,10 @@ public class AgentService : BackgroundService
         _lifecycleManager = lifecycleManager;
         _healthReporter = healthReporter;
         _imageManager = imageManager;
+        _pullCoordinator = pullCoordinator;
 
-        _dockerBackend = new DockerBackend(loggerFactory.CreateLogger<DockerBackend>());
-        _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>());
+        _dockerBackend = new DockerBackend(loggerFactory.CreateLogger<DockerBackend>(), pullCoordinator);
+        _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>(), pullCoordinator);
         _nativeBackend = new NativeBackend(loggerFactory.CreateLogger<NativeBackend>());
     }
 
@@ -189,7 +192,16 @@ public class AgentService : BackgroundService
         return true;
     }
 
-    private async Task HandleDeployRunner(DeployRunnerCommand command)
+    private Task HandleDeployRunner(DeployRunnerCommand command)
+    {
+        // Run the deploy off the SignalR dispatcher so a long-running image
+        // pull (10+ minutes for large MAUI/Android images) cannot back up
+        // other hub commands (StopRunner, GetHostLogs, heartbeats, ...).
+        _ = Task.Run(() => HandleDeployRunnerCore(command));
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleDeployRunnerCore(DeployRunnerCommand command)
     {
         try
         {
@@ -354,7 +366,15 @@ public class AgentService : BackgroundService
             success: !hadErrors);
     }
 
-    private async Task HandlePullImage(PullImageCommand command)
+    private Task HandlePullImage(PullImageCommand command)
+    {
+        // Pulls can take 10+ minutes for large images. Don't block the
+        // SignalR dispatcher on them.
+        _ = Task.Run(() => HandlePullImageCore(command));
+        return Task.CompletedTask;
+    }
+
+    private async Task HandlePullImageCore(PullImageCommand command)
     {
         _logger.LogInformation("Pulling image {Image}:{Tag} (type: {Type})",
             command.ImageName, command.Tag, command.ImageType);
@@ -372,21 +392,25 @@ public class AgentService : BackgroundService
 
             if (command.ImageType == ImageType.Docker)
             {
-                await _imageManager.PullDockerImageAsync(command.ImageName, command.Tag, command.RegistryUrl,
-                    async progress =>
-                    {
-                        progress.HostId = _agentId;
-                        await _signalR.SendImagePullProgress(progress);
-                    });
+                var key = $"docker:{fullImage}";
+                await _pullCoordinator.PullOnceAsync(key, () =>
+                    _imageManager.PullDockerImageAsync(command.ImageName, command.Tag, command.RegistryUrl,
+                        async progress =>
+                        {
+                            progress.HostId = _agentId;
+                            await _signalR.SendImagePullProgress(progress);
+                        }));
             }
             else if (command.ImageType == ImageType.Tart)
             {
-                await _imageManager.PullTartImageAsync(fullImage,
-                    async progress =>
-                    {
-                        progress.HostId = _agentId;
-                        await _signalR.SendImagePullProgress(progress);
-                    });
+                var key = $"tart:{fullImage}";
+                await _pullCoordinator.PullOnceAsync(key, () =>
+                    _imageManager.PullTartImageAsync(fullImage,
+                        async progress =>
+                        {
+                            progress.HostId = _agentId;
+                            await _signalR.SendImagePullProgress(progress);
+                        }));
             }
 
             await _signalR.SendImagePullComplete(new ImagePullCompleteEvent

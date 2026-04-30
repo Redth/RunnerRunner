@@ -15,6 +15,7 @@ builder.Services.AddSingleton<SignalRConnection>();
 builder.Services.AddSingleton<RunnerLifecycleManager>();
 builder.Services.AddSingleton<HealthReporter>();
 builder.Services.AddSingleton<ImageManager>();
+builder.Services.AddSingleton<ImagePullCoordinator>();
 
 builder.Services.AddHostedService<AgentService>();
 

@@ -3,6 +3,7 @@ using Docker.DotNet.Models;
 using System.Formats.Tar;
 using System.Runtime.InteropServices;
 using System.Text;
+using RunnerRunner.Agent.Services;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 
@@ -18,6 +19,7 @@ public class DockerBackend : IRunnerBackend
     private readonly DockerClient _client;
     private readonly Uri _endpoint;
     private readonly bool _hasDockerHint;
+    private readonly ImagePullCoordinator _pullCoordinator;
     private readonly TimeSpan _availabilityCacheWindow = TimeSpan.FromSeconds(30);
     private DateTime _lastAvailabilityCheckUtc = DateTime.MinValue;
     private bool _cachedAvailability;
@@ -25,9 +27,10 @@ public class DockerBackend : IRunnerBackend
     public ExecutionBackend BackendType => ExecutionBackend.Docker;
     public DockerClient GetClient() => _client;
 
-    public DockerBackend(ILogger<DockerBackend> logger)
+    public DockerBackend(ILogger<DockerBackend> logger, ImagePullCoordinator pullCoordinator)
     {
         _logger = logger;
+        _pullCoordinator = pullCoordinator;
         _hasDockerHint = HasDockerInstallHint();
         _endpoint = ResolveDockerEndpoint();
         _client = new DockerClientConfiguration(_endpoint).CreateClient();
@@ -64,7 +67,9 @@ public class DockerBackend : IRunnerBackend
         var imageName = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag);
         var repository = ImageReference.BuildRepository(config.RegistryUrl, config.ImageName);
 
-        // Pull image if needed
+        // Pull image if needed — coordinated so concurrent deploys of the same
+        // image share a single underlying `docker pull` instead of fighting
+        // for bandwidth and disk I/O.
         if (config.PullPolicy == PullPolicy.Always ||
             (config.PullPolicy == PullPolicy.IfNotPresent && !await ImageExistsAsync(imageName, ct)))
         {
@@ -79,9 +84,15 @@ public class DockerBackend : IRunnerBackend
                 };
                 _logger.LogInformation("Using registry credentials (user: {User}) for image pull", request.RegistryUsername);
             }
-            await _client.Images.CreateImageAsync(
-                new ImagesCreateParameters { FromImage = repository, Tag = config.Tag },
-                authConfig, new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)), ct);
+            var pullKey = $"docker:{imageName}";
+            await _pullCoordinator.PullOnceAsync(
+                pullKey,
+                () => _client.Images.CreateImageAsync(
+                    new ImagesCreateParameters { FromImage = repository, Tag = config.Tag },
+                    authConfig,
+                    new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)),
+                    CancellationToken.None),
+                ct);
         }
 
         // Build environment variables
