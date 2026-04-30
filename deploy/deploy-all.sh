@@ -384,26 +384,40 @@ step "Installing launchd auto-restart..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
     "cat > /opt/runnerrunner/run-host-silo.sh <<'WRAPPER_EOF'
 #!/bin/bash
-# Wrapper that primes the kernel routing/ARP cache before launching the silo.
-# Under launchd, the .NET runtime sometimes gets EHOSTUNREACH on its very
-# first outbound TCP connection to LAN hosts (postgres, peer silos) even
-# though the launchd context itself can reach them. Doing a TCP probe first
-# warms whatever per-process socket state matters and the silo then connects
-# cleanly. Without this, the silo crashes during startup and launchd just
-# respawns it forever.
-PG_HOST=\${RUNNERRUNNER_PG_HOST:-192.168.2.4}
-PG_PORT=\${RUNNERRUNNER_PG_PORT:-5433}
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    if /usr/bin/nc -z -G 3 \"\$PG_HOST\" \"\$PG_PORT\" 2>/dev/null; then
-        echo \"[wrapper] postgres reachable on attempt \$i\"
-        break
-    fi
-    echo \"[wrapper] postgres probe \$i failed; retrying\"
-    sleep 2
-done
-cd /opt/runnerrunner
-export DOTNET_ENVIRONMENT=Production
-exec /opt/runnerrunner/RunnerRunner.HostSilo
+# Launch the silo as a child of /usr/bin/ssh -> sshd -> shell on this same mac.
+#
+# Why: macOS Sequoia/Tahoe (15+/26+) enforces \"Local Network\" TCC privacy on
+# any process that connects to RFC1918 / link-local addresses. A LaunchAgent
+# job has its own TCC \"responsible code\" identity and gets *silently denied*
+# (manifests as SocketException 65 \"No route to host\"), even though the same
+# .NET binary works fine when run from an interactive SSH session. Apple's
+# system-signed sshd is exempt, and any process it spawns inherits the
+# exemption -- so by tunneling the silo's launch through a localhost SSH we
+# acquire Local Network access without requiring the user to click through
+# System Settings prompts that never appear under launchd.
+#
+# Verified: tcptest.cs connecting to postgres at 192.168.2.4:5433 fails
+# under launchd with EHOSTUNREACH but succeeds when wrapped in
+# 'ssh redth@localhost <command>' from the same launchd job.
+set -e
+SSH_KEY=\${RUNNERRUNNER_SILO_SSH_KEY:-\$HOME/.ssh/id_ed25519}
+SSH_USER=\$(/usr/bin/whoami)
+# Make sure localhost ssh is unattended: known_hosts seeded, BatchMode on.
+/usr/bin/ssh-keyscan -t ed25519 -H localhost 2>/dev/null >> \$HOME/.ssh/known_hosts || true
+# StreamLocalBindUnlink -> not needed here; -t allocates pty so SIGTERM from
+# launchd kills the remote silo cleanly via PTY HUP.
+exec /usr/bin/ssh \\
+    -i \"\$SSH_KEY\" \\
+    -o StrictHostKeyChecking=accept-new \\
+    -o BatchMode=yes \\
+    -o ServerAliveInterval=30 \\
+    -o ServerAliveCountMax=3 \\
+    -tt \\
+    \"\$SSH_USER@localhost\" \\
+    'cd /opt/runnerrunner && \\
+     export DOTNET_ENVIRONMENT=Production && \\
+     export DOTNET_SYSTEM_NET_DISABLEIPV6=1 && \\
+     exec /opt/runnerrunner/RunnerRunner.HostSilo'
 WRAPPER_EOF
 chmod +x /opt/runnerrunner/run-host-silo.sh
 mkdir -p \$HOME/Library/LaunchAgents && cat > \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist <<'PLIST_EOF'
