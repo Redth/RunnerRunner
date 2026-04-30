@@ -5,6 +5,7 @@ using RunnerRunner.Agent;
 using RunnerRunner.Agent.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
 
@@ -109,6 +110,39 @@ builder.UseOrleans(silo =>
         ["architecture"] = architecture
     });
 });
+
+// Probe postgres before starting Orleans. macOS occasionally returns
+// EHOSTUNREACH ("No route to host") on the very first outbound TCP connect
+// after the silo process spawns (intermittent ARP/route freshness issue under
+// launchd). Orleans wraps that in an unhandled exception and the entire host
+// dies, so we'd rather retry the connect ourselves than let launchd churn.
+{
+    var probeLogger = LoggerFactory
+        .Create(b => b.AddSimpleConsole(o => o.SingleLine = true))
+        .CreateLogger("PostgresProbe");
+    const int maxAttempts = 30;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        try
+        {
+            await using var conn = new Npgsql.NpgsqlConnection(pgConnectionString);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await conn.OpenAsync(cts.Token);
+            probeLogger.LogInformation(
+                "Postgres reachable on attempt {Attempt}", attempt);
+            break;
+        }
+        catch (Exception ex) when (attempt < maxAttempts)
+        {
+            probeLogger.LogWarning(
+                ex,
+                "Postgres probe attempt {Attempt}/{Max} failed; retrying in 2s",
+                attempt,
+                maxAttempts);
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+    }
+}
 
 var host = builder.Build();
 host.Run();
