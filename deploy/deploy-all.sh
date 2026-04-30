@@ -400,6 +400,13 @@ remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
+    <!-- ProcessType=Interactive + SessionCreate=true are REQUIRED so the silo
+         runs in a full Aqua user session. Without them, launchd-spawned
+         processes get EHOSTUNREACH on outbound TCP to the LAN (postgres,
+         peer silos) even though the same connection works fine from an
+         interactive shell. The actions.runner plist uses the same flags. -->
+    <key>ProcessType</key><string>Interactive</string>
+    <key>SessionCreate</key><true/>
     <key>StandardOutPath</key><string>/tmp/runnerrunner-hostsilo.log</string>
     <key>StandardErrorPath</key><string>/tmp/runnerrunner-hostsilo.log</string>
 </dict>
