@@ -511,7 +511,7 @@ remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
 
 step "Starting Windows HostSilo (${WINDOWS_MODE})..."
 remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
-    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostSilo.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -Mode '${WINDOWS_MODE}'\""
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostSilo.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -Mode '${WINDOWS_MODE}' -ServiceUser '${WINDOWS_USER}' -ServicePassword '${WINDOWS_PASSWORD}'\""
 
 success "Windows HostSilo deployed"
 
