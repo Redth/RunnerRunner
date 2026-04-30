@@ -501,6 +501,10 @@ step "Preparing remote Windows deploy directory..."
 remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
     "powershell -NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType Directory -Force -Path '${WINDOWS_DEPLOY_DIR}' | Out-Null\""
 
+step "Stopping existing Windows HostSilo (releases file locks before copy)..."
+remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"try { Stop-ScheduledTask -TaskName 'RunnerRunnerHostSilo' -ErrorAction SilentlyContinue } catch {}; Get-Process -Name 'RunnerRunner.HostSilo' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; exit 0\""
+
 step "Copying HostSilo files to ${WINDOWS_HOST}:${WINDOWS_DEPLOY_DIR}..."
 remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
     "${WINDOWS_PUBLISH_DIR}/." "${WINDOWS_DEPLOY_DIR}/"
