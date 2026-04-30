@@ -3,8 +3,20 @@ using RunnerRunner.Server.Data;
 using Orleans.Runtime.MembershipService.SiloMetadata;
 using RunnerRunner.Agent;
 using RunnerRunner.Agent.Services;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
+
+// Don't tear down the entire silo when a single BackgroundService throws.
+// Transient SignalR/Orleans exceptions (e.g. TaskCanceledException during a
+// reconnect) used to crash the host; the deploy script doesn't auto-restart
+// it, so a single hiccup left the mac silo offline for hours.
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.BackgroundServiceExceptionBehavior =
+        BackgroundServiceExceptionBehavior.Ignore;
+});
 
 // Configuration
 var hostId = builder.Configuration["HostSilo:HostId"] ?? Environment.MachineName;

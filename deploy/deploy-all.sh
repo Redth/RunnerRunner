@@ -349,10 +349,12 @@ cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
 }
 SETTINGS_EOF
 
-# Stop existing process(es), including any leftover legacy agent
+# Stop existing process(es), including any leftover legacy agent. Also unload
+# the launchd plist if present so it doesn't immediately respawn.
 step "Stopping existing HostSilo/legacy agent..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
-    "pids=\$(ps ax -o pid= -o command= | awk '/RunnerRunner\\.(HostSilo|Agent)/ && !/awk/ {print \$1}'); \
+    "launchctl unload \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist 2>/dev/null || true; \
+     pids=\$(ps ax -o pid= -o command= | awk '/RunnerRunner\\.(HostSilo|Agent)/ && !/awk/ {print \$1}'); \
      if [ -n \"\$pids\" ]; then \
        for pid in \$pids; do kill \"\$pid\" 2>/dev/null || true; done; \
        sleep 2; \
@@ -375,10 +377,36 @@ step "Codesigning binary..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
     "codesign --force -s - /opt/runnerrunner/RunnerRunner.HostSilo"
 
-# Start via nohup
-step "Starting HostSilo..."
+# Install launchd plist with KeepAlive so the silo auto-restarts if it crashes.
+# This is critical: without it, a single transient SignalR/Postgres exception
+# would leave the mac silo offline indefinitely until manual intervention.
+step "Installing launchd auto-restart..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
-    "cd /opt/runnerrunner && DOTNET_ENVIRONMENT=Production nohup ./RunnerRunner.HostSilo > /tmp/runnerrunner-hostsilo.log 2>&1 & sleep 1"
+    "mkdir -p \$HOME/Library/LaunchAgents && cat > \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist <<'PLIST_EOF'
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+    <key>Label</key><string>com.runnerrunner.hostsilo</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/runnerrunner/RunnerRunner.HostSilo</string>
+    </array>
+    <key>WorkingDirectory</key><string>/opt/runnerrunner</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DOTNET_ENVIRONMENT</key><string>Production</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardOutPath</key><string>/tmp/runnerrunner-hostsilo.log</string>
+    <key>StandardErrorPath</key><string>/tmp/runnerrunner-hostsilo.log</string>
+</dict>
+</plist>
+PLIST_EOF
+launchctl unload \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist 2>/dev/null || true
+launchctl load   \$HOME/Library/LaunchAgents/com.runnerrunner.hostsilo.plist"
 
 success "macOS HostSilo deployed"
 

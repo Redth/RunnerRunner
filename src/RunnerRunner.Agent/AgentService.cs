@@ -96,7 +96,18 @@ public class AgentService : BackgroundService
             });
         };
 
-        await EnsureSignalRConnected(stoppingToken);
+        // Initial connect attempt — must not throw out of ExecuteAsync, since
+        // BackgroundServiceExceptionBehavior used to default to StopHost. The
+        // heartbeat loop below also calls EnsureSignalRConnected, so a failure
+        // here just means the first heartbeat retries.
+        try
+        {
+            await EnsureSignalRConnected(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Initial SignalR connect failed; heartbeat loop will retry");
+        }
 
         // Heartbeat loop
         while (!stoppingToken.IsCancellationRequested)
