@@ -66,6 +66,60 @@ public class ReconciliationServiceTests
     }
 
     [Fact]
+    public void IsRunnerStillActive_ReturnsTrue_ForCreatedDockerContainer()
+    {
+        // Regression: a Docker container that the agent has just created but not
+        // yet started reports status="created" and IsRunning=false. The previous
+        // implementation treated this as exited and triggered an orphan-cleanup
+        // that killed the resource the agent was simultaneously bringing up,
+        // producing Windows exit code 3221225786 (CTRL_C_EXIT).
+        var discovered = new DiscoveredRunnerInfo
+        {
+            RunnerName = "MAUI-Windows-jit-57a90f8f",
+            ContainerId = "7df7f4e899bed2e0",
+            Backend = ExecutionBackend.Docker,
+            IsRunning = false,
+            Status = "created"
+        };
+
+        Assert.True(ReconciliationService.IsRunnerStillActive(discovered));
+    }
+
+    [Theory]
+    [InlineData("restarting")]
+    [InlineData("starting")]
+    [InlineData("paused")]
+    public void IsRunnerStillActive_ReturnsTrue_ForOtherTransitionalStatuses(string status)
+    {
+        var discovered = new DiscoveredRunnerInfo
+        {
+            RunnerName = "MAUI-Windows-jit-x",
+            Backend = ExecutionBackend.Docker,
+            IsRunning = false,
+            Status = status
+        };
+
+        Assert.True(ReconciliationService.IsRunnerStillActive(discovered));
+    }
+
+    [Theory]
+    [InlineData("dead")]
+    [InlineData("removing")]
+    [InlineData("stopped")]
+    public void IsRunnerStillActive_ReturnsFalse_ForTerminalStatuses(string status)
+    {
+        var discovered = new DiscoveredRunnerInfo
+        {
+            RunnerName = "macos-test-jit-x",
+            Backend = ExecutionBackend.Tart,
+            IsRunning = false,
+            Status = status
+        };
+
+        Assert.False(ReconciliationService.IsRunnerStillActive(discovered));
+    }
+
+    [Fact]
     public void ResolveProfileForOrphan_MatchesByJitNamePrefix()
     {
         var profiles = new List<RunnerProfile>

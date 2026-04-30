@@ -207,8 +207,31 @@ public class ReconciliationService : IHostedService, IDisposable
             && string.Equals(runner.RunnerName, instance.RunnerName, StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static bool IsRunnerStillActive(DiscoveredRunnerInfo runner) =>
-        runner.IsRunning || string.Equals(runner.Status, "running", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsRunnerStillActive(DiscoveredRunnerInfo runner)
+    {
+        if (runner.IsRunning) return true;
+
+        // A container/VM that the agent has just created but not yet started
+        // reports status="created" (Docker) and IsRunning=false. The previous
+        // heuristic (only "running" counts) treated those as exited and triggered
+        // an orphan-cleanup that killed the resource the agent was simultaneously
+        // bringing up — the classic deploy/heartbeat race that produces Windows
+        // exit code 3221225786 (CTRL_C_EXIT) immediately after StartContainer.
+        // Treat known transitional/non-terminal statuses as still active so the
+        // deploy can complete; reconciliation will catch genuinely-stopped
+        // resources on the next heartbeat once the agent reports them as such.
+        var status = runner.Status ?? string.Empty;
+        return TransitionalStatuses.Contains(status);
+    }
+
+    private static readonly HashSet<string> TransitionalStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "running",        // belt-and-suspenders
+        "created",        // Docker: container created but not started yet
+        "restarting",     // Docker: in the middle of a restart
+        "starting",       // generic transitional
+        "paused"          // Docker: actively paused, not exited
+    };
 
     internal static bool TryPrepareDynamicWebhookRetry(
         RunnerInstance instance,
