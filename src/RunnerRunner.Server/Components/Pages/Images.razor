@@ -3,10 +3,9 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
-@using RunnerRunner.Server.Hubs
-@using Microsoft.AspNetCore.SignalR
+@using RunnerRunner.Server.Services
 @inject IDocumentStore Store
-@inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject IHostCommandDispatcher HostCommandDispatcher
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -331,11 +330,10 @@
         hosts = (await Store.Query<Host>().ToList()).ToList();
         registries = (await Store.Query<RegistryCredential>().ToList()).ToList();
 
-        // TODO: Replace AgentHub static events with Orleans stream subscriptions
-        AgentHub.OnImageRefreshStatusReceived += HandleRefreshStatus;
-        AgentHub.OnImagePullProgressReceived += HandlePullProgress;
-        AgentHub.OnImagePullCompleteReceived += HandlePullComplete;
-        AgentHub.OnImageDeletedReceived += HandleImageDeleted;
+        StreamSubscriptionService.OnImageRefreshStatusReceived += HandleRefreshStatus;
+        StreamSubscriptionService.OnImagePullProgressReceived += HandlePullProgress;
+        StreamSubscriptionService.OnImagePullCompleteReceived += HandlePullComplete;
+        StreamSubscriptionService.OnImageDeletedReceived += HandleImageDeleted;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -389,27 +387,22 @@
             return;
         }
 
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-        if (agent == null)
+        if (host.AgentStatus != AgentStatus.Online)
         {
             refreshInProgress = false;
             refreshStatusIsError = true;
-            refreshStatus = $"{host.Label} is not currently connected.";
+            refreshStatus = $"{host.Label} is not currently online.";
             return;
         }
 
-        await HubContext.Clients.Client(agent.ConnectionId)
-            .ListImages(new ListImagesCommand());
+        await HostCommandDispatcher.DispatchListImagesAsync(host.Id, new ListImagesCommand());
     }
 
     private async Task StartPull()
     {
         var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
         if (host == null) return;
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-        if (agent == null) return;
+        if (host.AgentStatus != AgentStatus.Online) return;
 
         var registry = registries.FirstOrDefault(r => r.Id == pullRegistryId);
 
@@ -429,7 +422,7 @@
             Password = registry?.Password
         };
 
-        await HubContext.Clients.Client(agent.ConnectionId).PullImage(command);
+        await HostCommandDispatcher.DispatchPullImageAsync(host.Id, command);
     }
 
     private async Task ConfirmAndDeleteImage(AgentImage img)
@@ -442,11 +435,8 @@
     {
         var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
         if (host == null) return;
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-        if (agent == null) return;
 
-        await HubContext.Clients.Client(agent.ConnectionId).DeleteImage(new DeleteImageCommand
+        await HostCommandDispatcher.DispatchDeleteImageAsync(host.Id, new DeleteImageCommand
         {
             ImageType = img.ImageType,
             ImageId = img.ImageId ?? img.Repository,
@@ -599,9 +589,9 @@
 
     public void Dispose()
     {
-        AgentHub.OnImageRefreshStatusReceived -= HandleRefreshStatus;
-        AgentHub.OnImagePullProgressReceived -= HandlePullProgress;
-        AgentHub.OnImagePullCompleteReceived -= HandlePullComplete;
-        AgentHub.OnImageDeletedReceived -= HandleImageDeleted;
+        StreamSubscriptionService.OnImageRefreshStatusReceived -= HandleRefreshStatus;
+        StreamSubscriptionService.OnImagePullProgressReceived -= HandlePullProgress;
+        StreamSubscriptionService.OnImagePullCompleteReceived -= HandlePullComplete;
+        StreamSubscriptionService.OnImageDeletedReceived -= HandleImageDeleted;
     }
 }

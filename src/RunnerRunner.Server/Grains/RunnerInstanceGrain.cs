@@ -14,8 +14,8 @@ namespace RunnerRunner.Server.Grains;
 
 // TODO: Add host-affinity grain placement so this grain activates on the silo
 // whose "hostId" metadata matches the runner's assigned host. This enables
-// local backend execution (Docker/Tart/Native) without SignalR round-trips.
-// See HostGrain.cs for placement strategy options.
+// local backend execution (Docker/Tart/Native) without process-local service lookups.
+// The production path dispatches commands over Orleans streams to the matching HostSilo.
 public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 {
     private readonly IPersistentState<RunnerInstanceGrainState> _state;
@@ -232,9 +232,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
             "TODO: Local deployment of runner {Name} on host {Host} (backend: {Backend})",
             _state.State.RunnerName, _state.State.HostId, command.Backend);
 
-        // In the future, this will call the local DockerBackend/TartBackend/NativeBackend
-        // directly from the grain (when host-affinity placement is active).
-        // For now, the existing Agent + SignalR path handles actual deployment.
+        // Production dispatch goes through HostCommandService on the matching HostSilo.
 
         await MarkStarting("Deploying locally...");
     }
@@ -246,7 +244,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         if (_state.State.Status == RunnerInstanceStatus.Pending)
         {
             _logger.LogWarning("Runner instance {InstanceId} pending timeout", this.GetPrimaryKeyString());
-            await MarkFailed("Deploy timeout — agent did not acknowledge within 2 minutes");
+            await MarkFailed("Deploy timeout — HostSilo did not acknowledge within 2 minutes");
         }
     }
 
@@ -273,7 +271,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         if (_state.State.Status == RunnerInstanceStatus.Stopping)
         {
             _logger.LogWarning("Runner instance {InstanceId} stop timeout", this.GetPrimaryKeyString());
-            await MarkFailed("Stop timeout — agent did not confirm stop within 5 minutes");
+            await MarkFailed("Stop timeout — HostSilo did not confirm stop within 5 minutes");
         }
     }
 

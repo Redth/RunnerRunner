@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Deploys everything in one shot:
 #   1. Server + Host Silo → Docker Compose via SSH to Linux host
-#   2. HostSilo → native binary via SSH to macOS host
+#   2. HostSilo → native binary via SSH to macOS/Windows hosts
 #
 # Usage:
 #   ./deploy/deploy-all.sh            # deploy everything
@@ -255,9 +255,6 @@ services:
       - HostSilo__HostName=linux-host-${LINUX_HOST}
       - HostSilo__Platform=Linux
       - DOTNET_ENVIRONMENT=Production
-      - RunnerRunner__AgentId=linux-host-${LINUX_HOST}
-      - RunnerRunner__AgentName=linux-host-${LINUX_HOST}
-      - RunnerRunner__ServerUrl=http://server:${SERVER_PORT}
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP}
       - Orleans__SiloPort=11112
       - Orleans__GatewayPort=30001
@@ -331,11 +328,6 @@ cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
     "Platform": "MacOS",
     "Architecture": "Arm64"
   },
-  "RunnerRunner": {
-    "AgentId": "mac-host-${MACOS_HOST}",
-    "AgentName": "mac-host-${MACOS_HOST}",
-    "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}"
-  },
   "Database": {
     "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
   },
@@ -404,11 +396,6 @@ cat > "${WINDOWS_PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
     "Platform": "Windows",
     "Architecture": "X64"
   },
-  "RunnerRunner": {
-    "AgentId": "windows-host-${WINDOWS_HOST}",
-    "AgentName": "windows-host-${WINDOWS_HOST}",
-    "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}"
-  },
   "Database": {
     "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
   },
@@ -428,12 +415,10 @@ remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
     "${WINDOWS_PUBLISH_DIR}/." "${WINDOWS_DEPLOY_DIR}/"
 remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
     "${PROJECT_ROOT}/deploy/windows/Install-HostSilo.ps1" "${WINDOWS_DEPLOY_DIR}/Install-HostSilo.ps1"
-remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
-    "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/Dockerfile.windows" "${WINDOWS_DEPLOY_DIR}/Dockerfile.windows"
 
-step "Starting Windows HostSilo (${WINDOWS_MODE})..."
+step "Installing Windows HostSilo service..."
 remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
-    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostSilo.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -Mode '${WINDOWS_MODE}'\""
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostSilo.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -HostId 'windows-host-${WINDOWS_HOST}' -HostName 'windows-host-${WINDOWS_HOST}' -AdvertisedIPAddress '${WINDOWS_HOST}' -DatabaseConnectionString 'Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner'\""
 
 success "Windows HostSilo deployed"
 
@@ -451,7 +436,7 @@ if [[ -n "${MACOS_HOST}" ]]; then
 echo "  macOS Host Silo: Native binary on ${MACOS_HOST}"
 fi
 if [[ -n "${WINDOWS_HOST}" ]]; then
-echo "  Windows Host Silo: ${WINDOWS_MODE} on ${WINDOWS_HOST}"
+echo "  Windows Host Silo: Windows Service on ${WINDOWS_HOST}"
 fi
 echo ""
 echo "  Redeploy:     ./deploy/deploy-all.sh"

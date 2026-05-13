@@ -3,13 +3,11 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Core.Models
-@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Server.Services
-@using Microsoft.AspNetCore.SignalR
 @using RunnerHost = RunnerRunner.Core.Models.Host
 @inject IDocumentStore Store
 @inject IRegistryCatalogService RegistryCatalog
-@inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject IHostCommandDispatcher HostCommandDispatcher
 @inject IJSRuntime JS
 
 <PageTitle>Registries - RunnerRunner</PageTitle>
@@ -820,17 +818,9 @@
         pullRequestInProgress = true;
 
         var requested = 0;
-        var skipped = 0;
         foreach (var host in targetHosts)
         {
-            var agent = AgentHub.GetConnectedAgents().Values.FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-            if (agent == null)
-            {
-                skipped++;
-                continue;
-            }
-
-            await HubContext.Clients.Client(agent.ConnectionId).PullImage(new PullImageCommand
+            await HostCommandDispatcher.DispatchPullImageAsync(host.Id, new PullImageCommand
             {
                 ImageType = registry.RegistryType == RegistryType.Tart ? ImageType.Tart : ImageType.Docker,
                 ImageName = selectedRepository,
@@ -847,10 +837,8 @@
         showPullDialog = false;
         actionIsError = requested == 0;
         actionStatus = requested == 0
-            ? "No connected hosts were available for that pull request."
-            : skipped == 0
-                ? $"Requested pull of {selectedRepository}:{selectedTag} on {requested} host(s)."
-                : $"Requested pull on {requested} host(s); skipped {skipped} host(s) that were not currently connected.";
+            ? "No online hosts were available for that pull request."
+            : $"Requested pull of {selectedRepository}:{selectedTag} on {requested} host(s).";
     }
 
     private IEnumerable<string> GetAvailableGroups() =>

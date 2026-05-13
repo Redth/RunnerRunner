@@ -2,16 +2,14 @@
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
-@using Microsoft.AspNetCore.SignalR
-@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Grains.Events
 @using RunnerRunner.Server.Services
 @inject IDocumentStore Store
-@inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
 @inject CapacityPlanningService CapacityService
+@inject IHostCommandDispatcher HostCommandDispatcher
 @implements IDisposable
 
 <PageTitle>Runner Instances - RunnerRunner</PageTitle>
@@ -218,8 +216,6 @@ else
 @code {
     private List<RunnerInstance> instances = [];
     private Dictionary<string, string> hostNames = new();
-    // LEGACY: Maps host IDs to agent names for AgentHub lookups. Will be removed when using HostGrain.
-    private Dictionary<string, string> hostAgentNames = new();
     private HashSet<string> validHostIds = new();
     private Dictionary<string, string> profileNames = new();
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
@@ -274,7 +270,6 @@ else
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         validHostIds = hosts.Select(h => h.Id).ToHashSet();
         hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
-        hostAgentNames = hosts.ToDictionary(h => h.Id, h => h.Name);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         capacitySnapshot = await CapacityService.GetSnapshotAsync();
 
@@ -396,34 +391,19 @@ else
             expandedHosts.Add(hostId);
     }
 
-    // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
     private async Task StopInstance(RunnerInstance inst)
     {
-        try
-        {
-            var runnerGrain = GrainFactory.GetGrain<IRunnerInstanceGrain>(inst.Id);
-            await runnerGrain.MarkStopping();
-        }
-        catch
-        {
-            // Keep the stop UX functional even if the grain is unavailable transiently.
-        }
+        var runnerGrain = GrainFactory.GetGrain<IRunnerInstanceGrain>(inst.Id);
+        await runnerGrain.MarkStopping();
 
-        var agents = AgentHub.GetConnectedAgents();
-        var agentName = hostAgentNames.GetValueOrDefault(inst.HostId);
-        var agent = agents.Values.FirstOrDefault(a => a.AgentInfo.Name == agentName);
-
-        if (agent != null)
+        await HostCommandDispatcher.DispatchStopRunnerAsync(inst.HostId, new StopRunnerCommand
         {
-            await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
-            {
-                InstanceId = inst.Id,
-                InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
-            });
+            InstanceId = inst.Id,
+            InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
+        });
 
-            inst.Status = RunnerInstanceStatus.Stopping;
-            await Store.Update(inst);
-        }
+        inst.Status = RunnerInstanceStatus.Stopping;
+        await Store.Update(inst);
 
         await Refresh();
     }

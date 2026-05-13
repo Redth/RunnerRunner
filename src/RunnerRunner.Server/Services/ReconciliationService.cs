@@ -1,47 +1,45 @@
-using Microsoft.AspNetCore.SignalR;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
-using RunnerRunner.Server.Hubs;
 using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Services;
 
 /// <summary>
-/// Processes reconciliation reports from agents, marking stale runners and cleaning up orphans.
+/// Processes reconciliation reports from HostSilos, marking stale runners and cleaning up orphans.
 /// </summary>
 public class ReconciliationService : IHostedService, IDisposable
 {
     private readonly ILogger<ReconciliationService> _logger;
     private readonly IServiceProvider _services;
-    private readonly IHubContext<AgentHub, IAgentHubClient> _hubContext;
+    private readonly IHostCommandDispatcher _hostCommands;
 
     public ReconciliationService(
         ILogger<ReconciliationService> logger,
         IServiceProvider services,
-        IHubContext<AgentHub, IAgentHubClient> hubContext)
+        IHostCommandDispatcher hostCommands)
     {
         _logger = logger;
         _services = services;
-        _hubContext = hubContext;
+        _hostCommands = hostCommands;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        AgentHub.OnReconciliationReceived += HandleReconciliation;
+        StreamSubscriptionService.OnReconciliationReportReceived += HandleReconciliation;
         _logger.LogInformation("ReconciliationService started");
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        AgentHub.OnReconciliationReceived -= HandleReconciliation;
+        StreamSubscriptionService.OnReconciliationReportReceived -= HandleReconciliation;
         return Task.CompletedTask;
     }
 
     public void Dispose()
     {
-        AgentHub.OnReconciliationReceived -= HandleReconciliation;
+        StreamSubscriptionService.OnReconciliationReportReceived -= HandleReconciliation;
     }
 
     private async void HandleReconciliation(ReconciliationReport report)
@@ -52,12 +50,13 @@ public class ReconciliationService : IHostedService, IDisposable
             var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
             var registrationCleanup = scope.ServiceProvider.GetRequiredService<RunnerRegistrationCleanupService>();
 
-            // Find the host by matching agent name from connected agents
-            var hostName = report.HostId;
-            var hosts = (await store.Query<Host>().ToList()).Where(h => h.Name == hostName).ToList();
+            var reportHostId = report.HostId;
+            var hosts = (await store.Query<Host>().ToList())
+                .Where(h => h.Id == reportHostId || h.Name == reportHostId)
+                .ToList();
             if (hosts.Count == 0)
             {
-                _logger.LogWarning("No host found for reconciliation report from {Host}", hostName);
+                _logger.LogWarning("No host found for reconciliation report from {Host}", reportHostId);
                 return;
             }
             var hostId = hosts.First().Id;
@@ -114,7 +113,7 @@ public class ReconciliationService : IHostedService, IDisposable
                         registrationCleanup,
                         instance,
                         $"Runner exited on the host before the queued job started ({matchedRunner.Status}); provisioning will be retried");
-                    await SendCleanupCommandAsync(hostName, matchedRunner);
+                    await SendCleanupCommandAsync(hostId, matchedRunner);
                 }
             }
 
@@ -129,7 +128,7 @@ public class ReconciliationService : IHostedService, IDisposable
                         "Sending cleanup for orphaned {Backend} resource {Resource} on host {Host} (running: {Running}, status: {Status})",
                         runner.Backend,
                         runner.ContainerId ?? runner.VmName ?? runner.ProcessId?.ToString() ?? runner.RunnerName,
-                        hostName,
+                        reportHostId,
                         runner.IsRunning,
                         runner.Status);
 
@@ -142,13 +141,7 @@ public class ReconciliationService : IHostedService, IDisposable
                         InstanceDir = runner.InstanceDir
                     };
 
-                    var agent = AgentHub.GetConnectedAgents().Values
-                        .FirstOrDefault(a => a.AgentInfo.Name == hostName);
-
-                    if (agent != null)
-                        await _hubContext.Clients.Client(agent.ConnectionId).CleanupOrphan(command);
-                    else
-                        _logger.LogWarning("No connected agent found for host {Host} to send cleanup", hostName);
+                    await _hostCommands.DispatchCleanupOrphanAsync(hostId, command);
                 }
             }
 
@@ -216,7 +209,7 @@ public class ReconciliationService : IHostedService, IDisposable
         await registrationCleanup.TryRemoveRunnerAsync(store, instance);
     }
 
-    private async Task SendCleanupCommandAsync(string hostName, DiscoveredRunnerInfo runner)
+    private async Task SendCleanupCommandAsync(string hostId, DiscoveredRunnerInfo runner)
     {
         var command = new CleanupOrphanCommand
         {
@@ -227,12 +220,6 @@ public class ReconciliationService : IHostedService, IDisposable
             InstanceDir = runner.InstanceDir
         };
 
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == hostName);
-
-        if (agent != null)
-            await _hubContext.Clients.Client(agent.ConnectionId).CleanupOrphan(command);
-        else
-            _logger.LogWarning("No connected agent found for host {Host} to send cleanup", hostName);
+        await _hostCommands.DispatchCleanupOrphanAsync(hostId, command);
     }
 }

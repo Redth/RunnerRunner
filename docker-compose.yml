@@ -54,9 +54,6 @@ services:
       - HostSilo__HostId=local-docker-host
       - HostSilo__HostName=local-docker-host
       - HostSilo__Platform=Linux
-      - RunnerRunner__AgentId=local-docker-host
-      - RunnerRunner__AgentName=local-docker-host
-      - RunnerRunner__ServerUrl=http://server:4779
       - Orleans__AdvertisedIPAddress=${ORLEANS_HOST_SILO_IP:-}
       - Orleans__SiloPort=11112
       - Orleans__GatewayPort=30001
