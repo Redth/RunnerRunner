@@ -2,17 +2,21 @@
 set -euo pipefail
 
 # ============================================================
-# RunnerRunner — Full Stack Deploy
+# RunnerRunner development/debug full stack deploy
 #
-# Deploys everything in one shot:
-#   1. Server + Host Silo → Docker Compose via SSH to Linux host
-#   2. HostSilo → native binary via SSH to macOS/Windows hosts
+# Deploys local builds in one shot:
+#   1. Server + HostWorker → Docker Compose via SSH to Linux host
+#   2. HostWorker → native binary via SSH to macOS/Windows hosts
+#
+# This is not the recommended public install/update path. Consumer installs should
+# use GitHub Release artifacts, runnerrunner-server update, and HostWorker updates
+# from the Hosts page. Keep this script for pushing local builds to lab machines.
 #
 # Usage:
 #   ./deploy/deploy-all.sh            # deploy everything
 #   ./deploy/deploy-all.sh linux      # deploy Linux stack only
-#   ./deploy/deploy-all.sh macos      # deploy macOS HostSilo only
-#   ./deploy/deploy-all.sh windows    # deploy Windows HostSilo only
+#   ./deploy/deploy-all.sh macos      # deploy macOS HostWorker only
+#   ./deploy/deploy-all.sh windows    # deploy Windows HostWorker only
 #
 # Configuration:
 #   Copy deploy/.env.example to deploy/.env and fill in passwords.
@@ -44,6 +48,9 @@ LINUX_USER="${LINUX_USER:-root}"
 LINUX_PASSWORD="${LINUX_PASSWORD:-}"
 LINUX_DEPLOY_DIR="${LINUX_DEPLOY_DIR:-/opt/stacks/runnerrunner}"
 SERVER_PORT="${SERVER_PORT:-4779}"
+HOSTWORKER_ENROLLMENT_TOKEN="${HOSTWORKER_ENROLLMENT_TOKEN:-dev-hostworker-token}"
+MACOS_HOSTWORKER_ENROLLMENT_TOKEN="${MACOS_HOSTWORKER_ENROLLMENT_TOKEN:-${HOSTWORKER_ENROLLMENT_TOKEN}}"
+WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN="${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN:-${HOSTWORKER_ENROLLMENT_TOKEN}}"
 
 MACOS_HOST="${MACOS_HOST:-}"
 MACOS_SSH_PORT="${MACOS_SSH_PORT:-22}"
@@ -155,7 +162,7 @@ REMOTE_SSH_PORT="${LINUX_SSH_PORT}"
 log "Phase 1: Building Docker images"
 
 SERVER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/server:latest"
-HOST_SILO_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/host-silo:latest"
+HOST_WORKER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/hostworker:latest"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 step "Building server image (${DOCKER_PLATFORM})..."
@@ -163,9 +170,9 @@ docker build --platform "${DOCKER_PLATFORM}" -t "${SERVER_IMAGE}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.Server/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
-step "Building host-silo image (${DOCKER_PLATFORM})..."
-docker build --platform "${DOCKER_PLATFORM}" -t "${HOST_SILO_IMAGE}" \
-    -f "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/Dockerfile" \
+step "Building host-worker image (${DOCKER_PLATFORM})..."
+docker build --platform "${DOCKER_PLATFORM}" -t "${HOST_WORKER_IMAGE}" \
+    -f "${PROJECT_ROOT}/src/RunnerRunner.HostWorker/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
 success "Images built"
@@ -178,9 +185,9 @@ log "Phase 2: Pushing images to ${REGISTRY_URL}"
 step "Pushing server image..."
 docker push "${SERVER_IMAGE}" --quiet
 
-step "Pushing host-silo image..."
-docker push "${HOST_SILO_IMAGE}" --quiet
-echo "${HOST_SILO_IMAGE}"
+step "Pushing host-worker image..."
+docker push "${HOST_WORKER_IMAGE}" --quiet
+echo "${HOST_WORKER_IMAGE}"
 
 success "Images pushed to registry"
 
@@ -228,6 +235,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
+      - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN}
       - ASPNETCORE_URLS=http://+:${SERVER_PORT}
       - OTEL_SERVICE_NAME=runnerrunner-server
       - DOTNET_ENVIRONMENT=Production
@@ -241,26 +249,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  host-silo:
-    image: ${HOST_SILO_IMAGE}
-    container_name: runnerrunner-host-silo
-    ports:
-      - "${LINUX_BIND_IP}:11112:11112"
-      - "${LINUX_BIND_IP}:30001:30001"
+  host-worker:
+    image: ${HOST_WORKER_IMAGE}
+    container_name: runnerrunner-host-worker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - hostworker-data:/var/lib/runnerrunner
     environment:
-      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
-      - HostSilo__HostId=linux-host-${LINUX_HOST}
-      - HostSilo__HostName=linux-host-${LINUX_HOST}
-      - HostSilo__Platform=Linux
+      - HostWorker__ServerUrl=http://server:${SERVER_PORT}
+      - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN}
+      - HostWorker__HostId=linux-host-${LINUX_HOST}
+      - HostWorker__HostName=linux-host-${LINUX_HOST}
+      - HostWorker__Platform=Linux
+      - HostWorker__DataRoot=/var/lib/runnerrunner
       - DOTNET_ENVIRONMENT=Production
-      - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP}
-      - Orleans__SiloPort=11112
-      - Orleans__GatewayPort=30001
     depends_on:
-      postgres:
-        condition: service_healthy
       server:
         condition: service_started
     restart: unless-stopped
@@ -268,6 +271,7 @@ services:
 volumes:
   server-data:
   postgres-data:
+  hostworker-data:
 COMPOSE_EOF
 
 step "Copying docker-compose.yml to ${LINUX_HOST}..."
@@ -288,10 +292,10 @@ if ! remote_ssh "${LINUX_USER}" "${LINUX_HOST}" "${LINUX_PASSWORD}" \
     "cd ${LINUX_DEPLOY_DIR} && docker compose pull --quiet"; then
     step "Remote registry pull failed; streaming fresh app images directly to the host..."
     if [[ -n "${LINUX_PASSWORD}" ]]; then
-        docker save "${SERVER_IMAGE}" "${HOST_SILO_IMAGE}" | \
+        docker save "${SERVER_IMAGE}" "${HOST_WORKER_IMAGE}" | \
             sshpass -p "${LINUX_PASSWORD}" ssh -o StrictHostKeyChecking=no "${LINUX_USER}@${LINUX_HOST}" "docker load"
     else
-        docker save "${SERVER_IMAGE}" "${HOST_SILO_IMAGE}" | \
+        docker save "${SERVER_IMAGE}" "${HOST_WORKER_IMAGE}" | \
             ssh "${LINUX_USER}@${LINUX_HOST}" "docker load"
     fi
 fi
@@ -308,40 +312,36 @@ if [[ "${DEPLOY_TARGET}" == "all" || "${DEPLOY_TARGET}" == "macos" ]]; then
 REMOTE_SSH_PORT="${MACOS_SSH_PORT}"
 
 # ============================================================
-# PHASE 4: Deploy HostSilo to macOS host
+# PHASE 4: Deploy HostWorker to macOS host
 # ============================================================
-log "Phase 4: Deploying HostSilo to macOS (${MACOS_USER}@${MACOS_HOST})"
+log "Phase 4: Deploying HostWorker to macOS (${MACOS_USER}@${MACOS_HOST})"
 
-# Publish HostSilo for macOS ARM64
-step "Publishing RunnerRunner.HostSilo (osx-arm64, self-contained)..."
-PUBLISH_DIR="${PROJECT_ROOT}/artifacts/macos-hostsilo"
-dotnet publish "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/RunnerRunner.HostSilo.csproj" \
+# Publish HostWorker for macOS ARM64
+step "Publishing RunnerRunner.HostWorker (osx-arm64, self-contained)..."
+PUBLISH_DIR="${PROJECT_ROOT}/artifacts/macos-hostworker"
+dotnet publish "${PROJECT_ROOT}/src/RunnerRunner.HostWorker/RunnerRunner.HostWorker.csproj" \
     -c Release -r osx-arm64 --self-contained \
     -o "${PUBLISH_DIR}" -v quiet
 
 step "Generating appsettings.Production.json..."
 cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
 {
-  "HostSilo": {
+  "HostWorker": {
+    "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}",
+    "EnrollmentToken": "${MACOS_HOSTWORKER_ENROLLMENT_TOKEN}",
     "HostId": "mac-host-${MACOS_HOST}",
     "HostName": "mac-host-${MACOS_HOST}",
     "Platform": "MacOS",
     "Architecture": "Arm64"
-  },
-  "Database": {
-    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
-  },
-  "Orleans": {
-    "AdvertisedIPAddress": "${MACOS_HOST}"
   },
   "DOTNET_ENVIRONMENT": "Production"
 }
 SETTINGS_EOF
 
 # Stop existing process(es), including any leftover legacy agent
-step "Stopping existing HostSilo/legacy agent..."
+step "Stopping existing HostWorker/legacy agent..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
-    "pids=\$(ps ax -o pid= -o command= | awk '/RunnerRunner\\.(HostSilo|Agent)/ && !/awk/ {print \$1}'); \
+    "pids=\$(ps ax -o pid= -o command= | awk '/RunnerRunner\\.(HostWorker|Agent)/ && !/awk/ {print \$1}'); \
      if [ -n \"\$pids\" ]; then \
        for pid in \$pids; do kill \"\$pid\" 2>/dev/null || true; done; \
        sleep 2; \
@@ -351,7 +351,7 @@ remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
 sleep 2
 
 # Copy binary
-step "Copying HostSilo to ${MACOS_HOST}:/opt/runnerrunner/..."
+step "Copying HostWorker to ${MACOS_HOST}:/opt/runnerrunner/..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
     "mkdir -p /opt/runnerrunner"
 for f in "${PUBLISH_DIR}"/*; do
@@ -362,14 +362,14 @@ done
 # Codesign (Gatekeeper fix)
 step "Codesigning binary..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
-    "codesign --force -s - /opt/runnerrunner/RunnerRunner.HostSilo"
+    "codesign --force -s - /opt/runnerrunner/RunnerRunner.HostWorker"
 
 # Start via nohup
-step "Starting HostSilo..."
+step "Starting HostWorker..."
 remote_ssh "${MACOS_USER}" "${MACOS_HOST}" "${MACOS_PASSWORD}" \
-    "cd /opt/runnerrunner && DOTNET_ENVIRONMENT=Production nohup ./RunnerRunner.HostSilo > /tmp/runnerrunner-hostsilo.log 2>&1 & sleep 1"
+    "cd /opt/runnerrunner && DOTNET_ENVIRONMENT=Production nohup ./RunnerRunner.HostWorker > /tmp/runnerrunner-hostworker.log 2>&1 & sleep 1"
 
-success "macOS HostSilo deployed"
+success "macOS HostWorker deployed"
 
 fi # end macos
 
@@ -377,30 +377,26 @@ if [[ "${DEPLOY_TARGET}" == "windows" || ( "${DEPLOY_TARGET}" == "all" && -n "${
 REMOTE_SSH_PORT="${WINDOWS_SSH_PORT}"
 
 # ============================================================
-# PHASE 5: Deploy HostSilo to Windows host
+# PHASE 5: Deploy HostWorker to Windows host
 # ============================================================
-log "Phase 5: Deploying HostSilo to Windows (${WINDOWS_USER}@${WINDOWS_HOST})"
+log "Phase 5: Deploying HostWorker to Windows (${WINDOWS_USER}@${WINDOWS_HOST})"
 
-step "Publishing RunnerRunner.HostSilo (win-x64, self-contained)..."
-WINDOWS_PUBLISH_DIR="${PROJECT_ROOT}/artifacts/windows-hostsilo"
-dotnet publish "${PROJECT_ROOT}/src/RunnerRunner.HostSilo/RunnerRunner.HostSilo.csproj" \
+step "Publishing RunnerRunner.HostWorker (win-x64, self-contained)..."
+WINDOWS_PUBLISH_DIR="${PROJECT_ROOT}/artifacts/windows-hostworker"
+dotnet publish "${PROJECT_ROOT}/src/RunnerRunner.HostWorker/RunnerRunner.HostWorker.csproj" \
     -c Release -r win-x64 --self-contained \
     -o "${WINDOWS_PUBLISH_DIR}" -v quiet
 
 step "Generating Windows appsettings.Production.json..."
 cat > "${WINDOWS_PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
 {
-  "HostSilo": {
+  "HostWorker": {
+    "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}",
+    "EnrollmentToken": "${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN}",
     "HostId": "windows-host-${WINDOWS_HOST}",
     "HostName": "windows-host-${WINDOWS_HOST}",
     "Platform": "Windows",
     "Architecture": "X64"
-  },
-  "Database": {
-    "ConnectionString": "Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
-  },
-  "Orleans": {
-    "AdvertisedIPAddress": "${WINDOWS_HOST}"
   },
   "DOTNET_ENVIRONMENT": "Production"
 }
@@ -410,17 +406,17 @@ step "Preparing remote Windows deploy directory..."
 remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
     "powershell -NoProfile -ExecutionPolicy Bypass -Command \"New-Item -ItemType Directory -Force -Path '${WINDOWS_DEPLOY_DIR}' | Out-Null\""
 
-step "Copying HostSilo files to ${WINDOWS_HOST}:${WINDOWS_DEPLOY_DIR}..."
+step "Copying HostWorker files to ${WINDOWS_HOST}:${WINDOWS_DEPLOY_DIR}..."
 remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
     "${WINDOWS_PUBLISH_DIR}/." "${WINDOWS_DEPLOY_DIR}/"
 remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
-    "${PROJECT_ROOT}/deploy/windows/Install-HostSilo.ps1" "${WINDOWS_DEPLOY_DIR}/Install-HostSilo.ps1"
+    "${PROJECT_ROOT}/deploy/windows/Install-HostWorker.ps1" "${WINDOWS_DEPLOY_DIR}/Install-HostWorker.ps1"
 
-step "Installing Windows HostSilo service..."
+step "Installing Windows HostWorker service..."
 remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
-    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostSilo.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -HostId 'windows-host-${WINDOWS_HOST}' -HostName 'windows-host-${WINDOWS_HOST}' -AdvertisedIPAddress '${WINDOWS_HOST}' -DatabaseConnectionString 'Host=${LINUX_HOST};Port=5433;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner'\""
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostWorker.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -HostId 'windows-host-${WINDOWS_HOST}' -HostName 'windows-host-${WINDOWS_HOST}' -ServerUrl 'http://${LINUX_HOST}:${SERVER_PORT}' -EnrollmentToken '${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN}'\""
 
-success "Windows HostSilo deployed"
+success "Windows HostWorker deployed"
 
 fi # end windows
 
@@ -442,9 +438,9 @@ echo ""
 echo "  Redeploy:     ./deploy/deploy-all.sh"
 echo "  Linux logs:   ssh ${LINUX_USER}@${LINUX_HOST} 'cd ${LINUX_DEPLOY_DIR} && docker compose logs -f'"
 if [[ -n "${MACOS_HOST}" ]]; then
-echo "  macOS logs:   ssh ${MACOS_USER}@${MACOS_HOST} 'tail -f /tmp/runnerrunner-hostsilo.log'"
+echo "  macOS logs:   ssh ${MACOS_USER}@${MACOS_HOST} 'tail -f /tmp/runnerrunner-hostworker.log'"
 fi
 if [[ -n "${WINDOWS_HOST}" ]]; then
-echo "  Windows logs: ssh ${WINDOWS_USER}@${WINDOWS_HOST} 'powershell -Command \"Get-Content -Wait ${WINDOWS_DEPLOY_DIR}/logs/hostsilo.out.log\"'"
+echo "  Windows logs: ssh ${WINDOWS_USER}@${WINDOWS_HOST} 'powershell -Command \"Get-Content -Wait ${WINDOWS_DEPLOY_DIR}/logs/hostworker.out.log\"'"
 fi
 echo ""

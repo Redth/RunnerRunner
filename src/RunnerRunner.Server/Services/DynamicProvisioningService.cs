@@ -14,7 +14,7 @@ namespace RunnerRunner.Server.Services;
 
 /// <summary>
 /// Subscribes to webhook-triggered job-queued events and orchestrates JIT runner provisioning:
-/// host selection → JIT config generation → deploy runner to HostSilo.
+/// host selection → JIT config generation → deploy runner to HostWorker.
 /// Also recovers queued webhook events that were matched but could not be fulfilled immediately.
 /// </summary>
 public class DynamicProvisioningService : BackgroundService
@@ -661,7 +661,7 @@ public class DynamicProvisioningService : BackgroundService
                     store,
                     currentEvent,
                     hostSelection.Reason
-                    ?? $"No online HostSilo matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
+                    ?? $"No online HostWorker matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
                     now,
                     status: hostSelection.CapacityBlocked ? "pending_capacity" : "pending_host_match",
                     countAttempt: false,
@@ -680,7 +680,7 @@ public class DynamicProvisioningService : BackgroundService
             var runnerName = $"{profile.Name}-jit-{shortGuid}";
 
             _logger.LogInformation(
-                "Selected HostSilo {HostName} for dynamic runner {RunnerName} (job {JobId}, recovery={Recovery})",
+                "Selected HostWorker {HostName} for dynamic runner {RunnerName} (job {JobId}, recovery={Recovery})",
                 hostSelection.Host.Name,
                 runnerName,
                 currentEvent.JobId,
@@ -738,7 +738,7 @@ public class DynamicProvisioningService : BackgroundService
             envVars["RR_INSTANCE_ID"] = instanceId;
             envVars["RR_RUNNER_NAME"] = runnerName;
 
-            // Inform the HostSilo if the profile wants a job-started banner hook
+            // Inform the HostWorker if the profile wants a job-started banner hook
             // installed; the host worker picks the right filesystem path per backend.
             if (profile.EmitJobStartedBanner)
                 envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
@@ -1264,7 +1264,7 @@ public class DynamicProvisioningService : BackgroundService
 
         return new HostSelectionResult(
             null,
-            $"No online HostSilo currently matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
+            $"No online HostWorker currently matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
             false);
     }
 

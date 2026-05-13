@@ -12,4 +12,5 @@ public interface IHostCommandDispatcher
     Task DispatchDeleteImageAsync(string hostId, DeleteImageCommand command);
     Task DispatchGetHostLogsAsync(string hostId, GetHostLogsCommand command);
     Task DispatchGetRunnerLogsAsync(string hostId, GetRunnerLogsCommand command);
+    Task DispatchApplyHostWorkerUpdateAsync(string hostId, HostWorkerUpdateCommand command);
 }

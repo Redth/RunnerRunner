@@ -17,22 +17,23 @@ RunnerRunner is a self-hosted CI/CD runner orchestration platform for GitHub Act
                     +------------------+------------------+
                     |                                     |
         +-----------v------------+          +-------------v----------+
-        | RunnerRunner.Server    |          | RunnerRunner.HostSilo  |
+        | RunnerRunner.Server    |          | RunnerRunner.HostWorker  |
         |------------------------|          |------------------------|
-        | Blazor UI              |          | Orleans cluster member |
+        | Blazor UI              |          | Authenticated gRPC     |
         | Webhook API            |          | Host-local execution   |
-        | Orleans streams        |          | Docker/Tart/Native     |
+        | Orleans grains/streams |          | Docker/Tart/Native     |
         | Orleans grains         |          +------------------------+
         | Orleans Dashboard      |
         +-----------+------------+
 ```
 
-The current system uses HostSilo as the only supported host-worker runtime:
+The current system uses HostWorker as the only supported host-worker runtime:
 
 - **Orleans grains** own durable control-plane state for hosts, profiles, provisioning rules, and runner lifecycle.
 - **Shiny DocumentDB** stores queryable PostgreSQL read projections used by the Blazor UI and orchestration services.
-- **Orleans streams** carry host commands, runner status, host status, and reconciliation reports between the server and HostSilo workers.
-- **HostSilo** executes runner work on host-local silos without the legacy SignalR agent.
+- **gRPC HostWorker streams** carry host commands, worker heartbeats, runner events, image events, and log frames between the server and workers.
+- **HostWorker** executes runner work locally without joining the Orleans cluster or needing database credentials.
+- **Host enrollment tokens** are generated per host from the server UI and stored hashed; a shared bootstrap token remains only for bundled/self-contained compose installs.
 
 ## Projects
 
@@ -40,7 +41,7 @@ The current system uses HostSilo as the only supported host-worker runtime:
 |---------|----------------|
 | `RunnerRunner.Core` | Shared domain models, command/event contracts, provider/backend interfaces |
 | `RunnerRunner.Server` | Blazor UI, webhook endpoints, Orleans silo, orchestration services |
-| `RunnerRunner.HostSilo` | Headless Orleans silo deployed on hosts for local runner execution |
+| `RunnerRunner.HostWorker` | Authenticated outbound worker deployed on hosts for local runner execution |
 | `RunnerRunner.Agent` | Reusable runner backend/lifecycle library for Docker, Tart, and Native execution |
 | `RunnerRunner.AppHost` | .NET Aspire local development orchestrator |
 | `RunnerRunner.ServiceDefaults` | OpenTelemetry, health checks, service discovery defaults |
@@ -123,7 +124,7 @@ Static assignment flow:
 1. User assigns a profile to a host with a desired count.
 2. `OrchestrationEngine` wakes every 15 seconds.
 3. It counts active instances for the host/profile assignment.
-4. If current is below desired, it creates runner grains/instances and sends `DeployRunner` to HostSilo over Orleans streams.
+4. If current is below desired, it creates runner grains/instances and sends `DeployRunner` to HostWorker over gRPC.
 5. If current is above desired, it sends `StopRunner`.
 6. Old terminal runner records are removed after a grace period.
 
@@ -154,7 +155,7 @@ Webhook provisioning is job-driven:
 6. A host is selected.
 7. JIT config or registration token is generated for the provider.
 8. A dynamic `RunnerInstance` is initialized.
-9. `DeployRunner` is sent to the selected HostSilo over Orleans streams.
+9. `DeployRunner` is sent to the selected HostWorker over gRPC.
 10. The queued event is marked `provisioned` and linked to the instance.
 11. `in_progress` and `completed` provider events confirm execution and cleanup.
 
@@ -224,7 +225,7 @@ Before capacity is summed, hosts must match:
 - every rule `RequiredHostLabels` key/value pair;
 - Docker host compatibility, when a host advertises `docker_os`.
 
-HostSilo execution also requires the selected host to be online in the Orleans cluster. If capacity exists but the HostSilo is offline, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
+HostWorker execution also requires the selected host to be online in the Orleans cluster. If capacity exists but the HostWorker is offline, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
 
 ### Effective pool math
 
@@ -344,7 +345,7 @@ Key UI pages map directly to the domain model:
 | Profiles | Runner templates, labels, env vars, init steps, images |
 | Provisioning Rules | Static, ScaleSet, Webhook, and future Scheduled rules |
 | Images | Docker/Tart image management |
-| Logs | HostSilo and runner log viewing |
+| Logs | HostWorker and runner log viewing |
 | Env Variables | Reusable environment variable sets |
 | Webhooks / Webhook Events | Provider webhook bindings and audit trail |
 | Settings | Provider and registry credentials |
@@ -356,10 +357,29 @@ Capacity views on rules, profiles, hosts, runners, and events use the same `Capa
 
 | Area | Runtime path |
 |------|--------------|
-| Host connection | HostGrain/HostSilo over Orleans clustering |
-| Runner lifecycle | RunnerInstanceGrain state with HostSilo-local execution |
+| Host connection | HostGrain plus authenticated HostWorker gRPC connection |
+| Runner lifecycle | RunnerInstanceGrain state with HostWorker-local execution |
 | Static provisioning | `RunnerAssignment` plus `ProvisioningRuleGrain` Static |
 | Webhook provisioning | `DynamicProvisioningService` with grain-backed runner instances |
-| Host selection | Capacity service using online HostSilo state and host capabilities |
-| Real-time UI | Orleans streams |
-| Backend execution | Orleans stream commands to HostSilo |
+| Host selection | Capacity service using online HostWorker state and host capabilities |
+| Real-time UI | Orleans streams plus server-side HostWorker log cache |
+| Backend execution | gRPC commands to HostWorker |
+| HostWorker updates | Server checks GitHub Releases, then sends verified update commands over gRPC |
+
+## Release and deployment model
+
+RunnerRunner's public deployment path is release-artifact driven. GitHub Releases publish the Linux compose bundle, native HostWorker assets, checksums, and `release-manifest.json`; server installs update through `runnerrunner-server update`; native HostWorkers update through the Hosts page after the server checks the release catalog.
+
+The SSH-based scripts in `deploy/` remain useful for development and lab debugging because they can push local builds to remote machines. They are not the consumer-facing install or update mechanism and should not be treated as the primary production deployment model.
+
+## HostWorker updates
+
+The server treats GitHub Releases as the update catalog. It reads the latest release, uses `release-manifest.json` for asset checksums, selects the correct HostWorker asset by platform/runtime identifier, and exposes update availability on the Hosts page.
+
+When an operator clicks **Update**, the server sends `ApplyHostWorkerUpdate` to the connected worker. The worker downloads the asset directly from GitHub, verifies SHA256, extracts it to a staging directory, then hands off restart/copy work to launchd, Windows Service recovery, systemd/container restart policies, or an optional configured restart command. Containerized HostWorkers do not self-update; they are updated by the compose image update path.
+
+## Logs and observability
+
+HostWorkers write command journals and log streams locally first, then publish batched log frames over the authenticated gRPC stream. The server stores a bounded recent cache keyed by host and stream so the Logs and Jobs pages can show recent output even when a worker is offline or a live log request times out.
+
+OpenTelemetry is enabled through `RunnerRunner.ServiceDefaults` for server and worker logs, metrics, and traces. OTLP export is opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`; exporter failures are not part of runner correctness. The Linux compose bundle includes an optional `observability` profile with an OpenTelemetry Collector, and production installs can replace that collector/exporter with Grafana/Loki/Tempo/Prometheus, Seq, Azure Monitor, or another OTLP-compatible backend.

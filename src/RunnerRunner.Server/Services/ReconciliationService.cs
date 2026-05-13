@@ -6,7 +6,7 @@ using Host = RunnerRunner.Core.Models.Host;
 namespace RunnerRunner.Server.Services;
 
 /// <summary>
-/// Processes reconciliation reports from HostSilos, marking stale runners and cleaning up orphans.
+/// Processes reconciliation reports from HostWorkers, marking stale runners and cleaning up orphans.
 /// </summary>
 public class ReconciliationService : IHostedService, IDisposable
 {

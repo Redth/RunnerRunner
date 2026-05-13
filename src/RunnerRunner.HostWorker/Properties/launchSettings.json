@@ -1,7 +1,7 @@
 ﻿{
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "RunnerRunner.HostSilo": {
+    "RunnerRunner.HostWorker": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "environmentVariables": {

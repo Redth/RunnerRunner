@@ -4,23 +4,23 @@ set -euo pipefail
 VERSION="${RUNNERRUNNER_VERSION:-latest}"
 INSTALL_ROOT="${INSTALL_ROOT:-${HOME}/.runnerrunner}"
 RELEASE_BASE_URL="${RUNNERRUNNER_RELEASE_BASE_URL:-https://github.com/redth/RunnerRunner/releases/latest/download}"
-SERVICE_LABEL="com.runnerrunner.hostsilo"
+SERVICE_LABEL="com.runnerrunner.hostworker"
 HOST_NAME="${HOST_NAME:-$(hostname -s)}"
 HOST_ID="${HOST_ID:-}"
-DATABASE_CONNECTION="${DATABASE_CONNECTION:-}"
-ADVERTISED_IP="${ADVERTISED_IP:-}"
+SERVER_URL="${SERVER_URL:-}"
+ENROLLMENT_TOKEN="${ENROLLMENT_TOKEN:-}"
 
 usage() {
     cat <<USAGE
-Usage: ./install-host-macos.sh --database-connection CONNECTION_STRING [options]
+Usage: ./install-host-macos.sh --server-url URL --enrollment-token TOKEN [options]
 
 Options:
-  --version VERSION                    HostSilo version to install (default: latest)
+  --version VERSION                    HostWorker version to install (default: latest)
   --install-root PATH                  Install root (default: ~/.runnerrunner)
-  --host-id ID                         Host ID (default: macos-host-\$ADVERTISED_IP or hostname)
+  --host-id ID                         Host ID (default: hostname)
   --host-name NAME                     Display name (default: hostname)
-  --advertised-ip IP                   IP this HostSilo advertises to Orleans
-  --database-connection CONNECTION     PostgreSQL/Orleans connection string
+  --server-url URL                     RunnerRunner server URL, for example https://runner.example.com
+  --enrollment-token TOKEN             Enrollment token created on the server
 
 macOS hosts install as a LaunchAgent for the current interactive user so Tart,
 Xcode, Keychain, and user-session resources remain available.
@@ -33,15 +33,20 @@ while [[ $# -gt 0 ]]; do
         --install-root) INSTALL_ROOT="$2"; shift 2 ;;
         --host-id) HOST_ID="$2"; shift 2 ;;
         --host-name) HOST_NAME="$2"; shift 2 ;;
-        --advertised-ip) ADVERTISED_IP="$2"; shift 2 ;;
-        --database-connection) DATABASE_CONNECTION="$2"; shift 2 ;;
+        --server-url) SERVER_URL="$2"; shift 2 ;;
+        --enrollment-token) ENROLLMENT_TOKEN="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
 
-if [[ -z "${DATABASE_CONNECTION}" ]]; then
-    echo "--database-connection is required for HostSilo trusted-network cluster mode." >&2
+if [[ -z "${SERVER_URL}" ]]; then
+    echo "--server-url is required." >&2
+    exit 1
+fi
+
+if [[ -z "${ENROLLMENT_TOKEN}" ]]; then
+    echo "--enrollment-token is required." >&2
     exit 1
 fi
 
@@ -53,36 +58,30 @@ case "${arch}" in
 esac
 
 if [[ -z "${HOST_ID}" ]]; then
-    if [[ -n "${ADVERTISED_IP}" ]]; then
-        HOST_ID="macos-host-${ADVERTISED_IP}"
-    else
-        HOST_ID="${HOST_NAME}"
-    fi
+    HOST_ID="${HOST_NAME}"
 fi
 
 version_dir="${INSTALL_ROOT}/versions/${VERSION}"
-archive="runnerrunner-hostsilo-${rid}.tar.gz"
+archive="runnerrunner-hostworker-${rid}.tar.gz"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
 
 mkdir -p "${version_dir}" "${INSTALL_ROOT}/logs"
 curl -fsSL "${RELEASE_BASE_URL}/${archive}" -o "${tmp_dir}/${archive}"
 tar -xzf "${tmp_dir}/${archive}" -C "${version_dir}"
-chmod +x "${version_dir}/RunnerRunner.HostSilo"
-codesign --force -s - "${version_dir}/RunnerRunner.HostSilo" >/dev/null 2>&1 || true
+chmod +x "${version_dir}/RunnerRunner.HostWorker"
+codesign --force -s - "${version_dir}/RunnerRunner.HostWorker" >/dev/null 2>&1 || true
 
 cat > "${version_dir}/appsettings.Production.json" <<JSON
 {
-  "HostSilo": {
+  "HostWorker": {
+    "ServerUrl": "${SERVER_URL}",
+    "EnrollmentToken": "${ENROLLMENT_TOKEN}",
     "HostId": "${HOST_ID}",
     "HostName": "${HOST_NAME}",
-    "Platform": "MacOS"
-  },
-  "Database": {
-    "ConnectionString": "${DATABASE_CONNECTION}"
-  },
-  "Orleans": {
-    "AdvertisedIPAddress": "${ADVERTISED_IP}"
+    "Platform": "MacOS",
+    "DataRoot": "${INSTALL_ROOT}",
+    "LogRoot": "${INSTALL_ROOT}/logs"
   }
 }
 JSON
@@ -103,7 +102,7 @@ cat > "${plist_path}" <<PLIST
   <string>${SERVICE_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${INSTALL_ROOT}/current/RunnerRunner.HostSilo</string>
+    <string>${INSTALL_ROOT}/current/RunnerRunner.HostWorker</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${INSTALL_ROOT}/current</string>
@@ -119,9 +118,9 @@ cat > "${plist_path}" <<PLIST
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>${INSTALL_ROOT}/logs/hostsilo.out.log</string>
+  <string>${INSTALL_ROOT}/logs/hostworker.out.log</string>
   <key>StandardErrorPath</key>
-  <string>${INSTALL_ROOT}/logs/hostsilo.err.log</string>
+  <string>${INSTALL_ROOT}/logs/hostworker.err.log</string>
 </dict>
 </plist>
 PLIST
@@ -135,12 +134,12 @@ cat > "${INSTALL_ROOT}/runnerrunner-host" <<HOSTCTL
 set -euo pipefail
 case "\${1:-status}" in
   status) exec launchctl print "gui/$(id -u)/${SERVICE_LABEL}" ;;
-  logs) exec tail -f "${INSTALL_ROOT}/logs/hostsilo.out.log" ;;
+  logs) exec tail -f "${INSTALL_ROOT}/logs/hostworker.out.log" ;;
   restart) exec launchctl kickstart -k "gui/$(id -u)/${SERVICE_LABEL}" ;;
   *) echo "Usage: runnerrunner-host {status|logs|restart}" >&2; exit 1 ;;
 esac
 HOSTCTL
 chmod 0755 "${INSTALL_ROOT}/runnerrunner-host"
 
-echo "RunnerRunner HostSilo ${VERSION} installed for ${HOST_NAME}."
+echo "RunnerRunner HostWorker ${VERSION} installed for ${HOST_NAME}."
 echo "Use: ${INSTALL_ROOT}/runnerrunner-host status | logs | restart"

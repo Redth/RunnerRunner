@@ -125,7 +125,8 @@ public enum HostCommandKind
     PullImage = 4,
     DeleteImage = 5,
     GetHostLogs = 6,
-    GetRunnerLogs = 7
+    GetRunnerLogs = 7,
+    ApplyHostWorkerUpdate = 8
 }
 
 [GenerateSerializer]
@@ -157,6 +158,9 @@ public sealed class HostCommandEnvelope
 
     [Id(8)]
     public GetRunnerLogsCommand? GetRunnerLogs { get; set; }
+
+    [Id(9)]
+    public HostWorkerUpdateCommand? ApplyHostWorkerUpdate { get; set; }
 }
 
 [GenerateSerializer]
@@ -514,4 +518,40 @@ public class RunnerLogsEvent
     public required string InstanceHandle { get; set; }
     [Id(2)]
     public string Logs { get; set; } = "";
+}
+
+[GenerateSerializer]
+public class HostWorkerUpdateCommand
+{
+    [Id(0)]
+    public required string TargetVersion { get; set; }
+    [Id(1)]
+    public required string AssetName { get; set; }
+    [Id(2)]
+    public required string AssetUrl { get; set; }
+    [Id(3)]
+    public required string Sha256 { get; set; }
+    [Id(4)]
+    public bool Force { get; set; }
+}
+
+[GenerateSerializer]
+public class HostWorkerUpdateStatusEvent
+{
+    [Id(0)]
+    public required string HostId { get; set; }
+    [Id(1)]
+    public required string TargetVersion { get; set; }
+    [Id(2)]
+    public string? CurrentVersion { get; set; }
+    [Id(3)]
+    public required string Stage { get; set; }
+    [Id(4)]
+    public string Message { get; set; } = "";
+    [Id(5)]
+    public bool IsComplete { get; set; }
+    [Id(6)]
+    public bool Success { get; set; }
+    [Id(7)]
+    public string? Error { get; set; }
 }

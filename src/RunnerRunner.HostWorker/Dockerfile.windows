@@ -6,4 +6,4 @@ COPY . .
 
 ENV DOTNET_ENVIRONMENT=Production
 
-ENTRYPOINT ["C:\\app\\RunnerRunner.HostSilo.exe"]
+ENTRYPOINT ["C:\\app\\RunnerRunner.HostWorker.exe"]

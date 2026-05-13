@@ -5,9 +5,11 @@
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Grains.Events
 @using RunnerRunner.Server.Services
+@using RunnerRunner.Server.Services.HostWorkers
 @inject IDocumentStore Store
 @inject IGrainFactory GrainFactory
 @inject IHostCommandDispatcher HostCommandDispatcher
+@inject HostWorkerLogCache HostWorkerLogCache
 @implements IDisposable
 
 <PageTitle>Jobs - RunnerRunner</PageTitle>
@@ -869,6 +871,13 @@ else
 
             if (host.AgentStatus != AgentStatus.Online)
             {
+                var cached = GetCachedRunnerLogs(host.Id, job.Instance);
+                if (!string.IsNullOrWhiteSpace(cached))
+                {
+                    logContent = cached;
+                    return;
+                }
+
                 var lines = new List<string>
                 {
                     $"=== Runner: {job.Instance.RunnerName} ===",
@@ -883,7 +892,7 @@ else
                     lines.Add($"Error: {job.Instance.ErrorMessage}");
 
                 lines.Add("");
-                lines.Add("Live log streaming is unavailable because this HostSilo is offline.");
+                lines.Add("Live log streaming is unavailable because this HostWorker is offline.");
 
                 if (host.Platform == HostPlatform.Linux)
                 {
@@ -904,9 +913,17 @@ else
             await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
 
             var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
-            logContent = completedTask == _runnerLogsTcs.Task
-                ? await _runnerLogsTcs.Task
-                : "Timeout waiting for logs from HostSilo.";
+            if (completedTask == _runnerLogsTcs.Task)
+            {
+                logContent = await _runnerLogsTcs.Task;
+            }
+            else
+            {
+                var cached = GetCachedRunnerLogs(host.Id, job.Instance);
+                logContent = !string.IsNullOrWhiteSpace(cached)
+                    ? cached
+                    : "Timeout waiting for logs from HostWorker.";
+            }
         }
         catch (Exception ex)
         {
@@ -923,6 +940,12 @@ else
     {
         _runnerLogsTcs?.TrySetResult(evt.Logs ?? "(empty)");
         InvokeAsync(StateHasChanged);
+    }
+
+    private string GetCachedRunnerLogs(string hostId, RunnerInstance instance)
+    {
+        var streamId = $"runner.{instance.ContainerId ?? instance.RunnerName}";
+        return HostWorkerLogCache.GetTextTail(hostId, streamId, logTailLines);
     }
 
 }

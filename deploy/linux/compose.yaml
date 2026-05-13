@@ -29,38 +29,51 @@ services:
       - server-data:/app/data
     environment:
       Database__ConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:-runnerrunner};Username=${POSTGRES_USER:-runnerrunner};Password=${POSTGRES_PASSWORD}
+      HostWorker__EnrollmentToken: ${HOSTWORKER_ENROLLMENT_TOKEN:?HOSTWORKER_ENROLLMENT_TOKEN must be set}
       ASPNETCORE_URLS: http://+:4779
       DOTNET_ENVIRONMENT: Production
       Orleans__AdvertisedIPAddress: ${ORLEANS_ADVERTISED_IP:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=production}
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
-  host-silo:
-    image: ${HOSTSILO_IMAGE:-ghcr.io/redth/runnerrunner/hostsilo:${RUNNERRUNNER_VERSION:-latest}}
-    container_name: runnerrunner-host-silo
-    ports:
-      - "${LINUX_BIND_IP:-0.0.0.0}:11112:11112"
-      - "${LINUX_BIND_IP:-0.0.0.0}:30001:30001"
+  host-worker:
+    image: ${HOSTWORKER_IMAGE:-ghcr.io/redth/runnerrunner/hostworker:${RUNNERRUNNER_VERSION:-latest}}
+    container_name: runnerrunner-host-worker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - hostworker-data:/var/lib/runnerrunner
     environment:
-      Database__ConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:-runnerrunner};Username=${POSTGRES_USER:-runnerrunner};Password=${POSTGRES_PASSWORD}
-      HostSilo__HostId: ${HOSTSILO_HOST_ID:-local-docker-host}
-      HostSilo__HostName: ${HOSTSILO_HOST_NAME:-local-docker-host}
-      HostSilo__Platform: Linux
+      HostWorker__ServerUrl: http://server:4779
+      HostWorker__EnrollmentToken: ${HOSTWORKER_ENROLLMENT_TOKEN:?HOSTWORKER_ENROLLMENT_TOKEN must be set}
+      HostWorker__HostId: ${HOSTWORKER_HOST_ID:-local-docker-host}
+      HostWorker__HostName: ${HOSTWORKER_HOST_NAME:-local-docker-host}
+      HostWorker__Platform: Linux
+      HostWorker__DataRoot: /var/lib/runnerrunner
       DOTNET_ENVIRONMENT: Production
-      Orleans__AdvertisedIPAddress: ${ORLEANS_HOST_SILO_IP:-}
-      Orleans__SiloPort: 11112
-      Orleans__GatewayPort: 30001
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=production}
     depends_on:
-      postgres:
-        condition: service_healthy
       server:
         condition: service_started
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: runnerrunner-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    profiles: ["observability"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${LINUX_BIND_IP:-0.0.0.0}:4317:4317"
+      - "${LINUX_BIND_IP:-0.0.0.0}:4318:4318"
     restart: unless-stopped
 
 volumes:
   postgres-data:
   server-data:
+  hostworker-data:

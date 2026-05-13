@@ -33,8 +33,8 @@ public class ServerHostRegistrationService : BackgroundService
             ? $"linux-host-{advertisedIp}"
             : $"server-{Environment.MachineName}";
 
-        var hostId = _config["HostSilo:HostId"] ?? defaultHostId;
-        var hostName = _config["HostSilo:HostName"] ?? hostId;
+        var hostId = _config["HostWorker:HostId"] ?? defaultHostId;
+        var hostName = _config["HostWorker:HostName"] ?? hostId;
 
         _logger.LogInformation("Registering server as host: {HostId}", hostId);
 

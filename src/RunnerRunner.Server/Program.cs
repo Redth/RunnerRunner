@@ -3,11 +3,21 @@ using RunnerRunner.Server.Data;
 using RunnerRunner.Server.Hubs;
 using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Services;
+using RunnerRunner.Server.Services.HostWorkers;
 using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ConfigureEndpointDefaults(listenOptions =>
+    {
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+    });
+});
 
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
 builder.AddServiceDefaults();
@@ -20,6 +30,7 @@ builder.Services.AddRunnerRunnerDocumentStore(pgConnectionString);
 
 // SignalR remains available only for legacy log/image compatibility surfaces.
 builder.Services.AddSignalR();
+builder.Services.AddGrpc();
 
 // HTTP client for provider APIs
 builder.Services.AddHttpClient();
@@ -100,7 +111,11 @@ builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<JitConfigService>();
 builder.Services.AddSingleton<RunnerRegistrationCleanupService>();
 builder.Services.AddSingleton<IRegistryCatalogService, RegistryCatalogService>();
-builder.Services.AddSingleton<IHostCommandDispatcher, OrleansHostCommandDispatcher>();
+builder.Services.AddSingleton<HostWorkerConnectionRegistry>();
+builder.Services.AddSingleton<HostWorkerLogCache>();
+builder.Services.AddSingleton<HostWorkerUpdateService>();
+builder.Services.AddSingleton<HostWorkerEventProcessor>();
+builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
 builder.Services.AddScoped<CapacityPlanningService>();
 
 // === Orleans Grain Architecture (Phase 5) ===
@@ -118,7 +133,6 @@ builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
 builder.Services.AddHostedService<StreamSubscriptionService>();
-builder.Services.AddHostedService<ServerHostRegistrationService>();
 builder.Services.AddHostedService<GitHubRunnerSweepService>();
 builder.Services.AddHostedService<ReconciliationService>();    // extra stale/orphan cleanup during migration
 builder.Services.AddHostedService<RunnerTimeoutService>();     // catches stuck pre-registration / stale instances
@@ -146,8 +160,9 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-// Legacy compatibility hub; HostSilo runtime commands use Orleans streams.
+// Legacy compatibility hub; HostWorker runtime commands use gRPC.
 app.MapHub<AgentHub>("/hubs/agent");
+app.MapGrpcService<HostWorkerGrpcService>();
 
 // Webhook endpoints for GitHub/Gitea workflow_job events
 app.MapWebhookEndpoints();

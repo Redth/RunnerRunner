@@ -6,6 +6,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
     <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" Version="10.0.1" />
     <PackageReference Include="Microsoft.Orleans.Dashboard" Version="10.0.1" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.0.1" />

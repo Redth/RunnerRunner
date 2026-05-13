@@ -10,7 +10,7 @@ namespace RunnerRunner.Server.Services;
 
 /// <summary>
 /// Desired-state reconciliation engine. Periodically compares desired runner assignments
-/// against actual running instances and issues deploy/stop commands to HostSilo workers.
+/// against actual running instances and issues deploy/stop commands to HostWorkers.
 /// </summary>
 public class OrchestrationEngine : BackgroundService
 {
@@ -35,7 +35,7 @@ public class OrchestrationEngine : BackgroundService
     {
         _logger.LogInformation("Orchestration engine started");
 
-        // Wait a bit for HostSilos to register on startup.
+        // Wait a bit for HostWorkers to register on startup.
         await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -69,7 +69,7 @@ public class OrchestrationEngine : BackgroundService
 
         var onlineHosts = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
 
-        _logger.LogInformation("Reconciling: {Assignments} assignments, {OnlineHosts} online HostSilos, {Hosts} hosts",
+        _logger.LogInformation("Reconciling: {Assignments} assignments, {OnlineHosts} online HostWorkers, {Hosts} hosts",
             assignments.Count, onlineHosts, hosts.Count);
 
         foreach (var assignment in assignments)
@@ -81,7 +81,7 @@ public class OrchestrationEngine : BackgroundService
                 continue;
             }
 
-            // Find the host record and ensure its HostSilo is online.
+            // Find the host record and ensure its HostWorker is online.
             var host = hosts.FirstOrDefault(h => h.Id == assignment.HostId);
             if (host == null)
             {
@@ -91,7 +91,7 @@ public class OrchestrationEngine : BackgroundService
 
             if (host.AgentStatus != AgentStatus.Online)
             {
-                _logger.LogInformation("Host {HostName} (id:{HostId}) HostSilo is {Status}, skipping.",
+                _logger.LogInformation("Host {HostName} (id:{HostId}) HostWorker is {Status}, skipping.",
                     host.Name, host.Id, host.AgentStatus);
                 continue;
             }
@@ -227,7 +227,7 @@ public class OrchestrationEngine : BackgroundService
         }
 
         // Install RR_HOOK_* sentinel + RR_META_* bag before the deploy command
-        // is built so the HostSilo can both honor the job-started banner request
+        // is built so the HostWorker can both honor the job-started banner request
         // and populate it with consistent metadata.
         if (profile.EmitJobStartedBanner)
             envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
@@ -239,7 +239,7 @@ public class OrchestrationEngine : BackgroundService
         // backend/image/host info without bloating the runner name.
         var effectiveLabels = RunnerMetadataBuilder.MergeMetadataLabels(profile.Labels, profile, host);
 
-        // Send deploy command to the host-local HostSilo.
+        // Send deploy command to the host-local HostWorker.
         var initSteps = await InitStepResolver.ResolveAsync(
             store, profile, envVars, profile.ExecutionBackend, host?.Platform ?? HostPlatform.Linux);
 

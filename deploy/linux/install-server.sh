@@ -17,7 +17,7 @@ Options:
   --bind-ip IP                   IP used for published Docker ports (default: 0.0.0.0)
   --server-port PORT             Server HTTP port (default: 4779)
   --orleans-ip IP                IP advertised by the server Orleans silo
-  --host-silo-ip IP              IP advertised by the bundled Linux HostSilo
+  --enrollment-token TOKEN       Bootstrap enrollment token for bundled HostWorker
   --postgres-password PASSWORD   PostgreSQL password (generated if omitted)
 USAGE
 }
@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
         --bind-ip) LINUX_BIND_IP="$2"; shift 2 ;;
         --server-port) SERVER_PORT="$2"; shift 2 ;;
         --orleans-ip) ORLEANS_ADVERTISED_IP="$2"; shift 2 ;;
-        --host-silo-ip) ORLEANS_HOST_SILO_IP="$2"; shift 2 ;;
+        --enrollment-token) HOSTWORKER_ENROLLMENT_TOKEN="$2"; shift 2 ;;
         --postgres-password) POSTGRES_PASSWORD="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -71,6 +71,7 @@ fi
 
 if [[ ! -f "${INSTALL_DIR}/.env" ]]; then
     generated_password="${POSTGRES_PASSWORD:-$(generate_password)}"
+    generated_enrollment_token="${HOSTWORKER_ENROLLMENT_TOKEN:-$(generate_password)}"
     cat > "${INSTALL_DIR}/.env" <<ENV
 RUNNERRUNNER_VERSION=${VERSION}
 POSTGRES_DB=runnerrunner
@@ -80,9 +81,9 @@ LINUX_BIND_IP=${LINUX_BIND_IP:-0.0.0.0}
 SERVER_PORT=${SERVER_PORT:-4779}
 POSTGRES_PORT=${POSTGRES_PORT:-5433}
 ORLEANS_ADVERTISED_IP=${ORLEANS_ADVERTISED_IP:-}
-ORLEANS_HOST_SILO_IP=${ORLEANS_HOST_SILO_IP:-}
-HOSTSILO_HOST_ID=${HOSTSILO_HOST_ID:-local-docker-host}
-HOSTSILO_HOST_NAME=${HOSTSILO_HOST_NAME:-local-docker-host}
+HOSTWORKER_ENROLLMENT_TOKEN=${generated_enrollment_token}
+HOSTWORKER_HOST_ID=${HOSTWORKER_HOST_ID:-local-docker-host}
+HOSTWORKER_HOST_NAME=${HOSTWORKER_HOST_NAME:-local-docker-host}
 ENV
     chmod 0600 "${INSTALL_DIR}/.env"
 else

@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+option csharp_namespace = "RunnerRunner.Core.HostWorkers";
+
+package runnerrunner.hostworker.v1;
+
+service HostWorkerControl {
+  rpc Connect(stream HostWorkerMessage) returns (stream HostWorkerMessage);
+}
+
+message HostWorkerMessage {
+  string message_id = 1;
+  string host_id = 2;
+  string kind = 3;
+  string command_id = 4;
+  string idempotency_key = 5;
+  string payload_json = 6;
+  int64 sequence = 7;
+  int64 offset = 8;
+  bytes data = 9;
+}

@@ -4,12 +4,14 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Services
+@using RunnerRunner.Server.Services.HostWorkers
 @using Microsoft.AspNetCore.Components
 @inject IDocumentStore Store
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
 @inject IHostCommandDispatcher HostCommandDispatcher
+@inject HostWorkerLogCache HostWorkerLogCache
 @implements IDisposable
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
@@ -124,7 +126,7 @@
             <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
         </div>
         <div class="text-muted mt-2" style="font-size: 0.75rem;">
-            Host and runner logs are loaded on demand from HostSilo when available.
+            Host and runner logs are loaded on demand from HostWorker when available.
         </div>
     </div>
 </div>
@@ -317,6 +319,10 @@
 
         if (host.AgentStatus != AgentStatus.Online)
         {
+            var cached = GetCachedRunnerLogs(host.Id, instance);
+            if (!string.IsNullOrWhiteSpace(cached))
+                return cached;
+
             var lines = new List<string>
             {
                 $"\x1b[1;36m=== Runner: {instance.RunnerName} ===\x1b[0m",
@@ -329,8 +335,8 @@
                 lines.Add($"Detail: {instance.StatusMessage}");
 
             lines.Add("");
-            lines.Add("\x1b[33mDirect live log streaming is unavailable because this HostSilo is offline.\x1b[0m");
-            lines.Add("\x1b[90mThe runner is tracked by the Orleans lifecycle model, but live log streaming requires an online HostSilo.\x1b[0m");
+            lines.Add("\x1b[33mDirect live log streaming is unavailable because this HostWorker is offline.\x1b[0m");
+            lines.Add("\x1b[90mThe runner is tracked by the Orleans lifecycle model, but live log streaming requires an online HostWorker.\x1b[0m");
             lines.Add("");
             lines.AddRange(GetManualLogHints(host, instance));
             return string.Join("\n", lines);
@@ -346,7 +352,10 @@
         if (completedTask == _runnerLogsTcs.Task)
             return await _runnerLogsTcs.Task;
 
-        return $"\x1b[33mTimeout waiting for logs from host.\x1b[0m";
+        var cachedTail = GetCachedRunnerLogs(host.Id, instance);
+        return !string.IsNullOrWhiteSpace(cachedTail)
+            ? cachedTail
+            : $"\x1b[33mTimeout waiting for logs from host.\x1b[0m";
     }
 
     private void OnRunnerLogsReceived(RunnerLogsEvent evt)
@@ -365,7 +374,7 @@
         var onlineHosts = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
 
         lines.Add($"\x1b[1mHosts online in cluster:\x1b[0m {onlineHosts}/{hosts.Count}");
-        lines.Add($"\x1b[1mLive HostSilo log sources:\x1b[0m {onlineHosts}");
+        lines.Add($"\x1b[1mLive HostWorker log sources:\x1b[0m {onlineHosts}");
         lines.Add("");
 
         foreach (var host in hosts.OrderBy(h => h.Label))
@@ -404,7 +413,7 @@
         if (host.AgentStatus == AgentStatus.Online)
         {
             lines.Add($"\x1b[1mLive host log tail:\x1b[0m last {tailLines} lines");
-            lines.Add("\x1b[90mLoaded on demand from HostSilo.\x1b[0m");
+            lines.Add("\x1b[90mLoaded on demand from HostWorker.\x1b[0m");
             lines.Add("");
 
             var liveLogs = await RequestHostLogsAsync(host);
@@ -415,8 +424,15 @@
         }
         else
         {
-            lines.Add("\x1b[33mDirect live host log streaming is unavailable because this HostSilo is offline.\x1b[0m");
-            lines.Add("\x1b[90mThis host is registered with the cluster, but live log streaming requires an online HostSilo.\x1b[0m");
+            lines.Add("\x1b[33mDirect live host log streaming is unavailable because this HostWorker is offline.\x1b[0m");
+            lines.Add("\x1b[90mThis host is registered with the cluster, but live log streaming requires an online HostWorker.\x1b[0m");
+            var cachedTail = HostWorkerLogCache.GetTextTail(host.Id, "worker.process", tailLines);
+            if (!string.IsNullOrWhiteSpace(cachedTail))
+            {
+                lines.Add("");
+                lines.Add($"\x1b[1mCached host log tail:\x1b[0m last {tailLines} frames retained by the server");
+                lines.Add(cachedTail);
+            }
             lines.Add("");
         }
 
@@ -487,8 +503,20 @@
         if (completedTask == _hostLogsTcs.Task)
             return await _hostLogsTcs.Task;
 
-        return "\x1b[33mTimeout waiting for host logs.\x1b[0m";
+        var cachedTail = HostWorkerLogCache.GetTextTail(host.Id, "worker.process", tailLines);
+        return !string.IsNullOrWhiteSpace(cachedTail)
+            ? cachedTail
+            : "\x1b[33mTimeout waiting for host logs.\x1b[0m";
     }
+
+    private string GetCachedRunnerLogs(string hostId, RunnerInstance instance)
+    {
+        var streamId = GetRunnerLogStreamId(instance);
+        return HostWorkerLogCache.GetTextTail(hostId, streamId, tailLines);
+    }
+
+    private static string GetRunnerLogStreamId(RunnerInstance instance)
+        => $"runner.{instance.ContainerId ?? instance.RunnerName}";
 
     private void OnHostLogsReceived(HostLogsEvent evt)
     {
@@ -511,11 +539,11 @@
         }
         else if (host.Platform == HostPlatform.MacOS)
         {
-            lines.Add($"\x1b[90m  ssh <user>@{host.Name} 'tail -{tailLines} /tmp/runnerrunner-hostsilo.log'\x1b[0m");
+            lines.Add($"\x1b[90m  ssh <user>@{host.Name} 'tail -{tailLines} /tmp/runnerrunner-hostworker.log'\x1b[0m");
         }
         else
         {
-            lines.Add("\x1b[90m  Check the local HostSilo service logs on the target machine.\x1b[0m");
+            lines.Add("\x1b[90m  Check the local HostWorker service logs on the target machine.\x1b[0m");
         }
 
         if (instance != null)
