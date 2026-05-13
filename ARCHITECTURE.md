@@ -1,578 +1,378 @@
 # RunnerRunner Architecture
 
-RunnerRunner is a self-hosted CI/CD runner orchestration platform that manages GitHub Actions, Gitea Actions, and Azure DevOps runners across heterogeneous machines (macOS, Linux, Windows) from a single web UI.
+RunnerRunner is a self-hosted CI/CD runner orchestration platform for GitHub Actions, Gitea Actions, and Azure DevOps runners. It separates the desired state of runners from the machines that execute them, then continuously reconciles rules, profiles, hosts, and runner instances until the fleet matches demand.
 
-## System Overview
+## System overview
 
 ```
-                          +----------------+
-                          |  PostgreSQL 17 |
-                          |  (shared DB)   |
-                          +-------+--------+
-                                  |
-              +-------------------+-------------------+
-              |                   |                   |
-   +----------v-----------+  +---v-----------+  +---v-----------+
-   |    Server Silo        |  |  Host Silo    |  |  Host Silo    |
-   |                       |  |  (Linux)      |  |  (macOS)      |
-   | +-------------------+ |  |               |  |               |
-   | | Blazor Web UI     | |  | +-----------+ |  | +-----------+ |
-   | | (14 pages)        | |  | | Docker    | |  | | Tart      | |
-   | +-------------------+ |  | | Backend   | |  | | Backend   | |
-   | | Webhook API       | |  | +-----------+ |  | +-----------+ |
-   | | Orleans Dashboard | |  | | Native    | |  | | Native    | |
-   | +-------------------+ |  | | Backend   | |  | | Backend   | |
-   | | Orleans Grains    | |  | +-----------+ |  | +-----------+ |
-   | | SchedulerGrain    | |  |               |  |               |
-   | | WebhookProcessor  | |  | Orleans Silo  |  | Orleans Silo  |
-   | | ProfileGrain      | |  | (cluster      |  | (cluster      |
-   | | ProvisioningRule  | |  |  member)      |  |  member)      |
-   | +-------------------+ |  +---------+-----+  +------+--------+
-   |                       |            |                |
-   | +-------------------+ |     +------v--------+      |
-   | | SignalR Hub       |<+-----| Legacy Agent  |      |
-   | | (AgentHub)        | |     | (migration)   |      |
-   | +-------------------+ |     +---------------+      |
-   |                       |                             |
-   | Shiny DocumentDB     |                             |
-   | (PostgreSQL)         |                             |
-   +----------+------------+                             |
-              |                                          |
-              +------------------------------------------+
-              All silos join one Orleans cluster via PostgreSQL
+                             +-------------------+
+                             |   PostgreSQL 17   |
+                             |-------------------|
+                             | Orleans cluster   |
+                             | Orleans state     |
+                             | Orleans reminders |
+                             | DocumentDB views  |
+                             +---------+---------+
+                                       |
+                    +------------------+------------------+
+                    |                                     |
+        +-----------v------------+          +-------------v----------+
+        | RunnerRunner.Server    |          | RunnerRunner.HostSilo  |
+        |------------------------|          |------------------------|
+        | Blazor UI              |          | Orleans cluster member |
+        | Webhook API            |          | Host-local execution   |
+        | SignalR AgentHub       |          | Docker/Tart/Native     |
+        | Orleans grains         |          +------------------------+
+        | Orleans Dashboard      |
+        +-----------+------------+
+                    |
+                    | SignalR WebSocket (legacy execution path)
+                    |
+        +-----------v------------+
+        | RunnerRunner.Agent     |
+        |------------------------|
+        | Connects outbound      |
+        | Receives deploy/stop   |
+        | Reports health/events  |
+        | Docker/Tart/Native     |
+        +------------------------+
 ```
+
+The current system is intentionally hybrid:
+
+- **Orleans grains** own durable control-plane state for hosts, profiles, provisioning rules, and runner lifecycle.
+- **Shiny DocumentDB** stores queryable PostgreSQL read projections used by the Blazor UI and legacy services.
+- **SignalR AgentHub** remains the active command channel for the legacy agent.
+- **HostSilo** is the Orleans-native host execution path being introduced so runner work can execute on host-local silos without SignalR.
 
 ## Projects
 
-| Project | Purpose |
-|---------|---------|
-| **RunnerRunner.Core** | Shared domain models, hub contracts, interfaces |
-| **RunnerRunner.Server** | Blazor web UI, Orleans silo, SignalR hub, webhook endpoints, Orleans Dashboard |
-| **RunnerRunner.HostSilo** | Headless Orleans silo deployed on each host machine (future replacement for Agent) |
-| **RunnerRunner.Agent** | Legacy worker service on each host (SignalR client, being replaced by HostSilo) |
-| **RunnerRunner.AppHost** | .NET Aspire orchestrator for local development |
-| **RunnerRunner.ServiceDefaults** | OpenTelemetry, health checks, service discovery |
+| Project | Responsibility |
+|---------|----------------|
+| `RunnerRunner.Core` | Shared domain models, hub contracts, provider/backend interfaces |
+| `RunnerRunner.Server` | Blazor UI, webhook endpoints, Orleans silo, SignalR hub, orchestration services |
+| `RunnerRunner.HostSilo` | Headless Orleans silo deployed on hosts for the host-local execution path |
+| `RunnerRunner.Agent` | Legacy worker deployed on hosts; executes Docker, Tart, and Native backends |
+| `RunnerRunner.AppHost` | .NET Aspire local development orchestrator |
+| `RunnerRunner.ServiceDefaults` | OpenTelemetry, health checks, service discovery defaults |
 
-## Domain Model
+## Core domain model
 
-### Core Concepts
+RunnerRunner's orchestration model is easiest to understand as four layers:
 
-- **Runner Profile** ("WHAT") — Defines the runner configuration: CI provider (GitHub/Gitea/AzDO), execution backend (Docker/Tart/Native), container/VM images, environment variables, labels.
+| Layer | Model | Purpose |
+|-------|-------|---------|
+| What to run | `RunnerProfile` | Provider, labels, backend, images, environment variables, runner group, init steps, metadata behavior |
+| How to run it | `ProvisioningRule` or `RunnerAssignment` | Desired count, scaling bounds, webhook mappings, host filters, concurrency ceilings |
+| Where it can run | `Host` and host groups | Platform, labels, backend slot limits, environment overrides, connection status |
+| What is running | `RunnerInstance` | Concrete runner lifecycle, host/profile link, provider job link, status history, resource handles |
 
-- **Provisioning Rule** ("HOW") — Unified model defining how profiles get provisioned:
-  - **Static** — Maintain a fixed number of runner instances
-  - **ScaleSet** — Auto-scale between `MinReady` (warm pool) and `MaxInstances` with cooldown
-  - **Webhook** — React to GitHub/Gitea `workflow_job` events with JIT provisioning. Can also maintain a warm pool.
-  - **Scheduled** — Cron-based provisioning (future)
+### Runner profiles
 
-- **Host** — A physical or virtual machine. Declares capabilities via labels (`os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`) and resource limits (max Docker containers, Tart VMs, native processes).
+A `RunnerProfile` defines the reusable runner template:
 
-- **Host Group** — Logical grouping of hosts with shared labels for organizational convenience.
+- CI provider: GitHub Actions, Gitea Actions, or Azure DevOps.
+- Required host platform and execution backend: Docker, Tart, or Native.
+- Provider credential and optional runner agent version.
+- Runner labels and runner group.
+- Docker/Tart image config.
+- Environment variable sets plus profile-level overrides.
+- `MaxParallelPerHost`, the maximum number of runners for this profile allowed on one host.
+- Optional init steps executed during provisioning.
+- Optional metadata labels and job-started banner hook.
+- Optional webhook image tag override support.
 
-- **Runner Instance** — An actual running/stopped runner with full lifecycle tracking, timestamps, and status messages.
+Profiles answer "what should a runner look like?"
 
-### Key Models (`RunnerRunner.Core/Models/`)
+### Provisioning rules
 
-| Model | Description |
-|-------|-------------|
-| `RunnerProfile` | Runner config: provider, backend, images, env vars, labels |
-| `ProvisioningRule` | Unified provisioning (Static/ScaleSet/Webhook/Scheduled) |
-| `Host` | Machine with labels, capabilities, resource limits, group membership |
-| `RunnerInstance` | Lifecycle-tracked runner with DeployedAt, StatusMessage, health tracking, and StatusHistory timeline |
-| `StatusHistoryEntry` | Records a single status transition: timestamp, status, message, source (grain_call/timer/webhook/health_check) |
-| `ProviderCredential` | GitHub/Gitea/AzDO authentication credentials |
-| `EnvironmentVariableSet` | Reusable env var collections composable into profiles |
-| `WebhookEvent` | Audit log for received webhook events |
+`ProvisioningRule` is the rule-based desired-state model:
 
-## Orleans Architecture
+| Type | Key settings | Behavior |
+|------|--------------|----------|
+| Static | `DesiredCount`, optional target host/group/labels | Maintain a fixed number of instances for one profile |
+| ScaleSet | `MinReady`, `MaxInstances`, scale-down delay | Keep a warm pool and cap total instances |
+| Webhook | provider, allowed orgs/repos, label mappings, `MinReady`, `MaxConcurrent` | Match queued provider jobs to profiles and provision JIT runners |
+| Scheduled | cron expression | Reserved for future scheduled capacity |
 
-RunnerRunner uses Microsoft Orleans 10.0.1 for resilient, distributed state management. All silos form a single cluster connected via PostgreSQL.
+Webhook rules can map different `runs-on` label sets to different profiles. Mappings are ordered by priority; a preferred profile can win only if its mapping still matches the job labels.
 
-### Cluster Topology
+`RunnerAssignment` is the legacy static model: one host, one profile, one desired count. It is still reconciled by `OrchestrationEngine`.
 
-- **Server Silo** — Co-hosted with Blazor. Runs UI-facing grains and webhook processing.
-- **Host Silos** — One per physical host. Declares silo metadata (hostId, platform, architecture). Will run HostGrain and RunnerInstanceGrain locally for direct backend execution.
-- All silos share PostgreSQL for clustering, grain persistence, and reminders.
+### Hosts
 
-### Grains (7 types)
+A `Host` represents a physical or virtual machine. It carries:
 
-| Grain | Key Type | Responsibilities |
-|-------|----------|-----------------|
-| **HostGrain** | String (host ID) | Labels, resource tracking, heartbeat timeout (90s), DocumentDB sync |
-| **HostGroupGrain** | String (group ID) | Member host list, shared labels |
-| **RunnerInstanceGrain** | String (instance ID) | Lifecycle state machine with 5 grain timers, DocumentDB sync, stream publishing |
-| **ProfileGrain** | String (profile ID) | Config storage, env var composition with caching |
-| **ProvisioningRuleGrain** | String (rule ID) | Reconciliation (30s timer), warm pool management, webhook routing |
-| **SchedulerGrain** | Integer (singleton=0) | Label-based host selection, capacity checking, load balancing |
-| **WebhookProcessorGrain** | Integer (StatelessWorker x4) | Parallel webhook HMAC validation, event parsing, routing |
+- Platform (`Linux`, `MacOS`, `Windows`) and optional architecture.
+- Capability labels such as `os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`.
+- Optional `GroupId`.
+- Environment overrides applied after profile env vars.
+- Backend slot limits:
+  - `MaxDockerContainers`
+  - `MaxTartVMs`
+  - `MaxNativeProcesses`
 
-### Runner Instance Lifecycle
+A backend slot limit of `0` disables that backend on the host.
+
+### Runner instances
+
+A `RunnerInstance` is one concrete runner. Capacity calculations count RunnerRunner-managed instances in any active lifecycle state:
+
+- `Pending`
+- `Starting`
+- `Running`
+- `Stopping`
+
+Terminal states (`Stopped`, `Failed`, `Crashed`) do not consume capacity.
+
+## Control-plane flows
+
+### Static assignments
+
+Legacy static assignment flow:
+
+1. User assigns a profile to a host with a desired count.
+2. `OrchestrationEngine` wakes every 15 seconds.
+3. It counts active instances for the host/profile assignment.
+4. If current is below desired, it creates runner grains/instances and sends `DeployRunner` to the connected agent.
+5. If current is above desired, it sends `StopRunner`.
+6. Old terminal runner records are removed after a grace period.
+
+This path is host-specific and does not perform rule-level host selection.
+
+### Rule reconciliation
+
+Orleans `ProvisioningRuleGrain` reconciles rule-owned capacity:
+
+1. Enabled Static and ScaleSet rules start a grain timer.
+2. The timer calls `Reconcile()` every 30 seconds.
+3. Static rules compare alive instances to `DesiredCount`.
+4. ScaleSet rules ensure at least `MinReady` alive instances, capped by `MaxInstances`.
+5. Webhook rules can keep `MinReady` idle warm runners.
+6. Dead instances are removed from the rule's managed instance list.
+
+When a rule needs a runner, it resolves the profile, analyzes matching host capacity, initializes a `RunnerInstanceGrain`, and tracks the instance ID in the rule state.
+
+### Webhook/JIT provisioning
+
+Webhook provisioning is job-driven:
+
+1. Provider sends a `workflow_job` event to `/api/webhooks/{provider}`.
+2. The server validates the signature and records a `WebhookEvent`.
+3. The event is matched to an enabled webhook provisioning rule by provider and allowed org/repo.
+4. The job's labels are matched against the rule's label mappings to resolve a profile.
+5. FIFO, rule, profile, and host capacity checks run.
+6. A host is selected.
+7. JIT config or registration token is generated for the provider.
+8. A dynamic `RunnerInstance` is initialized.
+9. `DeployRunner` is sent to the host's connected agent.
+10. The queued event is marked `provisioned` and linked to the instance.
+11. `in_progress` and `completed` provider events confirm execution and cleanup.
+
+Pending webhook events are retried by `DynamicProvisioningService`. If webhook delivery is missed, GitHub queued/in-progress/requested/waiting jobs are periodically backfilled through the GitHub API.
+
+## Capacity and concurrency rules
+
+RunnerRunner calculates whether work can start by applying capacity in this order:
+
+1. **FIFO fairness**
+2. **Provisioning rule capacity**
+3. **Profile per-host capacity**
+4. **Host backend capacity**
+5. **Connected execution channel**
+
+The first exhausted layer becomes the visible blocker: `FIFO`, `ProvisioningRule`, `Profile`, `Host`, `Matching`, or `Configuration`.
+
+### 1. FIFO fairness
+
+Queued webhook jobs are processed oldest first within the same provisioning lane. A newer event waits if an earlier queued event:
+
+- belongs to the same provisioning rule, or
+- needs the same host platform and execution backend.
+
+This prevents a flood of newer jobs from jumping ahead of older queued work that competes for the same runners.
+
+### 2. Rule-level capacity
+
+Each rule type has a rule-level ceiling:
+
+| Rule type | Ceiling used for capacity |
+|-----------|---------------------------|
+| Static | `DesiredCount` |
+| ScaleSet | `MaxInstances` |
+| Webhook | `MaxConcurrent` |
+| Scheduled | currently treated like desired count until implemented |
+
+For webhook rules, active dynamic instances linked to events for the rule count against `MaxConcurrent`. Active instances include `Pending`, `Starting`, `Running`, and `Stopping`.
+
+For ScaleSet rules, `MinReady` is the warm-pool floor and `MaxInstances` is the ceiling. The warm pool cannot exceed the max.
+
+### 3. Profile per-host capacity
+
+`RunnerProfile.MaxParallelPerHost` limits how many active instances of that profile may exist on a single host.
+
+This is intentionally separate from host backend capacity. A large host might allow 10 Docker containers, but a profile can still cap itself at 1 runner per host to avoid noisy-neighbor contention or provider label ambiguity.
+
+### 4. Host backend capacity
+
+Each host has a backend-specific slot limit:
+
+| Backend | Host limit |
+|---------|------------|
+| Docker | `MaxDockerContainers` |
+| Tart | `MaxTartVMs` |
+| Native | `MaxNativeProcesses` |
+
+Only instances whose profile uses that backend consume the backend slots. A Docker runner does not consume Tart or Native capacity.
+
+### 5. Host matching and execution availability
+
+Before capacity is summed, hosts must match:
+
+- host platform equals `RunnerProfile.RequiredHostPlatform`;
+- rule `TargetHostId`, if set;
+- rule `TargetGroupId`, if set;
+- every rule `RequiredHostLabels` key/value pair;
+- Docker host compatibility, when a host advertises `docker_os`.
+
+The legacy SignalR execution path also requires a connected agent for the selected host. If capacity exists but no agent is connected, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
+
+### Effective pool math
+
+For a single profile under a rule:
 
 ```
-Pending --> Starting --> Running --> Stopping --> Stopped
-   |            |           |            |
-   |            |           |            +--> Failed (stop timeout 5m)
-   |            |           |
-   |            |           +--> Failed (dynamic timeout 2h)
-   |            |           +--> Crashed (health stale 3m)
-   |            |
-   |            +--> Failed (registration timeout 5m)
-   |
-   +--> Failed (deploy timeout 2m)
+per-host usable slots = min(
+  profile.MaxParallelPerHost - active profile instances on host,
+  host backend limit - active backend instances on host
+)
+
+available pool slots = sum(per-host usable slots across matching hosts)
+
+rule remaining slots = rule ceiling - active instances counted against rule
+
+can start now = FIFO is clear
+             and rule remaining slots > 0
+             and available pool slots > 0
+             and selected host has an execution channel
 ```
 
-Each transition is a grain method (atomic). Timeouts are grain timers.
-
-### Dual-Write Architecture
-
-Grains maintain two views of state:
-1. **Orleans grain state** (PostgreSQL ADO.NET) — source of truth for lifecycle, timers, activation
-2. **Shiny DocumentDB** (PostgreSQL) — queryable read projection for UI LINQ queries
-
-Grains call `SyncToDocumentDb()` after state changes. UI reads from DocumentDB for fast queries; grain methods handle lifecycle operations.
-
-### Orleans Streams
-
-- `RunnerStatusChangedEvent` — published by RunnerInstanceGrain on status transitions
-- `HostStatusChangedEvent` — published by HostGrain on online/offline changes
-- `StreamSubscriptionService` bridges streams to Blazor for auto-refresh (Dashboard, Runners pages)
-
-### Observability
-
-- **Orleans Dashboard** — Built-in at `/orleans`. Grain stats, silo health, call chains.
-- **OpenTelemetry** — Activity propagation across grain calls. OTLP export configurable via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-
-## Execution Backends
-
-| Backend | Platform | How it works |
-|---------|----------|-------------|
-| **Docker** | Linux | `docker run` with labels. JIT: inspects image entrypoint, overrides with `--jitconfig` using detected shell |
-| **Tart** | macOS | Clones VM, SSHs in (via `sshpass` + stdin piping), downloads runner, configures/JIT |
-| **Native** | Any | Downloads runner binary, runs as process. `rr.pid` for tracking, output to `runner.log` |
-
-## Webhook / JIT Provisioning
+The configured pool limit shown in UI is:
 
 ```
-GitHub/Gitea --> POST /api/webhooks/{provider}
-                       |
-             1. HMAC-SHA256 signature validation
-             2. Match binding by signature + scope
-             3. queued    --> label match --> JIT config --> deploy
-             4. in_progress --> confirm runner executing
-             5. completed --> stop + cleanup + remove record
+sum(min(profile.MaxParallelPerHost, host backend limit) across matching hosts)
 ```
 
-JIT config generated via GitHub `generate-jitconfig` API or Gitea registration token. Tries repo-level first, then org-level.
+The available-now value subtracts active profile and backend usage first.
 
-## Environment Variable Composition
+Example:
 
-5 layers (later overrides earlier):
-1. RR_* auto-injected from provider credentials
-2. Environment Variable Sets (ordered by priority)
-3. Profile-level overrides
-4. Host-level overrides
-5. Instance-level (RR_INSTANCE_ID, RR_RUNNER_NAME, etc.)
+| Setting | Value |
+|---------|-------|
+| Webhook rule `MaxConcurrent` | 10 |
+| Matching hosts | 3 Linux Docker hosts |
+| Profile `MaxParallelPerHost` | 1 |
+| Each host `MaxDockerContainers` | 4 |
 
-Then `$VAR` / `${VAR}` expansion runs (3-pass chaining).
+The rule appears to allow 10 concurrent jobs, but the effective pool limit is `3 * min(1, 4) = 3`. If all three hosts already run that profile, new matching webhook jobs are blocked by `Profile`, not by the rule or host backend.
 
-## Capacity and Limit Roll-up
+If `MaxParallelPerHost` is raised to 4, the effective pool limit becomes `3 * min(4, 4) = 12`, and the rule's `MaxConcurrent = 10` becomes the narrower limit.
 
-RunnerRunner applies concurrency and capacity limits in a fixed order so operators can predict why work is waiting:
+### Host selection
 
-1. **FIFO queue fairness** — older queued webhook jobs in the same provisioning lane keep newer jobs from jumping ahead.
-2. **Provisioning rule capacity** — `MaxConcurrent` for webhook rules, `MaxInstances` for scale sets, and `DesiredCount` for static rules define the rule-level ceiling.
-3. **Runner profile capacity** — `RunnerProfile.MaxParallelPerHost` limits how many runners of that profile can run on any one host at the same time.
-4. **Host backend capacity** — `Host.MaxDockerContainers`, `Host.MaxTartVMs`, and `Host.MaxNativeProcesses` are the final per-host backend slot limits.
+When at least one host can run the profile, host candidates are ordered by:
 
-The **effective available capacity** for a queued job is the smallest remaining slot count across all applicable layers after host matching is complete. In practice, a rule might allow 10 concurrent runners, but if the mapped profile is capped at 1 per host and only 3 matching hosts are available, the real ceiling is 3 until the host pool grows.
+1. can run now before blocked candidates;
+2. lowest total active host load;
+3. host label/name for deterministic tie-breaking.
 
-Operational notes:
+If every matching host is saturated by `MaxParallelPerHost`, the blocker is `Profile`. If at least one host still has profile room but all are out of backend slots, the blocker is `Host`.
 
-- A host backend limit of **0** means that backend is disabled on that host.
-- The web UI now surfaces the current blocker as **FIFO**, **Rule**, **Profile**, or **Host** on the Events, Provisioning Rules, Hosts, Runners, and Profiles pages.
+## Environment variable composition
 
-## Web UI (15 pages)
+Runner environment variables are layered with later layers overriding earlier ones:
 
-| Page | Route | Purpose |
-|------|-------|---------|
-| Dashboard | `/` | Overview cards, cluster status, connected agents |
-| Hosts | `/hosts` | Host management, labels, resource limits |
-| Runners | `/runners` | Runner instances grouped by host, auto-refresh via streams |
-| Jobs | `/jobs` | Job-centric view with lifecycle history, provisioning context, and webhook details |
-| Profiles | `/profiles` | Runner profile CRUD with env var composition |
-| Provisioning Rules | `/provisioning-rules` | Unified Static/ScaleSet/Webhook/Scheduled rules |
-| Images | `/images` | Docker/Tart image management per host (split pane) |
-| Logs | `/logs` | xterm.js terminal with agent/runner log viewing (split pane) |
-| Env Variables | `/envvarsets` | Reusable environment variable sets |
-| Webhooks | `/webhooks` | Webhook bindings (legacy, see Provisioning Rules) |
-| Webhook Events | `/webhook-events` | Audit log of received webhook events |
-| Settings | `/settings` | Provider credentials, registry credentials |
-| Orleans Dashboard | `/orleans` | Built-in Orleans grain/silo monitoring |
+1. Provider credential variables injected as `RR_*`.
+2. Profile-selected `EnvironmentVariableSet` documents ordered by ascending priority.
+3. Profile-level environment overrides.
+4. Host-level environment overrides.
+5. Instance variables such as `RR_INSTANCE_ID` and `RR_RUNNER_NAME`.
 
-### UI Features
+After composition, `$VAR` and `${VAR}` references are expanded for up to three passes so values can chain through other variables.
 
-- Light/dark theme with localStorage persistence
-- Collapsible sidebar (persisted state)
-- Resizable table columns and split panes
-- Mobile responsive with hamburger menu overlay
-- Platform chips with icons (Linux/macOS/Windows)
-- xterm.js terminal with ANSI color support and search
-- Real-time updates via Orleans streams (no polling)
-- Confirmation dialogs on all destructive operations
-- Orphaned runner detection and cleanup
+Init steps receive the runner environment plus their own environment variable sets and overrides. `Auto` shell resolves by platform/backend before commands are sent to the agent.
 
-## Data Storage
+## Execution backends
 
-Single PostgreSQL 17 instance:
+| Backend | Typical platform | Execution model |
+|---------|------------------|-----------------|
+| Docker | Linux, Windows | Starts one container per runner; image supplies the runner environment; JIT config can be injected into the entrypoint |
+| Tart | macOS | Clones/starts a VM image, copies config/scripts, then runs the provider runner inside the guest |
+| Native | Any | Downloads/configures the runner and starts it as a local process with PID/log tracking |
 
-| Layer | Provider | Purpose |
-|-------|----------|---------|
-| Orleans Clustering | ADO.NET (Npgsql) | Silo membership, failure detection |
-| Orleans Grain State | ADO.NET (Npgsql) | Persistent grain state |
-| Orleans Reminders | ADO.NET (Npgsql) | Durable reminder scheduling |
-| Orleans Streams | In-memory | Real-time UI events |
-| Shiny DocumentDB | PostgreSQL | Queryable read projections for UI |
+All backends receive the same `DeployRunnerCommand` shape: instance ID, profile ID, runner name, backend, provider, labels, environment variables, image config, runner URL/token/JIT config, work paths, registry credentials, and resolved init steps.
 
-## Deployment
+## Runner lifecycle and health
 
-### Linux (Docker Compose)
-
-```bash
-./deploy/deploy-all.sh linux
-```
-
-4 containers: `postgres`, `server` (Blazor + Orleans silo), `host-silo` (headless Orleans silo), `agent` (legacy).
-
-### macOS (Native Binary)
-
-```bash
-./deploy/deploy-all.sh macos
-```
-
-Agent binary deployed via SCP, codesigned, started with nohup.
-
-### Both
-
-```bash
-./deploy/deploy-all.sh all
-```
-
-## Migration Status
-
-| Component | Legacy | Orleans | Status |
-|-----------|--------|---------|--------|
-| Host state | AgentHub dict | HostGrain | **Dual-write** |
-| Runner lifecycle | ~~RunnerTimeoutService~~ | RunnerInstanceGrain | **Grain active** |
-| ~~Reconciliation~~ | ~~ReconciliationService~~ | HostGrain heartbeat | **Grain active** |
-| Static provisioning | OrchestrationEngine | ProvisioningRuleGrain | Legacy active |
-| Dynamic provisioning | DynamicProvisioningService | ProvisioningRuleGrain | Legacy active |
-| Host selection | Inline in services | SchedulerGrain | Available |
-| Webhook processing | WebhookEndpoints | WebhookProcessorGrain | Legacy active |
-| UI real-time | Static events | Orleans Streams | **Streams active** |
-| Backend execution | Agent (SignalR) | HostSilo (local) | Agent active, HostSilo in cluster |
-
-**Next**: Wire HostSilo for local backend execution via grain placement, then remove Agent and SignalR hub.
-└────────────────────────┼───────────────────────────────────────┘
-                         │ SignalR WebSocket
-            ┌────────────┼────────────┐
-            │            │            │
-   ┌────────▼──┐  ┌──────▼───┐  ┌────▼───────┐
-   │  Agent    │  │  Agent   │  │  Agent     │
-   │  (Linux)  │  │  (macOS) │  │  (Windows) │
-   │           │  │          │  │            │
-   │ ┌───────┐ │  │ ┌──────┐ │  │ ┌────────┐ │
-   │ │Docker │ │  │ │Tart  │ │  │ │Native  │ │
-   │ │Backend│ │  │ │Backend│ │  │ │Backend │ │
-   │ ├───────┤ │  │ ├──────┤ │  │ └────────┘ │
-   │ │Native │ │  │ │Native│ │  │            │
-   │ │Backend│ │  │ │Backend│ │  │            │
-   │ └───────┘ │  │ └──────┘ │  │            │
-   └───────────┘  └──────────┘  └────────────┘
-```
-
-## Projects
-
-| Project | Purpose |
-|---------|---------|
-| **RunnerRunner.Core** | Shared domain models, hub contracts, interfaces |
-| **RunnerRunner.Server** | Blazor web UI, Orleans silo, SignalR hub, webhook endpoints |
-| **RunnerRunner.Agent** | Worker service deployed on each host, manages runner lifecycles |
-| **RunnerRunner.AppHost** | .NET Aspire orchestrator for local development |
-| **RunnerRunner.ServiceDefaults** | OpenTelemetry, health checks, service discovery |
-
-## Domain Model
-
-### Core Concepts
-
-- **Runner Profile** ("WHAT") — Defines the runner configuration: which CI provider (GitHub/Gitea/AzDO), execution backend (Docker/Tart/Native), container/VM images, environment variables, labels.
-
-- **Provisioning Rule** ("HOW") — Defines how profiles get provisioned. Unified model supporting:
-  - **Static** — Maintain a fixed number of runner instances
-  - **ScaleSet** — Auto-scale between `MinReady` (warm pool) and `MaxInstances`
-  - **Webhook** — React to GitHub/Gitea `workflow_job` events with JIT provisioning. Can also maintain a warm pool.
-  - **Scheduled** — Cron-based provisioning (future)
-
-- **Host** — A physical or virtual machine that runs runner instances. Declares capabilities via labels (`os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`) and resource limits.
-
-- **Host Group** — Logical grouping of hosts with shared labels. For organizational convenience and targeting.
-
-- **Runner Instance** — An actual running (or stopped/failed) runner with full lifecycle tracking.
-
-### Key Models (`RunnerRunner.Core/Models/`)
-
-| Model | Description |
-|-------|-------------|
-| `RunnerProfile` | Runner config: provider, backend, images, env vars, labels |
-| `ProvisioningRule` | Unified provisioning trigger (Static/ScaleSet/Webhook/Scheduled) |
-| `Host` | Machine with labels, capabilities, resource limits |
-| `RunnerInstance` | Lifecycle-tracked runner (status, timestamps, container/VM/process IDs) |
-| `ProviderCredential` | GitHub/Gitea/AzDO authentication credentials |
-| `EnvironmentVariableSet` | Reusable env var collections composable into profiles |
-| `WebhookBinding` | Legacy webhook config (being replaced by ProvisioningRule) |
-| `RunnerAssignment` | Legacy static assignment (being replaced by ProvisioningRule) |
-| `WebhookEvent` | Audit log for received webhook events |
-
-## Orleans Grain Architecture
-
-The server uses Microsoft Orleans for stateful, resilient management of all entities. Each grain owns its lifecycle, timers, and state persistence.
-
-### Grains
-
-| Grain | Key Type | Responsibilities |
-|-------|----------|-----------------|
-| **HostGrain** | String (host ID) | Labels, resource tracking, agent connection state, heartbeat timeout timer (90s) |
-| **HostGroupGrain** | String (group ID) | Member host list, shared labels |
-| **RunnerInstanceGrain** | String (instance ID) | Lifecycle state machine with 5 grain timers for timeouts |
-| **ProfileGrain** | String (profile ID) | Config storage, environment variable composition with caching |
-| **ProvisioningRuleGrain** | String (rule ID) | Reconciliation loop (30s), warm pool management, webhook event routing |
-| **SchedulerGrain** | Integer (singleton=0) | Label-based host selection with capacity checking and load balancing |
-| **WebhookProcessorGrain** | Integer (StatelessWorker×4) | Parallel webhook HMAC validation, event parsing, routing |
-
-### Runner Instance Lifecycle (State Machine)
+Runner instances follow this lifecycle:
 
 ```
-Pending ──► Starting ──► Running ──► Stopping ──► Stopped
-   │            │           │            │
-   │            │           │            └──► Failed (stop timeout 5m)
-   │            │           │
-   │            │           ├──► Failed (dynamic timeout 2h)
-   │            │           └──► Crashed (health stale 3m)
-   │            │
-   │            └──► Failed (registration timeout 5m)
-   │
-   └──► Failed (deploy timeout 2m)
+Pending -> Starting -> Running -> Stopping -> Stopped
+   |          |           |           |
+   |          |           |           +-> Failed
+   |          |           +-> Crashed
+   |          +-> Failed
+   +-> Failed
 ```
 
-Each state transition is a grain method — atomic, no race conditions. Timeouts are grain timers that auto-fire.
+Important timeout and recovery behavior:
 
-### Orleans Streams
+- Deployment and registration failures move an instance to `Failed`.
+- Missing health/reconciliation from the host can move a running instance to `Crashed`.
+- Stopping can fail if the host does not complete cleanup.
+- Dynamic runners linked to queued jobs can cause the webhook event to retry when the runner disappears before the job starts.
+- Reconciliation reports clean up orphaned Docker containers, Tart VMs, or native processes that are present on the host but absent from the database.
 
-Grains publish state changes to Orleans memory streams:
-- `RunnerStatusChangedEvent` — published by RunnerInstanceGrain on every status transition
-- `HostStatusChangedEvent` — published by HostGrain on online/offline changes
+## State, projections, and UI refresh
 
-`StreamSubscriptionService` bridges these to Blazor static events for real-time UI updates without polling.
+RunnerRunner maintains two durable views:
 
-## Agent Architecture
+1. **Orleans grain state** in PostgreSQL: lifecycle ownership, timers, durable grain state, reminders, cluster membership.
+2. **DocumentDB projections** in PostgreSQL: queryable documents used by Blazor pages and legacy services.
 
-Each host runs a lightweight agent (`RunnerRunner.Agent`) that:
+Grains sync important state changes to DocumentDB so the UI can query efficiently. Orleans streams publish runner and host status changes, and `StreamSubscriptionService` bridges those events to Blazor components for real-time refresh.
 
-1. **Connects** to the server via SignalR WebSocket with auto-reconnect
-2. **Receives commands**: DeployRunner, StopRunner, CleanupOrphan, etc.
-3. **Reports events**: RunnerStarted, RunnerStopped, Heartbeat, Reconciliation
-4. **Manages backends**: Docker, Tart, Native — each implementing `IRunnerBackend`
+## Web UI surfaces
 
-### Execution Backends
+Key UI pages map directly to the domain model:
 
-| Backend | Platform | How it works |
-|---------|----------|-------------|
-| **Docker** | Linux (primary) | `docker run` with labels for tracking. JIT: inspects image, overrides entrypoint to use `--jitconfig` with shell detection |
-| **Tart** | macOS | Clones VM image, starts VM, SSHs in to download + configure runner. Scripts piped via stdin to avoid quoting issues |
-| **Native** | Any | Downloads runner binary, runs as a process. Writes `rr.pid` for tracking. Output piped to `runner.log` |
+| Page | Purpose |
+|------|---------|
+| Dashboard | Fleet overview and connected hosts |
+| Hosts | Host labels, backend limits, approval, assignments |
+| Runners | Runner instances grouped by host/profile/status |
+| Jobs | Job-centric lifecycle and webhook context |
+| Profiles | Runner templates, labels, env vars, init steps, images |
+| Provisioning Rules | Static, ScaleSet, Webhook, and future Scheduled rules |
+| Images | Docker/Tart image management |
+| Logs | Agent and runner log viewing |
+| Env Variables | Reusable environment variable sets |
+| Webhooks / Webhook Events | Provider webhook bindings and audit trail |
+| Settings | Provider and registry credentials |
+| Orleans Dashboard | Grain/silo observability |
 
-### Reconciliation
+Capacity views on rules, profiles, hosts, runners, and events use the same `CapacityPlanningService` calculations described above, so blockers in the UI reflect actual scheduling decisions.
 
-Every 30 seconds (in the heartbeat loop), the agent:
-1. Discovers all managed resources (Docker labels, Tart `rr-` prefix VMs, Native PID files)
-2. Sends a `ReconciliationReport` to the server
-3. Server compares against DB — marks stale records as Stopped/Crashed, sends CleanupOrphan for ghosts
+## Migration status
 
-## Webhook / JIT Provisioning
+| Area | Legacy path | Orleans path | Current state |
+|------|-------------|--------------|---------------|
+| Host connection | SignalR AgentHub | HostGrain/HostSilo | Hybrid |
+| Runner lifecycle | Agent callbacks and services | RunnerInstanceGrain | Grain state active, agent execution active |
+| Static provisioning | `RunnerAssignment` + `OrchestrationEngine` | `ProvisioningRuleGrain` Static | Both models present |
+| Webhook provisioning | `DynamicProvisioningService` | `ProvisioningRuleGrain` Webhook | Legacy service active with grain-backed instances |
+| Host selection | Capacity service + connected agents | Scheduler/host grains | Capacity service active |
+| Real-time UI | Static events | Orleans streams | Streams active |
+| Backend execution | SignalR `DeployRunner` to agent | Host-local silo execution | Agent active, HostSilo introduced |
 
-```
-GitHub/Gitea ──POST──► /api/webhooks/{provider}
-                              │
-                    1. HMAC-SHA256 signature validation
-                    2. Match binding by repo/org + signature
-                    3. If action=queued:
-                       a. Label matching → find profile
-                       b. JIT config via GitHub/Gitea API
-                       c. Select host (labels + capacity)
-                       d. Deploy runner to agent
-                    4. If action=in_progress:
-                       → Confirm runner is executing
-                    5. If action=completed:
-                       → Stop runner, delete container/VM, remove record
-```
-
-### JIT Runner Flow by Backend
-
-- **Native**: `run.sh --jitconfig <base64>` — skips config.sh entirely
-- **Docker**: JIT config written to env var `RR_JIT_CONFIG`, entrypoint overridden to find and use `run.sh --jitconfig`
-- **Tart**: JIT config written to temp file in VM via SSH stdin, runner reads and starts with `--jitconfig`
-
-### Webhook-supplied image tag override
-
-Callers that build their own base images per job (e.g. Flutter/React Native
-images tagged with a version) can tell RunnerRunner to pull a specific tag of
-the matched profile's image by adding a magic label to the job's `runs-on`:
-
-```yaml
-runs-on: [self-hosted, my-profile, rr-image-tag=2025.11.07-abc123]
-```
-
-Rules:
-- The feature is **opt-in per profile** via `AllowWebhookImageTagOverride`
-  (default `false`). Profiles that don't opt in ignore the label but still
-  record it on the `WebhookEvent` audit row (`ImageTagOverrideRejectedReason`).
-- Only the **tag** is overridden — registry, repository and image name stay
-  pinned to the profile. Arbitrary image substitution is not possible.
-- The tag must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` (Docker tag rules).
-  Invalid values are rejected and the profile's default tag is used instead.
-- The `rr-image-tag=…` label is stripped before profile matching and before
-  being attached to the runner (so profiles don't need to encode the volatile
-  tag in their label set).
-- Warm/idle runner fast-path is **skipped** when an override is in effect,
-  since pre-pulled warm runners can't be retagged mid-life.
-- The applied override is surfaced in `RR_META_TAG`, on the `RunnerInstance`
-  (for traceability), and on the Events page (with rejection reason when the
-  profile has not opted in).
-
-
-## Environment Variable Composition
-
-Variables are composed in 5 layers (later layers override earlier):
-
-1. **RR_\* auto-injected** from provider credentials (RR_GITHUB_TOKEN, etc.)
-2. **Environment Variable Sets** (ordered by priority in the profile)
-3. **Profile-level overrides**
-4. **Host-level overrides**
-5. **Instance-level** (RR_INSTANCE_ID, RR_RUNNER_NAME, RR_BASE_PATH, RR_WORK_DIR)
-
-Then `$VAR` / `${VAR}` expansion runs (3-pass chaining).
-
-## Profile Init Steps
-
-Each `RunnerProfile` may carry an ordered `InitSteps` list of user-defined script
-fragments that run as part of runner provisioning — **in addition to** whatever the
-base image/host already provides. This lets operators layer small customizations
-(e.g. `install sentry-cli`, `gh`, custom CA certs) without rebuilding a container
-image or re-baking a Tart VM.
-
-### Model
-
-- `RunnerInitStep` (Core) — `Name`, `Phase` (PreRunner/PostExit), `Shell`
-  (Auto/Bash/Sh/PowerShell/Cmd), `Script` body, `TimeoutSeconds`,
-  `ContinueOnError`, optional `WorkingDirectory`, plus its own env composition
-  (`EnvironmentVariableSetIds` + `EnvironmentOverrides` + `EnvironmentOverrideSecretKeys`).
-- `ResolvedInitStep` (Core) — transport DTO sent to the agent: env already composed,
-  `Auto` shell already collapsed.
-
-### Server resolution (`InitStepResolver`)
-
-For each enabled step the server builds its env as:
-
-1. Base runner env (everything the runner itself would see)
-2. Step's referenced `EnvironmentVariableSet`s (priority-ordered)
-3. Step-level overrides
-
-`Auto` shell resolves to Bash on Linux/Tart, PowerShell on Windows.
-
-### Agent execution
-
-- **Docker**: `InitStepShellBuilder` emits inline shell fragments that are inlined
-  into the JIT entrypoint wrapper. Pre steps run before the auto-discovered
-  `run.sh`/`run.cmd`; post steps run after, and the runner's exit code is preserved.
-- **Tart**: Pre steps run via SSH before `config.sh`/`run.sh`/`act_runner`. Post
-  steps are written as a base64-encoded wrapper script to `/tmp/rr-runner-wrapper.sh`
-  on the VM, which `nohup` executes; this is required because the SSH session
-  disconnects before the runner exits.
-- **Native**: `InitStepExecutor` runs each step as a local child process. Pre steps
-  run in `StartRunnerAsync` before the provider's Configure/Start; post steps run
-  in `StopRunnerAsync` before the instance dir is cleaned up.
-
-All steps honor per-step `TimeoutSeconds` and `ContinueOnError`. Step output is
-prefixed `[init:<name>]` in the runner log.
-
-## Web UI
-
-Blazor Server with InteractiveServer render mode. 12 pages:
-
-| Page | Route | Purpose |
-|------|-------|---------|
-| Dashboard | `/` | Overview cards, connected agents table |
-| Hosts | `/hosts` | Host management, labels, resource limits, assignments |
-| Runners | `/runners` | Runner instances grouped by host, lifecycle status |
-| Profiles | `/profiles` | Runner profile CRUD with env var composition |
-| Provisioning Rules | `/provisioning-rules` | Unified Static/ScaleSet/Webhook/Scheduled rules |
-| Images | `/images` | Docker/Tart image management per host |
-| Logs | `/logs` | xterm.js terminal with agent/runner log viewing |
-| Env Variables | `/envvarsets` | Reusable environment variable set CRUD |
-| Webhooks | `/webhooks` | Webhook binding CRUD (legacy, being unified) |
-| Webhook Events | `/webhook-events` | Audit log of received webhook events |
-| Settings | `/settings` | Provider credentials, registry credentials |
-
-### UI Features
-
-- **Light/dark theme** with localStorage persistence
-- **Collapsible sidebar** (persisted state)
-- **Resizable table columns** and split panes
-- **Mobile responsive** with hamburger menu overlay
-- **Platform chips** with icons (Linux/macOS/Windows)
-- **xterm.js** terminal for log viewing with ANSI color support
-- **Real-time updates** via Orleans streams (no polling)
-
-## Deployment
-
-### Linux (Docker Compose)
-
-```bash
-./deploy/deploy-all.sh linux
-```
-
-Deploys server + agent containers to a remote Linux host via SSH. NPM proxy labels for reverse proxy.
-
-### macOS (Native Agent)
-
-```bash
-./deploy/deploy-all.sh macos
-```
-
-Publishes self-contained binary, SCPs to host, codesigns, starts via `nohup`.
-
-### Both
-
-```bash
-./deploy/deploy-all.sh all
-```
-
-## Data Storage
-
-- **Shiny DocumentDB (SQLite)** — Primary data store for all models. Used by both legacy services and Orleans grains (dual-write during migration).
-- **Orleans Grain State** — In-memory storage (dev). SQLite ADO.NET packages installed for future production persistence.
-- **Orleans Streams** — In-memory streams for real-time UI events.
-
-## Migration Status
-
-The codebase is in a dual-write migration from direct DocumentDB services to Orleans grains:
-
-| Component | Legacy (DocumentDB) | Orleans Grain | Status |
-|-----------|---------------------|---------------|--------|
-| Host state | AgentHub static dict | HostGrain | Dual-write |
-| Runner lifecycle | RunnerTimeoutService | RunnerInstanceGrain | **Grain active** |
-| Reconciliation | ReconciliationService | HostGrain heartbeat | **Grain active** |
-| Static provisioning | OrchestrationEngine | ProvisioningRuleGrain | Legacy active |
-| Dynamic provisioning | DynamicProvisioningService | ProvisioningRuleGrain | Legacy active |
-| Host selection | Inline in services | SchedulerGrain | Available |
-| Webhook processing | WebhookEndpoints | WebhookProcessorGrain | Legacy active |
-| UI reads | DocumentDB queries | IGrainFactory injected | Prepared |
+The migration direction is to keep the same domain model and capacity rules while moving host execution from SignalR agents to Orleans host-local silos.

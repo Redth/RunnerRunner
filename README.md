@@ -14,26 +14,28 @@ RunnerRunner lets you:
 
 ## Architecture
 
+RunnerRunner is a hybrid control plane/data plane system:
+
 ```
-┌──────────────────────────────────────────┐
-│          RunnerRunner.Server             │
-│   Blazor Web UI + SignalR Hub + SQLite   │
-└──────────────┬───────────────────────────┘
-               │ SignalR (WebSocket)
-    ┌──────────┼──────────────────┐
-    │          │                  │
-┌───▼────┐ ┌──▼─────┐  ┌────────▼──┐
-│ Agent  │ │ Agent  │  │  Agent    │
-│ macOS  │ │ Linux  │  │  Windows  │
-└───┬────┘ └──┬─────┘  └────┬─────┘
-    │         │              │
- Tart VMs  Docker         Docker /
- / Native  Containers     Native
+PostgreSQL
+  |-- Orleans clustering, grain state, reminders
+  `-- Shiny DocumentDB read model
+
+RunnerRunner.Server
+  |-- Blazor UI, webhook API, SignalR AgentHub
+  `-- Orleans grains for hosts, profiles, provisioning rules, runners
+
+Host machines
+  |-- RunnerRunner.HostSilo (Orleans host-local execution path)
+  `-- RunnerRunner.Agent (legacy SignalR execution path)
+        `-- Docker, Tart, or Native runner backends
 ```
 
-**Server** — Blazor web UI for managing profiles, hosts, env vars, credentials. Runs the desired-state reconciliation engine that auto-scales runners via SignalR commands.
+**Server** - Blazor web UI for managing profiles, hosts, env vars, credentials, provisioning rules, and webhook routing. It owns the shared PostgreSQL-backed control plane and sends runner lifecycle commands to hosts.
 
-**Agent** — Lightweight worker deployed on each host machine. Connects outbound to the server (no inbound ports needed). Executes runner lifecycle using Docker, Tart VMs, or native processes.
+**HostSilo / Agent** - Per-host workers. `HostSilo` joins the Orleans cluster for the newer host-local execution model; `Agent` is the current legacy worker that connects outbound over SignalR and executes Docker, Tart, or native runner lifecycles.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how provisioning rules, profiles, hosts, and runner instances combine to calculate capacity and concurrency.
 
 ## Quick Start
 
@@ -87,7 +89,7 @@ All defaults are in the script — edit `deploy/deploy-all.sh` or override with 
 
 **Prerequisites:** `docker login ghcr.io` locally, Docker on the Linux host, SSH access to both hosts.
 
-### Option 2: Deploy to Remote Linux Host (via SSH)
+### Option 3: Deploy to Remote Linux Host (via SSH)
 
 Deploy the full stack to a remote Docker host with a single command:
 
@@ -132,15 +134,15 @@ aspire deploy
 aspire do teardown-env
 ```
 
-### Option 3: Docker Compose (Production / Standalone)
+### Option 4: Docker Compose (Production / Standalone)
 
 ```bash
 docker compose up -d
 ```
 
-The server is available at `http://localhost:8080`.
+The server is available at `http://localhost:4779` by default.
 
-### Option 3: Manual (dotnet run)
+### Option 5: Manual (dotnet run)
 
 ```bash
 # Terminal 1: Start the server
@@ -209,7 +211,23 @@ Go to **Runner Profiles** and create a profile:
 
 Go to **Hosts**, click **Assign** on a connected host, select a profile and desired instance count. The orchestration engine will automatically deploy runners.
 
-### 5. Runner image/backend info in the GHA job log
+### 5. Understand provisioning and concurrency
+
+RunnerRunner has two provisioning paths:
+
+- **Static assignments** - host/profile pairs with a fixed desired count. These are reconciled by the legacy orchestration engine.
+- **Provisioning rules** - the newer model for Static, ScaleSet, Webhook/JIT, and future Scheduled provisioning. Rules can target hosts by platform, host ID, host group, or labels.
+
+Capacity is calculated from the narrowest remaining limit:
+
+1. FIFO ordering for queued webhook jobs in the same rule or platform/backend lane.
+2. Rule-level capacity: `DesiredCount`, `MaxInstances`, or `MaxConcurrent`.
+3. Profile-level per-host capacity: `MaxParallelPerHost`.
+4. Host backend capacity: `MaxDockerContainers`, `MaxTartVMs`, or `MaxNativeProcesses`.
+
+For a profile mapped to a rule, the effective pool limit is the sum across matching hosts of `min(profile per-host limit, host backend limit)`. If a webhook rule allows 10 concurrent jobs, but the matching pool has 3 hosts and the profile allows 1 runner per host, only 3 runners can start at once. A backend limit of `0` disables that backend on that host.
+
+### 6. Runner image/backend info in the GHA job log
 
 Every runner deployed by RunnerRunner surfaces its backend, image, host, and
 profile info into the provider's job log through two complementary channels:
@@ -335,120 +353,32 @@ dotnet run --project src/RunnerRunner.Agent -- `
   --RunnerRunner:AgentName=windows-build-01
 ```
 
-## Docker Compose Examples
+## Docker Compose Topology
 
-### Basic: Server + Local Agent
+The checked-in `docker-compose.yml` runs the production-like local topology:
 
-```yaml
-services:
-  server:
-    build:
-      context: .
-      dockerfile: src/RunnerRunner.Server/Dockerfile
-    ports:
-      - "8080:8080"
-    volumes:
-      - server-data:/app/data
-    environment:
-      - Database__Path=/app/data/runnerrunner.db
-      - ASPNETCORE_URLS=http://+:8080
+| Service | Purpose |
+|---|---|
+| `postgres` | PostgreSQL 17 for DocumentDB, Orleans clustering, grain state, and reminders |
+| `server` | Blazor UI, webhook API, SignalR hub, Orleans server silo |
+| `host-silo` | Headless Orleans host silo plus host execution bridge |
 
-  agent:
-    build:
-      context: .
-      dockerfile: src/RunnerRunner.Agent/Dockerfile
-    environment:
-      - RunnerRunner__ServerUrl=http://server:8080
-      - RunnerRunner__AgentName=local-docker-host
-      - RunnerRunner__AgentToken=changeme
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - server
+Key ports:
 
-volumes:
-  server-data:
+| Port | Service |
+|---|---|
+| `4779` | RunnerRunner web UI and API |
+| `5432` | PostgreSQL |
+| `11111` / `30000` | Server Orleans silo/gateway |
+| `11112` / `30001` | HostSilo Orleans silo/gateway |
+
+The compose file wires both server and host-silo to:
+
+```text
+Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
 ```
 
-### Production: Server Behind Reverse Proxy
-
-```yaml
-services:
-  server:
-    build:
-      context: .
-      dockerfile: src/RunnerRunner.Server/Dockerfile
-    expose:
-      - "8080"
-    volumes:
-      - server-data:/app/data
-    environment:
-      - Database__Path=/app/data/runnerrunner.db
-      - ASPNETCORE_URLS=http://+:8080
-      - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
-    restart: unless-stopped
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "443:443"
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/nginx/certs:ro
-    depends_on:
-      - server
-    restart: unless-stopped
-
-volumes:
-  server-data:
-```
-
-### Multi-Agent: Server + Multiple Hosts
-
-```yaml
-services:
-  server:
-    build:
-      context: .
-      dockerfile: src/RunnerRunner.Server/Dockerfile
-    ports:
-      - "8080:8080"
-    volumes:
-      - server-data:/app/data
-    environment:
-      - Database__Path=/app/data/runnerrunner.db
-      - ASPNETCORE_URLS=http://+:8080
-
-  agent-linux-1:
-    build:
-      context: .
-      dockerfile: src/RunnerRunner.Agent/Dockerfile
-    environment:
-      - RunnerRunner__ServerUrl=http://server:8080
-      - RunnerRunner__AgentName=linux-build-01
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - server
-
-  agent-linux-2:
-    build:
-      context: .
-      dockerfile: src/RunnerRunner.Agent/Dockerfile
-    environment:
-      - RunnerRunner__ServerUrl=http://server:8080
-      - RunnerRunner__AgentName=linux-build-02
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - server
-
-volumes:
-  server-data:
-```
-
-> **Note:** macOS agents can't run in Docker — deploy the agent as a native binary on Mac hosts and point them at the server URL.
+> **Note:** macOS agents cannot run in Docker. Deploy the macOS agent or HostSilo as a native binary and point it at the server URL.
 
 ## Execution Backends
 
@@ -463,19 +393,25 @@ volumes:
 Env vars are composed in layers (later layers win on key conflicts):
 
 ```
-Layer 1: Env Var Sets (ordered by priority — higher wins)
-   └─ dotnet-8-sdk (priority 1): DOTNET_ROOT=/usr/share/dotnet
-   └─ android-sdk (priority 2): ANDROID_HOME=/opt/android
+Layer 1: Provider credentials (auto-injected RR_* values)
+   RR_GITHUB_TOKEN=...
 
-Layer 2: Profile Overrides
-   └─ DOTNET_ROOT=/custom/dotnet  (overrides set value)
+Layer 2: Env Var Sets (ordered by priority)
+   dotnet-8-sdk (priority 1): DOTNET_ROOT=/usr/share/dotnet
+   android-sdk (priority 2): ANDROID_HOME=/opt/android
 
-Layer 3: Host Overrides
-   └─ ANDROID_HOME=/local/android  (overrides everything for this host)
+Layer 3: Profile overrides
+   DOTNET_ROOT=/custom/dotnet
 
-Layer 4: Instance (auto-injected)
-   └─ RUNNER_NAME=profile-abc123
+Layer 4: Host overrides
+   ANDROID_HOME=/local/android
+
+Layer 5: Instance values
+   RR_INSTANCE_ID=...
+   RR_RUNNER_NAME=profile-abc123
 ```
+
+After composition, `$VAR` and `${VAR}` references are expanded so values can chain through earlier layers.
 
 ## Configuration Reference
 
@@ -483,8 +419,10 @@ Layer 4: Instance (auto-injected)
 
 | Setting | Default | Description |
 |---|---|---|
-| `Database:Path` | `runnerrunner.db` | Path to the SQLite database file |
+| `Database:ConnectionString` | `Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner` | PostgreSQL connection string for DocumentDB and Orleans |
+| `ConnectionStrings:DefaultConnection` | *(empty)* | Alternate PostgreSQL connection string source |
 | `ASPNETCORE_URLS` | `http://localhost:5000` | Server listen URL |
+| `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised to other Orleans silos in production |
 
 ### Agent
 
@@ -514,10 +452,10 @@ dotnet build
 dotnet test
 ```
 
-55 tests across 3 projects:
-- **Core.Tests** — Model defaults, Id generation
-- **Server.Tests** — Provider API tests (mocked HTTP), orchestration engine logic, DocumentStore integration
-- **Agent.Tests** — Lifecycle manager, health reporter
+Tests are split across:
+- **Core.Tests** — model defaults and initialization behavior
+- **Server.Tests** — provider APIs, orchestration, provisioning, capacity planning, webhooks, DocumentStore integration
+- **Agent.Tests** — lifecycle manager, backends, health reporter, job hook scripts
 
 ### Project Structure
 
@@ -527,6 +465,7 @@ src/
 ├── RunnerRunner.ServiceDefaults/   # Shared OTEL, health checks, service discovery
 ├── RunnerRunner.Core/              # Domain models, interfaces, SignalR contracts
 ├── RunnerRunner.Server/            # Blazor web UI + orchestration engine
+├── RunnerRunner.HostSilo/          # Per-host Orleans silo execution path
 └── RunnerRunner.Agent/             # Remote agent (deploys on each host)
 
 tests/
