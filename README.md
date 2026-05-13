@@ -2,6 +2,8 @@
 
 A self-hosted CI/CD runner orchestration platform for managing GitHub Actions, Gitea Actions, and Azure DevOps runners across a fleet of heterogeneous machines (macOS, Linux, Windows) from a single web UI.
 
+<img width="1331" height="760" alt="image" src="https://github.com/user-attachments/assets/7f4118de-a8cf-49bf-b052-b82fe1bd6bd5" />
+
 ## What It Does
 
 RunnerRunner lets you:
