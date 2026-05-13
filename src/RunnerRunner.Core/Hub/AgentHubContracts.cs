@@ -116,6 +116,50 @@ public class StopRunnerCommand
 }
 
 [GenerateSerializer]
+public enum HostCommandKind
+{
+    DeployRunner = 0,
+    StopRunner = 1,
+    CleanupOrphan = 2,
+    ListImages = 3,
+    PullImage = 4,
+    DeleteImage = 5,
+    GetHostLogs = 6,
+    GetRunnerLogs = 7
+}
+
+[GenerateSerializer]
+public sealed class HostCommandEnvelope
+{
+    [Id(0)]
+    public HostCommandKind Kind { get; set; }
+
+    [Id(1)]
+    public DeployRunnerCommand? DeployRunner { get; set; }
+
+    [Id(2)]
+    public StopRunnerCommand? StopRunner { get; set; }
+
+    [Id(3)]
+    public CleanupOrphanCommand? CleanupOrphan { get; set; }
+
+    [Id(4)]
+    public ListImagesCommand? ListImages { get; set; }
+
+    [Id(5)]
+    public PullImageCommand? PullImage { get; set; }
+
+    [Id(6)]
+    public DeleteImageCommand? DeleteImage { get; set; }
+
+    [Id(7)]
+    public GetHostLogsCommand? GetHostLogs { get; set; }
+
+    [Id(8)]
+    public GetRunnerLogsCommand? GetRunnerLogs { get; set; }
+}
+
+[GenerateSerializer]
 public class SyncDesiredStateCommand
 {
     [Id(0)]

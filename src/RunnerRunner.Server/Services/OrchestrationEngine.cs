@@ -1,34 +1,32 @@
-using Microsoft.AspNetCore.SignalR;
 using Orleans;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
-using RunnerRunner.Server.Hubs;
 using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Services;
 
 /// <summary>
 /// Desired-state reconciliation engine. Periodically compares desired runner assignments
-/// against actual running instances and issues deploy/stop commands to agents via SignalR.
+/// against actual running instances and issues deploy/stop commands to HostSilo workers.
 /// </summary>
 public class OrchestrationEngine : BackgroundService
 {
     private readonly IServiceProvider _services;
-    private readonly IHubContext<AgentHub, IAgentHubClient> _hubContext;
+    private readonly IHostCommandDispatcher _hostCommands;
     private readonly IGrainFactory _grainFactory;
     private readonly ILogger<OrchestrationEngine> _logger;
 
     public OrchestrationEngine(
         IServiceProvider services,
-        IHubContext<AgentHub, IAgentHubClient> hubContext,
+        IHostCommandDispatcher hostCommands,
         IGrainFactory grainFactory,
         ILogger<OrchestrationEngine> logger)
     {
         _services = services;
-        _hubContext = hubContext;
+        _hostCommands = hostCommands;
         _grainFactory = grainFactory;
         _logger = logger;
     }
@@ -37,7 +35,7 @@ public class OrchestrationEngine : BackgroundService
     {
         _logger.LogInformation("Orchestration engine started");
 
-        // Wait a bit for agents to connect on startup
+        // Wait a bit for HostSilos to register on startup.
         await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -65,13 +63,14 @@ public class OrchestrationEngine : BackgroundService
         var profiles = (await store.Query<RunnerProfile>().ToList()).ToList();
         var credentials = (await store.Query<ProviderCredential>().ToList()).ToList();
         var hosts = (await store.Query<Host>().ToList()).ToList();
-        var connectedAgents = AgentHub.GetConnectedAgents();
 
         if (assignments.Count == 0)
             return;
 
-        _logger.LogInformation("Reconciling: {Assignments} assignments, {Agents} connected agents, {Hosts} hosts",
-            assignments.Count, connectedAgents.Count, hosts.Count);
+        var onlineHosts = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
+
+        _logger.LogInformation("Reconciling: {Assignments} assignments, {OnlineHosts} online HostSilos, {Hosts} hosts",
+            assignments.Count, onlineHosts, hosts.Count);
 
         foreach (var assignment in assignments)
         {
@@ -82,7 +81,7 @@ public class OrchestrationEngine : BackgroundService
                 continue;
             }
 
-            // Find the host record and its connected agent
+            // Find the host record and ensure its HostSilo is online.
             var host = hosts.FirstOrDefault(h => h.Id == assignment.HostId);
             if (host == null)
             {
@@ -90,12 +89,10 @@ public class OrchestrationEngine : BackgroundService
                 continue;
             }
 
-            var agent = connectedAgents.Values.FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-            if (agent == null)
+            if (host.AgentStatus != AgentStatus.Online)
             {
-                _logger.LogInformation("Host {HostName} (id:{HostId}) agent not connected, skipping. Connected agents: [{Agents}]",
-                    host.Name, host.Id,
-                    string.Join(", ", connectedAgents.Values.Select(a => a.AgentInfo.Name)));
+                _logger.LogInformation("Host {HostName} (id:{HostId}) HostSilo is {Status}, skipping.",
+                    host.Name, host.Id, host.AgentStatus);
                 continue;
             }
 
@@ -118,11 +115,11 @@ public class OrchestrationEngine : BackgroundService
                 // Need to scale up
                 var toStart = desiredCount - currentCount;
                 _logger.LogInformation("Scaling up: {Count} more instance(s) of {Profile} on {Host}",
-                    toStart, profile.Name, agent.AgentInfo.Name);
+                    toStart, profile.Name, host.Name);
 
                 for (var i = 0; i < toStart; i++)
                 {
-                    await DeployRunnerAsync(store, profile, assignment, credentials, agent, ct);
+                    await DeployRunnerAsync(store, profile, assignment, credentials, ct);
                 }
             }
             else if (currentCount > desiredCount)
@@ -130,12 +127,12 @@ public class OrchestrationEngine : BackgroundService
                 // Need to scale down
                 var toStop = currentCount - desiredCount;
                 _logger.LogInformation("Scaling down: stopping {Count} instance(s) of {Profile} on {Host}",
-                    toStop, profile.Name, agent.AgentInfo.Name);
+                    toStop, profile.Name, host.Name);
 
                 var instancesToStop = runningForAssignment.Take(toStop).ToList();
                 foreach (var instance in instancesToStop)
                 {
-                    await StopRunnerAsync(store, instance, agent, ct);
+                    await StopRunnerAsync(store, instance, ct);
                 }
             }
         }
@@ -158,7 +155,6 @@ public class OrchestrationEngine : BackgroundService
         RunnerProfile profile,
         RunnerAssignment assignment,
         List<ProviderCredential> credentials,
-        ConnectedAgent agent,
         CancellationToken ct)
     {
         // Resolve credential first (needed for both env var injection and registration token)
@@ -219,7 +215,7 @@ public class OrchestrationEngine : BackgroundService
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex,
-                        "Failed to query live runner versions for {Provider}; deploy will rely on agent-side fallback",
+                        "Failed to query live runner versions for {Provider}; deploy will rely on host-side fallback",
                         profile.Provider);
                 }
             }
@@ -231,7 +227,7 @@ public class OrchestrationEngine : BackgroundService
         }
 
         // Install RR_HOOK_* sentinel + RR_META_* bag before the deploy command
-        // is built so the agent can both honor the job-started banner request
+        // is built so the HostSilo can both honor the job-started banner request
         // and populate it with consistent metadata.
         if (profile.EmitJobStartedBanner)
             envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
@@ -243,7 +239,7 @@ public class OrchestrationEngine : BackgroundService
         // backend/image/host info without bloating the runner name.
         var effectiveLabels = RunnerMetadataBuilder.MergeMetadataLabels(profile.Labels, profile, host);
 
-        // Send deploy command to agent
+        // Send deploy command to the host-local HostSilo.
         var initSteps = await InitStepResolver.ResolveAsync(
             store, profile, envVars, profile.ExecutionBackend, host?.Platform ?? HostPlatform.Linux);
 
@@ -276,7 +272,7 @@ public class OrchestrationEngine : BackgroundService
         await runnerGrain.MarkStarting("Sending deploy command to host");
         try
         {
-            await _hubContext.Clients.Client(agent.ConnectionId).DeployRunner(command);
+            await _hostCommands.DispatchDeployRunnerAsync(assignment.HostId, command);
             await runnerGrain.UpdateStatusMessage("Deploy command sent to host");
             await runnerGrain.MarkDeployed();
         }
@@ -286,19 +282,18 @@ public class OrchestrationEngine : BackgroundService
             throw;
         }
 
-        _logger.LogInformation("Deploy command sent for {RunnerName} to {Host}", runnerName, agent.AgentInfo.Name);
+        _logger.LogInformation("Deploy command sent for {RunnerName} to host {HostId}", runnerName, assignment.HostId);
     }
 
     private async Task StopRunnerAsync(
         IDocumentStore store,
         RunnerInstance instance,
-        ConnectedAgent agent,
         CancellationToken ct)
     {
         var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id);
         await runnerGrain.MarkStopping();
 
-        await _hubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+        await _hostCommands.DispatchStopRunnerAsync(instance.HostId, new StopRunnerCommand
         {
             InstanceId = instance.Id,
             InstanceHandle = instance.ContainerId ?? instance.VmName ?? instance.ProcessId?.ToString()

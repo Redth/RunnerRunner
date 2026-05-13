@@ -1,8 +1,6 @@
-using Microsoft.AspNetCore.SignalR;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
-using RunnerRunner.Server.Hubs;
 using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Services;
@@ -28,16 +26,16 @@ public class RunnerTimeoutService : BackgroundService
 
     private readonly ILogger<RunnerTimeoutService> _logger;
     private readonly IServiceProvider _services;
-    private readonly IHubContext<AgentHub, IAgentHubClient> _hubContext;
+    private readonly IHostCommandDispatcher _hostCommands;
 
     public RunnerTimeoutService(
         ILogger<RunnerTimeoutService> logger,
         IServiceProvider services,
-        IHubContext<AgentHub, IAgentHubClient> hubContext)
+        IHostCommandDispatcher hostCommands)
     {
         _logger = logger;
         _services = services;
-        _hubContext = hubContext;
+        _hostCommands = hostCommands;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -106,7 +104,7 @@ public class RunnerTimeoutService : BackgroundService
             instance.RunnerName, instance.Id, now - referenceTime);
 
         instance.Status = RunnerInstanceStatus.Failed;
-        instance.StatusMessage = "Deploy timeout — agent did not acknowledge";
+        instance.StatusMessage = "Deploy timeout — HostSilo did not acknowledge";
         await store.Update(instance);
 
         if (instance.ProvisioningMode == "dynamic")
@@ -257,8 +255,7 @@ public class RunnerTimeoutService : BackgroundService
     }
 
     /// <summary>
-    /// Best-effort attempt to send a StopRunner command to the agent hosting this instance.
-    /// Mirrors the pattern from DynamicProvisioningService.HandleJobCompleted.
+    /// Best-effort attempt to send a StopRunner command to the HostSilo hosting this instance.
     /// </summary>
     private async Task TrySendStopRunner(IDocumentStore store, RunnerInstance instance)
     {
@@ -271,19 +268,7 @@ public class RunnerTimeoutService : BackgroundService
                 return;
             }
 
-            var agent = AgentHub.GetConnectedAgents().Values
-                .FirstOrDefault(a =>
-                    a.AgentInfo.Name == host.Name
-                    || a.AgentInfo.AgentId == host.Name
-                    || a.AgentInfo.AgentId == host.Id);
-
-            if (agent == null)
-            {
-                _logger.LogDebug("No connected agent for host {HostName}, skipping StopRunner", host.Name);
-                return;
-            }
-
-            await _hubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+            await _hostCommands.DispatchStopRunnerAsync(host.Id, new StopRunnerCommand
             {
                 InstanceId = instance.Id,
                 InstanceHandle = instance.ContainerId ?? instance.VmName ?? instance.ProcessId?.ToString()

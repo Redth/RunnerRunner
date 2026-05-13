@@ -24,18 +24,18 @@ PostgreSQL
   `-- Shiny DocumentDB read model
 
 RunnerRunner.Server
-  |-- Blazor UI, webhook API, SignalR AgentHub
+  |-- Blazor UI and webhook API
   `-- Orleans grains for hosts, profiles, provisioning rules, runners
 
 Host machines
-  |-- RunnerRunner.HostSilo (Orleans host-local execution path)
-  `-- RunnerRunner.Agent (legacy SignalR execution path)
+  `-- RunnerRunner.HostSilo
+        |-- Orleans cluster member
         `-- Docker, Tart, or Native runner backends
 ```
 
 **Server** - Blazor web UI for managing profiles, hosts, env vars, credentials, provisioning rules, and webhook routing. It owns the shared PostgreSQL-backed control plane and sends runner lifecycle commands to hosts.
 
-**HostSilo / Agent** - Per-host workers. `HostSilo` joins the Orleans cluster for the newer host-local execution model; `Agent` is the current legacy worker that connects outbound over SignalR and executes Docker, Tart, or native runner lifecycles.
+**HostSilo** - Per-host worker. `HostSilo` joins the Orleans cluster, receives host commands through Orleans streams, and executes Docker, Tart, or native runner lifecycles locally.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how provisioning rules, profiles, hosts, and runner instances combine to calculate capacity and concurrency.
 
@@ -62,22 +62,22 @@ aspire run
 
 This starts:
 - **Server** on `http://localhost:5080` — the web UI
-- **Agent** auto-connected to the server
+- **HostSilo** for host-local runner execution
 - **Aspire Dashboard** with real-time logs, traces, and metrics for all services
 
 ### Option 2: Deploy Everything (One Command)
 
-Deploy the full stack to your Linux host + macOS agent in one shot:
+Deploy the full stack to your Linux host plus optional macOS/Windows HostSilo hosts in one shot:
 
 ```bash
 ./deploy/deploy-all.sh
 ```
 
 This will:
-1. Build Docker images for Server + Linux Agent
+1. Build Docker images for Server + Linux HostSilo
 2. Push to your container registry (default: `ghcr.io/redth/runnerrunner`)
 3. SSH into the Linux host, deploy via `docker compose up`
-4. Publish a native `osx-arm64` binary, SSH into the Mac, install as a launchd service
+4. Publish native HostSilo binaries, SSH into macOS/Windows hosts, and install them as host services
 
 **Configure hosts** via environment variables:
 
@@ -151,9 +151,9 @@ The server is available at `http://localhost:4779` by default.
 cd src/RunnerRunner.Server
 dotnet run
 
-# Terminal 2: Start a local agent
-cd src/RunnerRunner.Agent
-dotnet run -- --RunnerRunner:ServerUrl=http://localhost:5080 --RunnerRunner:AgentName=my-local-agent
+# Terminal 2: Start a local HostSilo
+cd src/RunnerRunner.HostSilo
+dotnet run -- --Database:ConnectionString="Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
 ```
 
 ## Getting Started
@@ -281,78 +281,53 @@ profile info into the provider's job log through two complementary channels:
   registration token before the agent pulls the image, so the image
   digest isn't currently included in `rr-*` labels.
 
-## Deploying Agents
+## Release installs
 
-### Linux (Docker)
+RunnerRunner releases are HostSilo-only: there is no legacy SignalR agent package.
 
-```bash
-docker run -d \
-  --name runnerrunner-agent \
-  -e RunnerRunner__ServerUrl=https://your-server:8080 \
-  -e RunnerRunner__AgentName=linux-build-01 \
-  -e RunnerRunner__AgentToken=your-enrollment-token \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  --restart unless-stopped \
-  ghcr.io/your-org/runnerrunner-agent:latest
-```
-
-### macOS (Native Binary via Deploy Script — Recommended)
-
-The deploy script publishes, copies, and installs the agent as a launchd service in one command:
+### Linux server and bundled Linux HostSilo
 
 ```bash
-# 1. Configure (one-time): copy and edit the env file
-cp deploy/macos/agent.env.example deploy/macos/agent.env
-# Edit deploy/macos/agent.env with your server URL, agent name, token
-
-# 2. Deploy to your Mac
-./deploy/macos/deploy-agent.sh 192.168.2.134
-
-# Or with a different SSH user
-SSH_USER=admin ./deploy/macos/deploy-agent.sh 192.168.2.134
+curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
+chmod +x install-server.sh
+sudo ./install-server.sh --orleans-ip 192.168.2.4 --host-silo-ip 192.168.2.4
 ```
 
-This installs the agent to `/opt/runnerrunner/` and registers it as a launchd system service that:
-- Starts automatically on boot
-- Restarts automatically if it crashes
-- Logs to `/var/log/runnerrunner-agent.log`
+Updates are intentionally one command:
 
-**Re-deploy after code changes** — just run the same command again:
 ```bash
-./deploy/macos/deploy-agent.sh 192.168.2.134
+sudo runnerrunner-server update
 ```
 
-**Service management on the Mac:**
+The release compose bundle consumes published GHCR images and runs PostgreSQL, `RunnerRunner.Server`, and a Linux `RunnerRunner.HostSilo`.
+
+### Linux HostSilo
+
+Linux Docker-backed hosts should run the HostSilo container with the host Docker socket mounted. The bundled Linux compose stack already does this. Native `linux-x64` and `linux-arm64` HostSilo tarballs are also published for hosts that need native process execution.
+
+### macOS HostSilo
+
+macOS uses a native LaunchAgent, not Docker. Docker on macOS runs Linux containers inside a VM and cannot reliably control Tart, Xcode, Keychain, or native macOS runner processes on the host.
+
 ```bash
-# Check status
-ssh root@192.168.2.134 'launchctl print system/com.runnerrunner.agent'
-
-# View logs
-ssh root@192.168.2.134 'tail -f /var/log/runnerrunner-agent.log'
-
-# Restart
-ssh root@192.168.2.134 'launchctl kickstart -k system/com.runnerrunner.agent'
-
-# Stop
-ssh root@192.168.2.134 'launchctl bootout system/com.runnerrunner.agent'
+curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-host-macos.sh -o install-host-macos.sh
+chmod +x install-host-macos.sh
+./install-host-macos.sh \
+  --host-name mac-mini-01 \
+  --advertised-ip 192.168.2.134 \
+  --database-connection 'Host=192.168.2.4;Port=5433;Database=runnerrunner;Username=runnerrunner;Password=...'
 ```
 
-> **Prerequisites on the Mac host:** SSH access, and optionally [tart](https://tart.run) (`brew install cirruslabs/cli/tart`) for macOS VM runners.
+### Windows HostSilo
 
-### Windows (Docker or Native)
+Windows uses a native Windows Service package by default. Windows Docker mode is not the main release path.
 
 ```powershell
-# Docker
-docker run -d `
-  -e RunnerRunner__ServerUrl=https://your-server:8080 `
-  -e RunnerRunner__AgentName=windows-build-01 `
-  -e RunnerRunner__AgentToken=your-enrollment-token `
-  ghcr.io/your-org/runnerrunner-agent:latest
-
-# Or native
-dotnet run --project src/RunnerRunner.Agent -- `
-  --RunnerRunner:ServerUrl=https://your-server:8080 `
-  --RunnerRunner:AgentName=windows-build-01
+Expand-Archive .\runnerrunner-hostsilo-win-x64.zip -DestinationPath 'C:\Program Files\RunnerRunner' -Force
+powershell -ExecutionPolicy Bypass -File .\Install-HostSilo.ps1 `
+  -HostName windows-build-01 `
+  -AdvertisedIPAddress 192.168.2.50 `
+  -DatabaseConnectionString 'Host=192.168.2.4;Port=5433;Database=runnerrunner;Username=runnerrunner;Password=...'
 ```
 
 ## Docker Compose Topology
@@ -362,8 +337,8 @@ The checked-in `docker-compose.yml` runs the production-like local topology:
 | Service | Purpose |
 |---|---|
 | `postgres` | PostgreSQL 17 for DocumentDB, Orleans clustering, grain state, and reminders |
-| `server` | Blazor UI, webhook API, SignalR hub, Orleans server silo |
-| `host-silo` | Headless Orleans host silo plus host execution bridge |
+| `server` | Blazor UI, webhook API, Orleans server silo |
+| `host-silo` | Headless Orleans host silo with local runner execution |
 
 Key ports:
 
@@ -426,19 +401,21 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `ASPNETCORE_URLS` | `http://localhost:5000` | Server listen URL |
 | `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised to other Orleans silos in production |
 
-### Agent
+### HostSilo
 
 | Setting | Default | Description |
 |---|---|---|
-| `RunnerRunner:ServerUrl` | `http://localhost:8080` | URL of the RunnerRunner server |
-| `RunnerRunner:AgentName` | Machine hostname | Display name for this agent |
-| `RunnerRunner:AgentToken` | *(empty)* | Enrollment token (generated in server UI) |
-| `RunnerRunner:AgentId` | *(auto-generated)* | Unique agent identifier |
+| `Database:ConnectionString` | *(empty)* | PostgreSQL connection string for Orleans clustering and runner state |
+| `RunnerRunner:HostId` | Machine hostname | Stable host identity |
+| `RunnerRunner:HostName` | Machine hostname | Display name for this host |
+| `RunnerRunner:Platform` | Current OS | Optional platform override reported to the server |
+| `RunnerRunner:Architecture` | Current process architecture | Optional architecture override reported to the server |
+| `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised to other Orleans silos in production |
 
 All settings can be provided via:
 - `appsettings.json`
-- Environment variables (e.g. `RunnerRunner__ServerUrl`)
-- Command-line args (e.g. `--RunnerRunner:ServerUrl=...`)
+- Environment variables (e.g. `RunnerRunner__HostName`)
+- Command-line args (e.g. `--RunnerRunner:HostName=mac-mini-01`)
 
 ## Development
 
@@ -465,10 +442,10 @@ Tests are split across:
 src/
 ├── RunnerRunner.AppHost/           # Aspire orchestrator (local dev)
 ├── RunnerRunner.ServiceDefaults/   # Shared OTEL, health checks, service discovery
-├── RunnerRunner.Core/              # Domain models, interfaces, SignalR contracts
+├── RunnerRunner.Core/              # Domain models, interfaces, command/event contracts
 ├── RunnerRunner.Server/            # Blazor web UI + orchestration engine
 ├── RunnerRunner.HostSilo/          # Per-host Orleans silo execution path
-└── RunnerRunner.Agent/             # Remote agent (deploys on each host)
+└── RunnerRunner.Agent/             # Reusable runner backend/lifecycle library
 
 tests/
 ├── RunnerRunner.Core.Tests/

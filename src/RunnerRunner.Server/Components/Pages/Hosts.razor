@@ -3,14 +3,12 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
-@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Server.Services
-@using Microsoft.AspNetCore.SignalR
 @inject IDocumentStore Store
 @inject IJSRuntime JS
-@inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject IGrainFactory GrainFactory
 @inject CapacityPlanningService CapacityService
+@inject IHostCommandDispatcher HostCommandDispatcher
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -468,24 +466,25 @@
         await ReloadData();
     }
 
-    // LEGACY: Uses AgentHub to send stop commands. Will be replaced by RunnerInstanceGrain.MarkStopping()
     private async Task StopRunnersForHost(string hostId)
     {
         var host = hosts.FirstOrDefault(h => h.Id == hostId);
         if (host == null) return;
-        var agent = AgentHub.GetConnectedAgents().Values
-            .FirstOrDefault(a => a.AgentInfo.Name == host.Name);
-        if (agent == null) return;
 
         var running = (await Store.Query<RunnerInstance>().ToList())
             .Where(i => i.HostId == hostId &&
                         i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting).ToList();
         foreach (var inst in running)
-            await HubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
+        {
+            var runnerGrain = GrainFactory.GetGrain<IRunnerInstanceGrain>(inst.Id);
+            await runnerGrain.MarkStopping();
+
+            await HostCommandDispatcher.DispatchStopRunnerAsync(hostId, new StopRunnerCommand
             {
                 InstanceId = inst.Id,
                 InstanceHandle = inst.ContainerId ?? inst.VmName ?? inst.ProcessId?.ToString()
             });
+        }
     }
 
     private string GetStatusBadge(AgentStatus status) => status switch

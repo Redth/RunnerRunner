@@ -33,6 +33,7 @@ public class DockerBackendTests
         Assert.Equal("powershell.exe", entrypoint[0]);
         Assert.Contains("run.cmd", entrypoint[4]);
         Assert.Contains("RR_JIT_CONFIG", entrypoint[4]);
-        Assert.Contains("cmd.exe", entrypoint[4]);
+        Assert.Contains("Refusing to idle on the image entrypoint", entrypoint[4]);
+        Assert.DoesNotContain("cmd.exe", entrypoint[4]);
     }
 }

@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  IMAGE_PREFIX: ghcr.io/redth/runnerrunner
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Test
+        run: dotnet test RunnerRunner.slnx --configuration Release
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/RunnerRunner.Server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/server:${{ github.ref_name }}
+            ${{ env.IMAGE_PREFIX }}/server:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/server:latest
+
+      - name: Build and push HostSilo image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/RunnerRunner.HostSilo/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/hostsilo:${{ github.ref_name }}
+            ${{ env.IMAGE_PREFIX }}/hostsilo:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/hostsilo:latest
+
+      - name: Publish native HostSilo assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/release artifacts/publish
+          for rid in linux-x64 linux-arm64 osx-x64 osx-arm64 win-x64; do
+            out="artifacts/publish/${rid}"
+            dotnet publish src/RunnerRunner.HostSilo/RunnerRunner.HostSilo.csproj \
+              -c Release \
+              -r "${rid}" \
+              --self-contained \
+              -o "${out}" \
+              --nologo
+
+            if [[ "${rid}" == win-* ]]; then
+              (cd "${out}" && zip -qr "../../release/runnerrunner-hostsilo-${rid}.zip" .)
+            else
+              tar -czf "artifacts/release/runnerrunner-hostsilo-${rid}.tar.gz" -C "${out}" .
+            fi
+          done
+
+      - name: Package Linux compose bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="$(mktemp -d)"
+          mkdir -p "${staging}/postgres-init"
+          cp deploy/linux/compose.yaml "${staging}/compose.yaml"
+          cp deploy/linux/install-server.sh "${staging}/install-server.sh"
+          cp deploy/linux/update-server.sh "${staging}/update-server.sh"
+          cp deploy/postgres-init/*.sql "${staging}/postgres-init/"
+          tar -czf artifacts/release/runnerrunner-linux-compose.tar.gz -C "${staging}" .
+          cp deploy/linux/compose.yaml artifacts/release/linux-compose.yaml
+          cp deploy/linux/install-server.sh artifacts/release/install-server.sh
+          cp deploy/linux/update-server.sh artifacts/release/update-server.sh
+          cp deploy/macos/install-host-macos.sh artifacts/release/install-host-macos.sh
+          cp deploy/windows/Install-HostSilo.ps1 artifacts/release/Install-HostSilo.ps1
+
+      - name: Generate checksums and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts/release
+          sha256sum * > SHA256SUMS
+          python - <<'PY'
+          import hashlib, json, os
+          assets = []
+          for name in sorted(os.listdir(".")):
+              if name in {"release-manifest.json"}:
+                  continue
+              if os.path.isfile(name):
+                  with open(name, "rb") as f:
+                      digest = hashlib.sha256(f.read()).hexdigest()
+                  assets.append({"name": name, "sha256": digest})
+          manifest = {
+              "version": os.environ["GITHUB_REF_NAME"],
+              "gitSha": os.environ["GITHUB_SHA"],
+              "images": {
+                  "server": [
+                      f"{os.environ['IMAGE_PREFIX']}/server:{os.environ['GITHUB_REF_NAME']}",
+                      f"{os.environ['IMAGE_PREFIX']}/server:{os.environ['GITHUB_SHA']}"
+                  ],
+                  "hostsilo": [
+                      f"{os.environ['IMAGE_PREFIX']}/hostsilo:{os.environ['GITHUB_REF_NAME']}",
+                      f"{os.environ['IMAGE_PREFIX']}/hostsilo:{os.environ['GITHUB_SHA']}"
+                  ]
+              },
+              "assets": assets
+          }
+          with open("release-manifest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          PY
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/release/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "HostSilo-only RunnerRunner release artifacts for Linux, macOS, and Windows."

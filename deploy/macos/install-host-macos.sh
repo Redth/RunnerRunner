@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="${RUNNERRUNNER_VERSION:-latest}"
+INSTALL_ROOT="${INSTALL_ROOT:-${HOME}/.runnerrunner}"
+RELEASE_BASE_URL="${RUNNERRUNNER_RELEASE_BASE_URL:-https://github.com/redth/RunnerRunner/releases/latest/download}"
+SERVICE_LABEL="com.runnerrunner.hostsilo"
+HOST_NAME="${HOST_NAME:-$(hostname -s)}"
+HOST_ID="${HOST_ID:-}"
+DATABASE_CONNECTION="${DATABASE_CONNECTION:-}"
+ADVERTISED_IP="${ADVERTISED_IP:-}"
+
+usage() {
+    cat <<USAGE
+Usage: ./install-host-macos.sh --database-connection CONNECTION_STRING [options]
+
+Options:
+  --version VERSION                    HostSilo version to install (default: latest)
+  --install-root PATH                  Install root (default: ~/.runnerrunner)
+  --host-id ID                         Host ID (default: macos-host-\$ADVERTISED_IP or hostname)
+  --host-name NAME                     Display name (default: hostname)
+  --advertised-ip IP                   IP this HostSilo advertises to Orleans
+  --database-connection CONNECTION     PostgreSQL/Orleans connection string
+
+macOS hosts install as a LaunchAgent for the current interactive user so Tart,
+Xcode, Keychain, and user-session resources remain available.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version) VERSION="$2"; shift 2 ;;
+        --install-root) INSTALL_ROOT="$2"; shift 2 ;;
+        --host-id) HOST_ID="$2"; shift 2 ;;
+        --host-name) HOST_NAME="$2"; shift 2 ;;
+        --advertised-ip) ADVERTISED_IP="$2"; shift 2 ;;
+        --database-connection) DATABASE_CONNECTION="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
+    esac
+done
+
+if [[ -z "${DATABASE_CONNECTION}" ]]; then
+    echo "--database-connection is required for HostSilo trusted-network cluster mode." >&2
+    exit 1
+fi
+
+arch="$(uname -m)"
+case "${arch}" in
+    arm64|aarch64) rid="osx-arm64" ;;
+    x86_64) rid="osx-x64" ;;
+    *) echo "Unsupported macOS architecture: ${arch}" >&2; exit 1 ;;
+esac
+
+if [[ -z "${HOST_ID}" ]]; then
+    if [[ -n "${ADVERTISED_IP}" ]]; then
+        HOST_ID="macos-host-${ADVERTISED_IP}"
+    else
+        HOST_ID="${HOST_NAME}"
+    fi
+fi
+
+version_dir="${INSTALL_ROOT}/versions/${VERSION}"
+archive="runnerrunner-hostsilo-${rid}.tar.gz"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "${tmp_dir}"' EXIT
+
+mkdir -p "${version_dir}" "${INSTALL_ROOT}/logs"
+curl -fsSL "${RELEASE_BASE_URL}/${archive}" -o "${tmp_dir}/${archive}"
+tar -xzf "${tmp_dir}/${archive}" -C "${version_dir}"
+chmod +x "${version_dir}/RunnerRunner.HostSilo"
+codesign --force -s - "${version_dir}/RunnerRunner.HostSilo" >/dev/null 2>&1 || true
+
+cat > "${version_dir}/appsettings.Production.json" <<JSON
+{
+  "HostSilo": {
+    "HostId": "${HOST_ID}",
+    "HostName": "${HOST_NAME}",
+    "Platform": "MacOS"
+  },
+  "Database": {
+    "ConnectionString": "${DATABASE_CONNECTION}"
+  },
+  "Orleans": {
+    "AdvertisedIPAddress": "${ADVERTISED_IP}"
+  }
+}
+JSON
+chmod 0600 "${version_dir}/appsettings.Production.json"
+
+ln -sfn "${version_dir}" "${INSTALL_ROOT}/current"
+
+launch_agents_dir="${HOME}/Library/LaunchAgents"
+plist_path="${launch_agents_dir}/${SERVICE_LABEL}.plist"
+mkdir -p "${launch_agents_dir}"
+
+cat > "${plist_path}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${SERVICE_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${INSTALL_ROOT}/current/RunnerRunner.HostSilo</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${INSTALL_ROOT}/current</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DOTNET_ENVIRONMENT</key>
+    <string>Production</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${INSTALL_ROOT}/logs/hostsilo.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>${INSTALL_ROOT}/logs/hostsilo.err.log</string>
+</dict>
+</plist>
+PLIST
+
+launchctl bootout "gui/$(id -u)/${SERVICE_LABEL}" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "${plist_path}"
+launchctl kickstart -k "gui/$(id -u)/${SERVICE_LABEL}"
+
+cat > "${INSTALL_ROOT}/runnerrunner-host" <<HOSTCTL
+#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-status}" in
+  status) exec launchctl print "gui/$(id -u)/${SERVICE_LABEL}" ;;
+  logs) exec tail -f "${INSTALL_ROOT}/logs/hostsilo.out.log" ;;
+  restart) exec launchctl kickstart -k "gui/$(id -u)/${SERVICE_LABEL}" ;;
+  *) echo "Usage: runnerrunner-host {status|logs|restart}" >&2; exit 1 ;;
+esac
+HOSTCTL
+chmod 0755 "${INSTALL_ROOT}/runnerrunner-host"
+
+echo "RunnerRunner HostSilo ${VERSION} installed for ${HOST_NAME}."
+echo "Use: ${INSTALL_ROOT}/runnerrunner-host status | logs | restart"

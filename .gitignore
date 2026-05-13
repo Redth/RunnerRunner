@@ -26,7 +26,6 @@ artifacts/
 
 ## Deploy secrets
 deploy/.env
-deploy/macos/agent.env
 
 ## Playwright
 .playwright-mcp/

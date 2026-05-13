@@ -21,38 +21,27 @@ RunnerRunner is a self-hosted CI/CD runner orchestration platform for GitHub Act
         |------------------------|          |------------------------|
         | Blazor UI              |          | Orleans cluster member |
         | Webhook API            |          | Host-local execution   |
-        | SignalR AgentHub       |          | Docker/Tart/Native     |
+        | Orleans streams        |          | Docker/Tart/Native     |
         | Orleans grains         |          +------------------------+
         | Orleans Dashboard      |
         +-----------+------------+
-                    |
-                    | SignalR WebSocket (legacy execution path)
-                    |
-        +-----------v------------+
-        | RunnerRunner.Agent     |
-        |------------------------|
-        | Connects outbound      |
-        | Receives deploy/stop   |
-        | Reports health/events  |
-        | Docker/Tart/Native     |
-        +------------------------+
 ```
 
-The current system is intentionally hybrid:
+The current system uses HostSilo as the only supported host-worker runtime:
 
 - **Orleans grains** own durable control-plane state for hosts, profiles, provisioning rules, and runner lifecycle.
-- **Shiny DocumentDB** stores queryable PostgreSQL read projections used by the Blazor UI and legacy services.
-- **SignalR AgentHub** remains the active command channel for the legacy agent.
-- **HostSilo** is the Orleans-native host execution path being introduced so runner work can execute on host-local silos without SignalR.
+- **Shiny DocumentDB** stores queryable PostgreSQL read projections used by the Blazor UI and orchestration services.
+- **Orleans streams** carry host commands, runner status, host status, and reconciliation reports between the server and HostSilo workers.
+- **HostSilo** executes runner work on host-local silos without the legacy SignalR agent.
 
 ## Projects
 
 | Project | Responsibility |
 |---------|----------------|
-| `RunnerRunner.Core` | Shared domain models, hub contracts, provider/backend interfaces |
-| `RunnerRunner.Server` | Blazor UI, webhook endpoints, Orleans silo, SignalR hub, orchestration services |
-| `RunnerRunner.HostSilo` | Headless Orleans silo deployed on hosts for the host-local execution path |
-| `RunnerRunner.Agent` | Legacy worker deployed on hosts; executes Docker, Tart, and Native backends |
+| `RunnerRunner.Core` | Shared domain models, command/event contracts, provider/backend interfaces |
+| `RunnerRunner.Server` | Blazor UI, webhook endpoints, Orleans silo, orchestration services |
+| `RunnerRunner.HostSilo` | Headless Orleans silo deployed on hosts for local runner execution |
+| `RunnerRunner.Agent` | Reusable runner backend/lifecycle library for Docker, Tart, and Native execution |
 | `RunnerRunner.AppHost` | .NET Aspire local development orchestrator |
 | `RunnerRunner.ServiceDefaults` | OpenTelemetry, health checks, service discovery defaults |
 
@@ -129,12 +118,12 @@ Terminal states (`Stopped`, `Failed`, `Crashed`) do not consume capacity.
 
 ### Static assignments
 
-Legacy static assignment flow:
+Static assignment flow:
 
 1. User assigns a profile to a host with a desired count.
 2. `OrchestrationEngine` wakes every 15 seconds.
 3. It counts active instances for the host/profile assignment.
-4. If current is below desired, it creates runner grains/instances and sends `DeployRunner` to the connected agent.
+4. If current is below desired, it creates runner grains/instances and sends `DeployRunner` to HostSilo over Orleans streams.
 5. If current is above desired, it sends `StopRunner`.
 6. Old terminal runner records are removed after a grace period.
 
@@ -165,7 +154,7 @@ Webhook provisioning is job-driven:
 6. A host is selected.
 7. JIT config or registration token is generated for the provider.
 8. A dynamic `RunnerInstance` is initialized.
-9. `DeployRunner` is sent to the host's connected agent.
+9. `DeployRunner` is sent to the selected HostSilo over Orleans streams.
 10. The queued event is marked `provisioned` and linked to the instance.
 11. `in_progress` and `completed` provider events confirm execution and cleanup.
 
@@ -235,7 +224,7 @@ Before capacity is summed, hosts must match:
 - every rule `RequiredHostLabels` key/value pair;
 - Docker host compatibility, when a host advertises `docker_os`.
 
-The legacy SignalR execution path also requires a connected agent for the selected host. If capacity exists but no agent is connected, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
+HostSilo execution also requires the selected host to be online in the Orleans cluster. If capacity exists but the HostSilo is offline, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
 
 ### Effective pool math
 
@@ -338,7 +327,7 @@ Important timeout and recovery behavior:
 RunnerRunner maintains two durable views:
 
 1. **Orleans grain state** in PostgreSQL: lifecycle ownership, timers, durable grain state, reminders, cluster membership.
-2. **DocumentDB projections** in PostgreSQL: queryable documents used by Blazor pages and legacy services.
+2. **DocumentDB projections** in PostgreSQL: queryable documents used by Blazor pages and orchestration services.
 
 Grains sync important state changes to DocumentDB so the UI can query efficiently. Orleans streams publish runner and host status changes, and `StreamSubscriptionService` bridges those events to Blazor components for real-time refresh.
 
@@ -355,7 +344,7 @@ Key UI pages map directly to the domain model:
 | Profiles | Runner templates, labels, env vars, init steps, images |
 | Provisioning Rules | Static, ScaleSet, Webhook, and future Scheduled rules |
 | Images | Docker/Tart image management |
-| Logs | Agent and runner log viewing |
+| Logs | HostSilo and runner log viewing |
 | Env Variables | Reusable environment variable sets |
 | Webhooks / Webhook Events | Provider webhook bindings and audit trail |
 | Settings | Provider and registry credentials |
@@ -363,16 +352,14 @@ Key UI pages map directly to the domain model:
 
 Capacity views on rules, profiles, hosts, runners, and events use the same `CapacityPlanningService` calculations described above, so blockers in the UI reflect actual scheduling decisions.
 
-## Migration status
+## Runtime status
 
-| Area | Legacy path | Orleans path | Current state |
-|------|-------------|--------------|---------------|
-| Host connection | SignalR AgentHub | HostGrain/HostSilo | Hybrid |
-| Runner lifecycle | Agent callbacks and services | RunnerInstanceGrain | Grain state active, agent execution active |
-| Static provisioning | `RunnerAssignment` + `OrchestrationEngine` | `ProvisioningRuleGrain` Static | Both models present |
-| Webhook provisioning | `DynamicProvisioningService` | `ProvisioningRuleGrain` Webhook | Legacy service active with grain-backed instances |
-| Host selection | Capacity service + connected agents | Scheduler/host grains | Capacity service active |
-| Real-time UI | Static events | Orleans streams | Streams active |
-| Backend execution | SignalR `DeployRunner` to agent | Host-local silo execution | Agent active, HostSilo introduced |
-
-The migration direction is to keep the same domain model and capacity rules while moving host execution from SignalR agents to Orleans host-local silos.
+| Area | Runtime path |
+|------|--------------|
+| Host connection | HostGrain/HostSilo over Orleans clustering |
+| Runner lifecycle | RunnerInstanceGrain state with HostSilo-local execution |
+| Static provisioning | `RunnerAssignment` plus `ProvisioningRuleGrain` Static |
+| Webhook provisioning | `DynamicProvisioningService` with grain-backed runner instances |
+| Host selection | Capacity service using online HostSilo state and host capabilities |
+| Real-time UI | Orleans streams |
+| Backend execution | Orleans stream commands to HostSilo |

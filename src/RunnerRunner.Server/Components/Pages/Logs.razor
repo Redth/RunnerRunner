@@ -3,15 +3,13 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
-@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Server.Services
-@using Microsoft.AspNetCore.SignalR
 @using Microsoft.AspNetCore.Components
 @inject IDocumentStore Store
-@inject IHubContext<AgentHub, IAgentHubClient> HubContext
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
+@inject IHostCommandDispatcher HostCommandDispatcher
 @implements IDisposable
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
@@ -41,7 +39,7 @@
         </div>
         @foreach (var h in hosts)
         {
-            var src = $"agent:{h.Name}";
+            var src = $"host:{h.Name}";
             <div class="log-source-card @(selectedSource == src ? "active" : "")"
                  @onclick="() => SelectSource(src)">
                 <div class="d-flex align-items-center">
@@ -126,7 +124,7 @@
             <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
         </div>
         <div class="text-muted mt-2" style="font-size: 0.75rem;">
-            Host and runner logs are loaded on demand from the connected agent when available.
+            Host and runner logs are loaded on demand from HostSilo when available.
         </div>
     </div>
 </div>
@@ -197,8 +195,8 @@
     protected override async Task OnInitializedAsync()
     {
         await LoadSources();
-        AgentHub.OnHostLogsReceived += OnHostLogsReceived;
-        AgentHub.OnRunnerLogsReceived += OnRunnerLogsReceived;
+        StreamSubscriptionService.OnHostLogsReceived += OnHostLogsReceived;
+        StreamSubscriptionService.OnRunnerLogsReceived += OnRunnerLogsReceived;
 
         // Check for query string parameter
         var uri = new Uri(Nav.Uri);
@@ -262,9 +260,9 @@
             {
                 logContent = await GetServerLogsAsync();
             }
-            else if (selectedSource.StartsWith("agent:"))
+            else if (selectedSource.StartsWith("host:"))
             {
-                var hostName = selectedSource["agent:".Length..];
+                var hostName = selectedSource["host:".Length..];
                 logContent = await GetAgentLogsAsync(hostName);
             }
             else if (selectedSource.StartsWith("runner:"))
@@ -317,9 +315,7 @@
         var host = hosts.FirstOrDefault(h => h.Id == instance.HostId);
         if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
-        var agent = FindConnectedAgent(host);
-
-        if (agent == null)
+        if (host.AgentStatus != AgentStatus.Online)
         {
             var lines = new List<string>
             {
@@ -333,8 +329,8 @@
                 lines.Add($"Detail: {instance.StatusMessage}");
 
             lines.Add("");
-            lines.Add("\x1b[33mDirect live log streaming is unavailable for this host right now.\x1b[0m");
-            lines.Add("\x1b[90mThe runner is tracked by the Orleans lifecycle model, but live log streaming is not currently available from this host.\x1b[0m");
+            lines.Add("\x1b[33mDirect live log streaming is unavailable because this HostSilo is offline.\x1b[0m");
+            lines.Add("\x1b[90mThe runner is tracked by the Orleans lifecycle model, but live log streaming requires an online HostSilo.\x1b[0m");
             lines.Add("");
             lines.AddRange(GetManualLogHints(host, instance));
             return string.Join("\n", lines);
@@ -344,7 +340,7 @@
         _runnerLogsTcs = new TaskCompletionSource<string>();
         var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines };
 
-        await HubContext.Clients.Client(agent.ConnectionId).GetRunnerLogs(command);
+        await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
 
         var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
         if (completedTask == _runnerLogsTcs.Task)
@@ -366,11 +362,10 @@
         lines.Add($"\x1b[90mTimestamp: {DateTime.UtcNow:u}\x1b[0m");
         lines.Add("");
 
-        var connectedAgents = AgentHub.GetConnectedAgents();
         var onlineHosts = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
 
         lines.Add($"\x1b[1mHosts online in cluster:\x1b[0m {onlineHosts}/{hosts.Count}");
-        lines.Add($"\x1b[1mLive log bridges:\x1b[0m {connectedAgents.Count}");
+        lines.Add($"\x1b[1mLive HostSilo log sources:\x1b[0m {onlineHosts}");
         lines.Add("");
 
         foreach (var host in hosts.OrderBy(h => h.Label))
@@ -378,7 +373,7 @@
             var lastHb = host.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
             var runners = runnerInstances.Count(i => i.HostId == host.Id);
             var statusColor = host.AgentStatus == AgentStatus.Online ? "\x1b[32m" : "\x1b[90m";
-            var bridge = FindConnectedAgent(host) != null ? "live logs available" : "summary only";
+            var bridge = host.AgentStatus == AgentStatus.Online ? "live logs available" : "summary only";
             lines.Add($"  {statusColor}●\x1b[0m {host.Label} \x1b[90m({host.Platform} {host.Architecture})\x1b[0m — heartbeat: {lastHb}, runners: \x1b[1m{runners}\x1b[0m, log access: {bridge}");
         }
 
@@ -397,8 +392,6 @@
         var host = hosts.FirstOrDefault(h => h.Name == hostName);
         if (host == null) return "\x1b[31mHost not found.\x1b[0m";
 
-        var agent = FindConnectedAgent(host);
-
         var lines = new List<string>();
         lines.Add($"\x1b[1;36m=== Host: {host.Label} ===\x1b[0m");
         lines.Add($"\x1b[90mPlatform: {host.Platform} {host.Architecture}\x1b[0m");
@@ -408,13 +401,13 @@
             lines.Add($"Capabilities: \x1b[90m{string.Join(", ", host.Capabilities)}\x1b[0m");
         lines.Add("");
 
-        if (agent != null)
+        if (host.AgentStatus == AgentStatus.Online)
         {
             lines.Add($"\x1b[1mLive host log tail:\x1b[0m last {tailLines} lines");
-            lines.Add("\x1b[90mLoaded on demand from the connected host agent.\x1b[0m");
+            lines.Add("\x1b[90mLoaded on demand from HostSilo.\x1b[0m");
             lines.Add("");
 
-            var liveLogs = await RequestHostLogsAsync(agent);
+            var liveLogs = await RequestHostLogsAsync(host);
             if (!string.IsNullOrWhiteSpace(liveLogs))
                 lines.Add(liveLogs);
 
@@ -422,8 +415,8 @@
         }
         else
         {
-            lines.Add("\x1b[33mDirect live host log streaming is unavailable right now.\x1b[0m");
-            lines.Add("\x1b[90mThis host is registered with the cluster, but live log streaming is not currently available.\x1b[0m");
+            lines.Add("\x1b[33mDirect live host log streaming is unavailable because this HostSilo is offline.\x1b[0m");
+            lines.Add("\x1b[90mThis host is registered with the cluster, but live log streaming requires an online HostSilo.\x1b[0m");
             lines.Add("");
         }
 
@@ -450,7 +443,7 @@
         }
 
         lines.Add("");
-        if (agent == null)
+        if (host.AgentStatus != AgentStatus.Online)
             lines.AddRange(GetManualLogHints(host));
 
         return string.Join("\n", lines);
@@ -482,16 +475,10 @@
     private static bool IsManagedInstance(RunnerInstance instance) =>
         CapacityPlanningService.IsRunnerRunnerManaged(instance);
 
-    private ConnectedAgent? FindConnectedAgent(Host host) =>
-        AgentHub.GetConnectedAgents().Values.FirstOrDefault(a =>
-            a.AgentInfo.Name == host.Name
-            || a.AgentInfo.AgentId == host.Name
-            || a.AgentInfo.AgentId == host.Id);
-
-    private async Task<string> RequestHostLogsAsync(ConnectedAgent agent)
+    private async Task<string> RequestHostLogsAsync(Host host)
     {
         _hostLogsTcs = new TaskCompletionSource<string>();
-        await HubContext.Clients.Client(agent.ConnectionId).GetHostLogs(new GetHostLogsCommand
+        await HostCommandDispatcher.DispatchGetHostLogsAsync(host.Id, new GetHostLogsCommand
         {
             TailLines = tailLines
         });
@@ -564,8 +551,8 @@
 
     public void Dispose()
     {
-        AgentHub.OnHostLogsReceived -= OnHostLogsReceived;
-        AgentHub.OnRunnerLogsReceived -= OnRunnerLogsReceived;
+        StreamSubscriptionService.OnHostLogsReceived -= OnHostLogsReceived;
+        StreamSubscriptionService.OnRunnerLogsReceived -= OnRunnerLogsReceived;
         try { _ = JS.InvokeVoidAsync("rrTerminal.dispose", "rr-terminal"); }
         catch { }
     }

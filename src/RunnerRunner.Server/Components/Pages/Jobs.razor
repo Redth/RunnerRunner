@@ -4,12 +4,10 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Grains.Events
-@using RunnerRunner.Server.Hubs
 @using RunnerRunner.Server.Services
-@using Microsoft.AspNetCore.SignalR
 @inject IDocumentStore Store
 @inject IGrainFactory GrainFactory
-@inject IHubContext<AgentHub, IAgentHubClient> HubContext
+@inject IHostCommandDispatcher HostCommandDispatcher
 @implements IDisposable
 
 <PageTitle>Jobs - RunnerRunner</PageTitle>
@@ -465,7 +463,7 @@ else
     {
         await Refresh();
         StreamSubscriptionService.OnRunnerStatusChanged += OnStreamRunnerStatusChanged;
-        AgentHub.OnRunnerLogsReceived += OnRunnerLogsReceived;
+        StreamSubscriptionService.OnRunnerLogsReceived += OnRunnerLogsReceived;
 
         // Refresh every 10s for queued events progress
         _refreshCts = new CancellationTokenSource();
@@ -493,7 +491,7 @@ else
     public void Dispose()
     {
         StreamSubscriptionService.OnRunnerStatusChanged -= OnStreamRunnerStatusChanged;
-        AgentHub.OnRunnerLogsReceived -= OnRunnerLogsReceived;
+        StreamSubscriptionService.OnRunnerLogsReceived -= OnRunnerLogsReceived;
         _refreshCts?.Cancel();
         _refreshCts?.Dispose();
         _refreshTimer?.Dispose();
@@ -869,8 +867,7 @@ else
                 return;
             }
 
-            var agent = FindConnectedAgent(host);
-            if (agent == null)
+            if (host.AgentStatus != AgentStatus.Online)
             {
                 var lines = new List<string>
                 {
@@ -886,7 +883,7 @@ else
                     lines.Add($"Error: {job.Instance.ErrorMessage}");
 
                 lines.Add("");
-                lines.Add("⚠ Live log streaming is unavailable — the host agent is not connected.");
+                lines.Add("Live log streaming is unavailable because this HostSilo is offline.");
 
                 if (host.Platform == HostPlatform.Linux)
                 {
@@ -904,12 +901,12 @@ else
             _runnerLogsTcs = new TaskCompletionSource<string>();
             var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = logTailLines };
 
-            await HubContext.Clients.Client(agent.ConnectionId).GetRunnerLogs(command);
+            await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
 
             var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
             logContent = completedTask == _runnerLogsTcs.Task
                 ? await _runnerLogsTcs.Task
-                : "⚠ Timeout waiting for logs from agent.";
+                : "Timeout waiting for logs from HostSilo.";
         }
         catch (Exception ex)
         {
@@ -928,9 +925,4 @@ else
         InvokeAsync(StateHasChanged);
     }
 
-    private ConnectedAgent? FindConnectedAgent(Host host) =>
-        AgentHub.GetConnectedAgents().Values.FirstOrDefault(a =>
-            a.AgentInfo.Name == host.Name
-            || a.AgentInfo.AgentId == host.Name
-            || a.AgentInfo.AgentId == host.Id);
 }

@@ -12,5 +12,5 @@ RUN dotnet publish RunnerRunner.Server/RunnerRunner.Server.csproj -c Release -o 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app/publish .
-EXPOSE 8080
+EXPOSE 4779 11111 30000
 ENTRYPOINT ["dotnet", "RunnerRunner.Server.dll"]

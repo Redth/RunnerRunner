@@ -1,4 +1,5 @@
 using RunnerRunner.Core.Models;
+using RunnerRunner.Agent.Services;
 using RunnerRunner.Server.Grains.Interfaces;
 using Docker.DotNet;
 
@@ -13,28 +14,27 @@ public class HostRegistrationService : BackgroundService
     private readonly IGrainFactory _grainFactory;
     private readonly ILogger<HostRegistrationService> _logger;
     private readonly IConfiguration _config;
+    private readonly RunnerLifecycleManager _lifecycleManager;
 
     public HostRegistrationService(
         IGrainFactory grainFactory,
         ILogger<HostRegistrationService> logger,
-        IConfiguration config)
+        IConfiguration config,
+        RunnerLifecycleManager lifecycleManager)
     {
         _grainFactory = grainFactory;
         _logger = logger;
         _config = config;
+        _lifecycleManager = lifecycleManager;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var platform = Enum.TryParse<HostPlatform>(_config["HostSilo:Platform"], true, out var p) ? p : HostPlatform.Linux;
-        var architecture = _config["HostSilo:Architecture"]
-            ?? System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString();
-        var advertisedIp = _config["Orleans:AdvertisedIPAddress"];
-        var defaultHostId = !string.IsNullOrWhiteSpace(advertisedIp)
-            ? $"{platform.ToString().ToLowerInvariant()}-host-{advertisedIp}"
-            : Environment.MachineName;
-        var hostId = _config["HostSilo:HostId"] ?? defaultHostId;
-        var hostName = _config["HostSilo:HostName"] ?? hostId;
+        var identity = HostSiloIdentityResolver.Resolve(_config);
+        var hostId = identity.HostId;
+        var hostName = identity.HostName;
+        var platform = identity.Platform;
+        var architecture = identity.Architecture;
         var agentVersion = typeof(HostRegistrationService).Assembly.GetName().Version?.ToString() ?? "1.0.0";
 
         // Wait a moment for the silo to fully start
@@ -106,7 +106,7 @@ public class HostRegistrationService : BackgroundService
         {
             try
             {
-                await hostHeartbeatGrain.RecordHeartbeat("local-silo", 0);
+                await hostHeartbeatGrain.RecordHeartbeat("orleans-stream", _lifecycleManager.RunningInstances.Count);
             }
             catch (Exception ex)
             {

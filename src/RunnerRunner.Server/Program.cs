@@ -18,7 +18,7 @@ var pgConnectionString = builder.Configuration.GetValue<string>("Database:Connec
     ?? "Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner";
 builder.Services.AddRunnerRunnerDocumentStore(pgConnectionString);
 
-// SignalR for agent communication
+// SignalR remains available only for legacy log/image compatibility surfaces.
 builder.Services.AddSignalR();
 
 // HTTP client for provider APIs
@@ -100,6 +100,7 @@ builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<JitConfigService>();
 builder.Services.AddSingleton<RunnerRegistrationCleanupService>();
 builder.Services.AddSingleton<IRegistryCatalogService, RegistryCatalogService>();
+builder.Services.AddSingleton<IHostCommandDispatcher, OrleansHostCommandDispatcher>();
 builder.Services.AddScoped<CapacityPlanningService>();
 
 // === Orleans Grain Architecture (Phase 5) ===
@@ -145,7 +146,7 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-// SignalR hub for agent connections
+// Legacy compatibility hub; HostSilo runtime commands use Orleans streams.
 app.MapHub<AgentHub>("/hubs/agent");
 
 // Webhook endpoints for GitHub/Gitea workflow_job events

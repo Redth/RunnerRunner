@@ -1,13 +1,12 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using Microsoft.AspNetCore.SignalR;
 using Orleans;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
-using RunnerRunner.Server.Hubs;
 using RunnerRunner.Server.Webhooks;
 using Host = RunnerRunner.Core.Models.Host;
 
@@ -15,7 +14,7 @@ namespace RunnerRunner.Server.Services;
 
 /// <summary>
 /// Subscribes to webhook-triggered job-queued events and orchestrates JIT runner provisioning:
-/// host selection → JIT config generation → deploy runner to agent.
+/// host selection → JIT config generation → deploy runner to HostSilo.
 /// Also recovers queued webhook events that were matched but could not be fulfilled immediately.
 /// </summary>
 public class DynamicProvisioningService : BackgroundService
@@ -28,8 +27,6 @@ public class DynamicProvisioningService : BackgroundService
 
     private sealed record HostSelectionResult(
         Host? Host,
-        ConnectedAgent? Agent,
-        string? ConnectionId,
         string? Reason,
         bool CapacityBlocked);
 
@@ -44,7 +41,7 @@ public class DynamicProvisioningService : BackgroundService
     private readonly JitConfigService _jitConfigService;
     private readonly RunnerRegistrationCleanupService _runnerRegistrationCleanupService;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly IHubContext<AgentHub, IAgentHubClient> _hubContext;
+    private readonly IHostCommandDispatcher _hostCommands;
     private readonly IGrainFactory _grainFactory;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _jobLocks = new();
     private readonly ConcurrentDictionary<string, string> _runsEtagCache = new();
@@ -62,7 +59,7 @@ public class DynamicProvisioningService : BackgroundService
         JitConfigService jitConfigService,
         RunnerRegistrationCleanupService runnerRegistrationCleanupService,
         IHttpClientFactory httpClientFactory,
-        IHubContext<AgentHub, IAgentHubClient> hubContext,
+        IHostCommandDispatcher hostCommands,
         IGrainFactory grainFactory)
     {
         _logger = logger;
@@ -71,7 +68,7 @@ public class DynamicProvisioningService : BackgroundService
         _jitConfigService = jitConfigService;
         _runnerRegistrationCleanupService = runnerRegistrationCleanupService;
         _httpClientFactory = httpClientFactory;
-        _hubContext = hubContext;
+        _hostCommands = hostCommands;
         _grainFactory = grainFactory;
         _retrySweepInterval = TimeSpan.FromSeconds(Math.Max(5, _configuration.GetValue("DynamicProvisioning:PendingRetrySeconds", 15)));
         _pendingTimeout = TimeSpan.FromMinutes(Math.Max(1, _configuration.GetValue("DynamicProvisioning:PendingTimeoutMinutes", 10)));
@@ -82,7 +79,8 @@ public class DynamicProvisioningService : BackgroundService
     {
         WebhookEndpoints.OnJobQueued += HandleJobQueued;
         WebhookEndpoints.OnJobCompleted += HandleJobCompleted;
-        AgentHub.OnQueueRelevantChange += TriggerQueueSweep;
+        StreamSubscriptionService.OnRunnerStatusChanged += HandleRunnerStatusChanged;
+        StreamSubscriptionService.OnHostStatusChanged += HandleHostStatusChanged;
         _logger.LogInformation(
             "DynamicProvisioningService started (retry sweep: {RetrySweep}s, timeout: {Timeout}m, GitHub poll: {GitHubPoll}s)",
             _retrySweepInterval.TotalSeconds,
@@ -95,7 +93,8 @@ public class DynamicProvisioningService : BackgroundService
     {
         WebhookEndpoints.OnJobQueued -= HandleJobQueued;
         WebhookEndpoints.OnJobCompleted -= HandleJobCompleted;
-        AgentHub.OnQueueRelevantChange -= TriggerQueueSweep;
+        StreamSubscriptionService.OnRunnerStatusChanged -= HandleRunnerStatusChanged;
+        StreamSubscriptionService.OnHostStatusChanged -= HandleHostStatusChanged;
         _logger.LogInformation("DynamicProvisioningService stopped");
         return base.StopAsync(cancellationToken);
     }
@@ -528,6 +527,12 @@ public class DynamicProvisioningService : BackgroundService
         });
     }
 
+    private void HandleRunnerStatusChanged(RunnerStatusChangedEvent _)
+        => TriggerQueueSweep();
+
+    private void HandleHostStatusChanged(HostStatusChangedEvent _)
+        => TriggerQueueSweep();
+
     private async Task<QueueProcessingOutcome> HandleJobQueuedAsync(
         WebhookEvent evt,
         string? requestedProfileId,
@@ -645,19 +650,18 @@ public class DynamicProvisioningService : BackgroundService
                 }
             }
 
-            var connectedAgents = AgentHub.GetConnectedAgents();
             var hosts = (await store.Query<Host>().ToList()).ToList();
             var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
             var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
-            var hostSelection = await SelectHostAsync(store, profile, rule, hosts, connectedAgents.Values.ToList(), instances);
+            var hostSelection = await SelectHostAsync(store, profile, rule, hosts, instances);
 
-            if (hostSelection.Host == null || string.IsNullOrWhiteSpace(hostSelection.ConnectionId))
+            if (hostSelection.Host == null)
             {
                 await ScheduleRetryAsync(
                     store,
                     currentEvent,
                     hostSelection.Reason
-                    ?? $"No connected host matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
+                    ?? $"No online HostSilo matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
                     now,
                     status: hostSelection.CapacityBlocked ? "pending_capacity" : "pending_host_match",
                     countAttempt: false,
@@ -676,9 +680,8 @@ public class DynamicProvisioningService : BackgroundService
             var runnerName = $"{profile.Name}-jit-{shortGuid}";
 
             _logger.LogInformation(
-                "Selected host {HostName} (agent: {Agent}) for dynamic runner {RunnerName} (job {JobId}, recovery={Recovery})",
+                "Selected HostSilo {HostName} for dynamic runner {RunnerName} (job {JobId}, recovery={Recovery})",
                 hostSelection.Host.Name,
-                hostSelection.Agent?.AgentInfo.Name ?? hostSelection.Host.Name,
                 runnerName,
                 currentEvent.JobId,
                 isRecoveryAttempt);
@@ -735,8 +738,8 @@ public class DynamicProvisioningService : BackgroundService
             envVars["RR_INSTANCE_ID"] = instanceId;
             envVars["RR_RUNNER_NAME"] = runnerName;
 
-            // Inform the agent if the profile wants a job-started banner hook
-            // installed; the agent picks the right filesystem path per backend.
+            // Inform the HostSilo if the profile wants a job-started banner hook
+            // installed; the host worker picks the right filesystem path per backend.
             if (profile.EmitJobStartedBanner)
                 envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
 
@@ -801,7 +804,7 @@ public class DynamicProvisioningService : BackgroundService
 
             try
             {
-                await _hubContext.Clients.Client(hostSelection.ConnectionId).DeployRunner(command);
+                await _hostCommands.DispatchDeployRunnerAsync(hostSelection.Host.Id, command);
                 await runnerGrain.UpdateStatusMessage("Dynamic deploy command sent to host");
                 await runnerGrain.MarkDeployed();
             }
@@ -1226,7 +1229,6 @@ public class DynamicProvisioningService : BackgroundService
         RunnerProfile profile,
         ProvisioningRule? rule,
         List<Host> hosts,
-        List<ConnectedAgent> connectedAgents,
         List<RunnerInstance> instances)
     {
         var profilesById = (await store.Query<RunnerProfile>().ToList())
@@ -1237,20 +1239,14 @@ public class DynamicProvisioningService : BackgroundService
         foreach (var candidate in analysis.Candidates.Where(c => c.CanRunNow))
         {
             var host = hosts.First(h => string.Equals(h.Id, candidate.HostId, StringComparison.OrdinalIgnoreCase));
-            var agent = connectedAgents.FirstOrDefault(a =>
-                a.AgentInfo.Name == host.Name
-                || a.AgentInfo.AgentId == host.Name
-                || a.AgentInfo.AgentId == host.Id);
 
-            var capabilities = agent?.AgentInfo.Capabilities?.Count > 0
-                ? agent.AgentInfo.Capabilities
-                : host.Capabilities;
-
-            if (!capabilities.Any(c => c.Equals(backendName, StringComparison.OrdinalIgnoreCase)))
+            if (host.AgentStatus != AgentStatus.Online)
                 continue;
 
-            if (!string.IsNullOrWhiteSpace(agent?.ConnectionId))
-                return new HostSelectionResult(host, agent, agent.ConnectionId, null, false);
+            if (!host.Capabilities.Any(c => c.Equals(backendName, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            return new HostSelectionResult(host, null, false);
         }
 
         if (analysis.CapacityBlocked)
@@ -1263,14 +1259,12 @@ public class DynamicProvisioningService : BackgroundService
                 ? $"{analysis.Reason} ({string.Join(" · ", detail)})"
                 : analysis.Reason;
 
-            return new HostSelectionResult(null, null, null, reason, true);
+            return new HostSelectionResult(null, reason, true);
         }
 
         return new HostSelectionResult(
             null,
-            null,
-            null,
-            $"No connected host currently matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
+            $"No online HostSilo currently matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
             false);
     }
 
@@ -1439,20 +1433,11 @@ public class DynamicProvisioningService : BackgroundService
             var host = (await store.Query<Host>().ToList()).FirstOrDefault(h => h.Id == instance.HostId);
             if (host != null)
             {
-                var agent = AgentHub.GetConnectedAgents().Values
-                    .FirstOrDefault(a =>
-                        a.AgentInfo.Name == host.Name
-                        || a.AgentInfo.AgentId == host.Name
-                        || a.AgentInfo.AgentId == host.Id);
-
-                if (agent != null)
+                await _hostCommands.DispatchStopRunnerAsync(host.Id, new StopRunnerCommand
                 {
-                    await _hubContext.Clients.Client(agent.ConnectionId).StopRunner(new StopRunnerCommand
-                    {
-                        InstanceId = instance.Id,
-                        InstanceHandle = instance.ContainerId ?? instance.VmName ?? instance.ProcessId?.ToString()
-                    });
-                }
+                    InstanceId = instance.Id,
+                    InstanceHandle = instance.ContainerId ?? instance.VmName ?? instance.ProcessId?.ToString()
+                });
             }
 
             await _runnerRegistrationCleanupService.TryRemoveRunnerAsync(store, instance);
