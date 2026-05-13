@@ -15,7 +15,7 @@ namespace RunnerRunner.Server.Grains;
 // TODO: Add host-affinity grain placement so this grain activates on the silo
 // whose "hostId" metadata matches the runner's assigned host. This enables
 // local backend execution (Docker/Tart/Native) without process-local service lookups.
-// The production path dispatches commands over Orleans streams to the matching HostSilo.
+// The production path dispatches commands over gRPC to the matching HostWorker.
 public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 {
     private readonly IPersistentState<RunnerInstanceGrainState> _state;
@@ -232,7 +232,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
             "TODO: Local deployment of runner {Name} on host {Host} (backend: {Backend})",
             _state.State.RunnerName, _state.State.HostId, command.Backend);
 
-        // Production dispatch goes through HostCommandService on the matching HostSilo.
+        // Production dispatch goes through IHostCommandDispatcher to the matching HostWorker.
 
         await MarkStarting("Deploying locally...");
     }
@@ -244,7 +244,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         if (_state.State.Status == RunnerInstanceStatus.Pending)
         {
             _logger.LogWarning("Runner instance {InstanceId} pending timeout", this.GetPrimaryKeyString());
-            await MarkFailed("Deploy timeout — HostSilo did not acknowledge within 2 minutes");
+            await MarkFailed("Deploy timeout - HostWorker did not acknowledge within 2 minutes");
         }
     }
 
@@ -271,7 +271,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         if (_state.State.Status == RunnerInstanceStatus.Stopping)
         {
             _logger.LogWarning("Runner instance {InstanceId} stop timeout", this.GetPrimaryKeyString());
-            await MarkFailed("Stop timeout — HostSilo did not confirm stop within 5 minutes");
+            await MarkFailed("Stop timeout - HostWorker did not confirm stop within 5 minutes");
         }
     }
 

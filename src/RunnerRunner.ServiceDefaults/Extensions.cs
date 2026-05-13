@@ -6,7 +6,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ServiceDiscovery;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using System.Reflection;
 
 namespace Microsoft.Extensions.Hosting;
 
@@ -53,6 +55,14 @@ public static class Extensions
         });
 
         builder.Services.AddOpenTelemetry()
+            .ConfigureResource(resource =>
+            {
+                resource
+                    .AddService(
+                        serviceName: builder.Environment.ApplicationName,
+                        serviceVersion: Assembly.GetEntryAssembly()?.GetName().Version?.ToString())
+                    .AddAttributes(GetRunnerRunnerResourceAttributes(builder));
+            })
             .WithMetrics(metrics =>
             {
                 metrics.AddAspNetCoreInstrumentation()
@@ -76,6 +86,25 @@ public static class Extensions
         builder.AddOpenTelemetryExporters();
 
         return builder;
+    }
+
+    private static IEnumerable<KeyValuePair<string, object>> GetRunnerRunnerResourceAttributes<TBuilder>(TBuilder builder)
+        where TBuilder : IHostApplicationBuilder
+    {
+        yield return new("deployment.environment", builder.Environment.EnvironmentName);
+        yield return new("service.instance.id", Environment.MachineName);
+
+        var hostId = builder.Configuration["HostWorker:HostId"];
+        if (!string.IsNullOrWhiteSpace(hostId))
+            yield return new("runnerrunner.host.id", hostId);
+
+        var hostName = builder.Configuration["HostWorker:HostName"];
+        if (!string.IsNullOrWhiteSpace(hostName))
+            yield return new("runnerrunner.host.name", hostName);
+
+        var platform = builder.Configuration["HostWorker:Platform"];
+        if (!string.IsNullOrWhiteSpace(platform))
+            yield return new("runnerrunner.host.platform", platform);
     }
 
     private static TBuilder AddOpenTelemetryExporters<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder

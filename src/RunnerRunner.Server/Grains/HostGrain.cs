@@ -13,11 +13,10 @@ namespace RunnerRunner.Server.Grains;
 
 // TODO: Add host-affinity grain placement so this grain activates on the silo
 // whose "hostId" metadata matches the grain's primary key. Orleans 10 supports
-// SiloMetadata (already configured in HostSilo/Program.cs). Options:
+// SiloMetadata was used by the retired HostWorker architecture. Options:
 //   1. [SiloMetadataPlacement("hostId")] attribute if available
 //   2. Custom IPlacementDirector that reads ISiloMetadataCache
-// For now, grains can activate on any silo; the HostSilo will naturally host
-// them once per-host silo deployment is in place.
+// For now, grains can activate on the server silo; physical hosts connect as HostWorkers.
 public class HostGrain : Grain, IHostGrain
 {
     private static readonly Regex IpAddressRegex = new(@"\b\d{1,3}(?:\.\d{1,3}){3}\b", RegexOptions.Compiled);

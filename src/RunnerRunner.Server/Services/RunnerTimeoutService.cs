@@ -104,7 +104,7 @@ public class RunnerTimeoutService : BackgroundService
             instance.RunnerName, instance.Id, now - referenceTime);
 
         instance.Status = RunnerInstanceStatus.Failed;
-        instance.StatusMessage = "Deploy timeout — HostSilo did not acknowledge";
+        instance.StatusMessage = "Deploy timeout - HostWorker did not acknowledge";
         await store.Update(instance);
 
         if (instance.ProvisioningMode == "dynamic")
@@ -255,7 +255,7 @@ public class RunnerTimeoutService : BackgroundService
     }
 
     /// <summary>
-    /// Best-effort attempt to send a StopRunner command to the HostSilo hosting this instance.
+    /// Best-effort attempt to send a StopRunner command to the HostWorker hosting this instance.
     /// </summary>
     private async Task TrySendStopRunner(IDocumentStore store, RunnerInstance instance)
     {

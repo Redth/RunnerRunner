@@ -21,6 +21,16 @@ public class Host
     public List<string> Capabilities { get; set; } = [];
     public Dictionary<string, string> EnvironmentOverrides { get; set; } = new();
     public string? EnrollmentToken { get; set; }
+    public string? EnrollmentTokenHash { get; set; }
+    public DateTime? EnrollmentTokenCreatedAt { get; set; }
+    public DateTime? EnrolledAt { get; set; }
+    public string? WorkerId { get; set; }
+    public string? LatestAvailableVersion { get; set; }
+    public DateTime? LastUpdateCheckAt { get; set; }
+    public string? UpdateStatus { get; set; }
+    public string? UpdateMessage { get; set; }
+    public DateTime? LastUpdateStartedAt { get; set; }
+    public DateTime? LastUpdateCompletedAt { get; set; }
     public bool IsApproved { get; set; }
 
     /// <summary>

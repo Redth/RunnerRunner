@@ -4,11 +4,13 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Services
+@using RunnerRunner.Server.Services.HostWorkers
 @inject IDocumentStore Store
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
 @inject CapacityPlanningService CapacityService
 @inject IHostCommandDispatcher HostCommandDispatcher
+@inject HostWorkerUpdateService HostWorkerUpdateService
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -25,11 +27,20 @@
     <a class="btn btn-outline-primary" href="/provisioning-rules">
         <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
     </a>
+    <button class="btn btn-outline-secondary" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
+        <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check HostWorker Updates")
+    </button>
+    @if (!string.IsNullOrWhiteSpace(updateError))
+    {
+        <div class="alert alert-warning mt-2 mb-0">
+            @updateError
+        </div>
+    }
     @if (!string.IsNullOrEmpty(newToken))
     {
         <div class="alert alert-success mt-2">
             <strong>Enrollment Token:</strong> <code>@newToken</code>
-            <br /><small>Use this token when starting a new host node to register it with the cluster.</small>
+            <br /><small>Use this token when starting one new HostWorker. It is stored hashed and will not be shown again.</small>
         </div>
     }
 </div>
@@ -106,6 +117,24 @@
                 </td>
                 <td>
                     <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
+                    @if (!string.IsNullOrWhiteSpace(host.AgentVersion))
+                    {
+                        <div class="small text-muted mt-1">Worker @host.AgentVersion</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(host.UpdateStatus))
+                    {
+                        <div class="small mt-1">
+                            <span class="badge @GetUpdateBadge(host.UpdateStatus)">@FormatUpdateStatus(host.UpdateStatus)</span>
+                            @if (!string.IsNullOrWhiteSpace(host.LatestAvailableVersion))
+                            {
+                                <span class="text-muted ms-1">@host.LatestAvailableVersion</span>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(host.UpdateMessage))
+                        {
+                            <div class="small text-muted">@host.UpdateMessage</div>
+                        }
+                    }
                 </td>
                 <td>
                     <div class="d-flex flex-wrap gap-1">
@@ -165,6 +194,12 @@
                     <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleConfigure(host)" title="Configure capabilities & resources">
                         <i class="bi bi-gear"></i> Configure
                     </button>
+                    @if (CanUpdate(host))
+                    {
+                        <button class="btn btn-sm btn-outline-success me-1" @onclick="() => QueueHostWorkerUpdate(host)" disabled="@updatingHosts.Contains(host.Id)">
+                            <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : "Update")
+                        </button>
+                    }
                     <a class="btn btn-sm btn-outline-primary me-1" href="/provisioning-rules"><i class="bi bi-diagram-3"></i> Rules</a>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndRemoveHost(host)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
@@ -261,6 +296,9 @@
     private List<ProvisioningRule> rules = [];
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private string? newToken;
+    private bool checkingUpdates;
+    private string? updateError;
+    private readonly HashSet<string> updatingHosts = [];
 
     // Filter & sort state
     private string searchText = "";
@@ -417,13 +455,78 @@
         capacitySnapshot = await CapacityService.GetSnapshotAsync();
     }
 
+    private async Task CheckHostWorkerUpdates()
+    {
+        checkingUpdates = true;
+        updateError = null;
+        try
+        {
+            var first = true;
+            foreach (var host in hosts.Where(h => h.IsApproved && !string.IsNullOrWhiteSpace(h.AgentVersion)))
+            {
+                await HostWorkerUpdateService.RefreshHostUpdateStateAsync(host, forceRefresh: first);
+                first = false;
+            }
+            await ReloadData();
+        }
+        catch (Exception ex)
+        {
+            updateError = $"Unable to check GitHub releases: {ex.Message}";
+        }
+        finally
+        {
+            checkingUpdates = false;
+        }
+    }
+
+    private async Task QueueHostWorkerUpdate(Host host)
+    {
+        updatingHosts.Add(host.Id);
+        updateError = null;
+        try
+        {
+            await HostWorkerUpdateService.QueueUpdateAsync(host.Id, force: false);
+            await ReloadData();
+        }
+        catch (Exception ex)
+        {
+            updateError = $"Unable to queue update for {host.Label}: {ex.Message}";
+        }
+        finally
+        {
+            updatingHosts.Remove(host.Id);
+        }
+    }
+
+    private static bool CanUpdate(Host host)
+        => host.AgentStatus == AgentStatus.Online
+           && string.Equals(host.UpdateStatus, "UpdateAvailable", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatUpdateStatus(string status)
+        => status switch
+        {
+            "UpdateAvailable" => "Update available",
+            _ => status
+        };
+
+    private static string GetUpdateBadge(string status)
+        => status switch
+        {
+            "Current" => "bg-success",
+            "UpdateAvailable" => "bg-warning text-dark",
+            "Queued" or "Downloading" or "Verifying" or "Staged" or "Restarting" => "bg-info text-dark",
+            "Failed" or "Unavailable" => "bg-danger",
+            _ => "bg-secondary"
+        };
+
     private async Task GenerateEnrollmentToken()
     {
-        newToken = Guid.NewGuid().ToString("N")[..16];
+        newToken = HostEnrollmentToken.Create();
         var host = new Host
         {
             Name = $"pending-{newToken[..8]}",
-            EnrollmentToken = newToken,
+            EnrollmentTokenHash = HostEnrollmentToken.Hash(newToken),
+            EnrollmentTokenCreatedAt = DateTime.UtcNow,
             IsApproved = false
         };
         await Store.Insert(host);

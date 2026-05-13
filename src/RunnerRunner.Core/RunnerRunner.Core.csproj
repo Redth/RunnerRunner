@@ -7,8 +7,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.33.2" />
+    <PackageReference Include="Grpc.Core.Api" Version="2.71.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.0.1" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Orleans.Serialization.Abstractions" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\hostworker.proto" GrpcServices="Both" />
   </ItemGroup>
 
 </Project>

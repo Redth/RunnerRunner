@@ -41,41 +41,46 @@ jobs:
           file: src/RunnerRunner.Server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            INFORMATIONAL_VERSION=${{ github.ref_name }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/server:${{ github.ref_name }}
             ${{ env.IMAGE_PREFIX }}/server:${{ github.sha }}
             ${{ env.IMAGE_PREFIX }}/server:latest
 
-      - name: Build and push HostSilo image
+      - name: Build and push HostWorker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: src/RunnerRunner.HostSilo/Dockerfile
+          file: src/RunnerRunner.HostWorker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE_PREFIX }}/hostsilo:${{ github.ref_name }}
-            ${{ env.IMAGE_PREFIX }}/hostsilo:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/hostsilo:latest
+            ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.ref_name }}
+            ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}/hostworker:latest
 
-      - name: Publish native HostSilo assets
+      - name: Publish native HostWorker assets
         shell: bash
         run: |
           set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
           mkdir -p artifacts/release artifacts/publish
           for rid in linux-x64 linux-arm64 osx-x64 osx-arm64 win-x64; do
             out="artifacts/publish/${rid}"
-            dotnet publish src/RunnerRunner.HostSilo/RunnerRunner.HostSilo.csproj \
+            dotnet publish src/RunnerRunner.HostWorker/RunnerRunner.HostWorker.csproj \
               -c Release \
               -r "${rid}" \
               --self-contained \
               -o "${out}" \
+              /p:Version="${version}" \
+              /p:InformationalVersion="${GITHUB_REF_NAME}" \
               --nologo
 
             if [[ "${rid}" == win-* ]]; then
-              (cd "${out}" && zip -qr "../../release/runnerrunner-hostsilo-${rid}.zip" .)
+              (cd "${out}" && zip -qr "../../release/runnerrunner-hostworker-${rid}.zip" .)
             else
-              tar -czf "artifacts/release/runnerrunner-hostsilo-${rid}.tar.gz" -C "${out}" .
+              tar -czf "artifacts/release/runnerrunner-hostworker-${rid}.tar.gz" -C "${out}" .
             fi
           done
 
@@ -94,7 +99,7 @@ jobs:
           cp deploy/linux/install-server.sh artifacts/release/install-server.sh
           cp deploy/linux/update-server.sh artifacts/release/update-server.sh
           cp deploy/macos/install-host-macos.sh artifacts/release/install-host-macos.sh
-          cp deploy/windows/Install-HostSilo.ps1 artifacts/release/Install-HostSilo.ps1
+          cp deploy/windows/Install-HostWorker.ps1 artifacts/release/Install-HostWorker.ps1
 
       - name: Generate checksums and manifest
         shell: bash
@@ -120,9 +125,9 @@ jobs:
                       f"{os.environ['IMAGE_PREFIX']}/server:{os.environ['GITHUB_REF_NAME']}",
                       f"{os.environ['IMAGE_PREFIX']}/server:{os.environ['GITHUB_SHA']}"
                   ],
-                  "hostsilo": [
-                      f"{os.environ['IMAGE_PREFIX']}/hostsilo:{os.environ['GITHUB_REF_NAME']}",
-                      f"{os.environ['IMAGE_PREFIX']}/hostsilo:{os.environ['GITHUB_SHA']}"
+                  "hostworker": [
+                      f"{os.environ['IMAGE_PREFIX']}/hostworker:{os.environ['GITHUB_REF_NAME']}",
+                      f"{os.environ['IMAGE_PREFIX']}/hostworker:{os.environ['GITHUB_SHA']}"
                   ]
               },
               "assets": assets
@@ -138,4 +143,4 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" artifacts/release/* \
             --title "${GITHUB_REF_NAME}" \
-            --notes "HostSilo-only RunnerRunner release artifacts for Linux, macOS, and Windows."
+            --notes "HostWorker RunnerRunner release artifacts for Linux, macOS, and Windows."

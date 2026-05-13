@@ -1,54 +1,51 @@
 param(
     [string]$DeployDir = "C:\Program Files\RunnerRunner",
     [string]$DataDir = "C:\ProgramData\RunnerRunner",
-    [string]$ServiceName = "RunnerRunnerHostSilo",
+    [string]$ServiceName = "RunnerRunnerHostWorker",
     [string]$HostId = "",
     [string]$HostName = $env:COMPUTERNAME,
-    [string]$DatabaseConnectionString = "",
-    [string]$AdvertisedIPAddress = "",
+    [string]$ServerUrl = "",
+    [string]$EnrollmentToken = "",
     [string]$ServiceAccount = "LocalSystem",
     [string]$ServicePassword = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrWhiteSpace($DatabaseConnectionString)) {
-    throw "DatabaseConnectionString is required for HostSilo trusted-network cluster mode."
+if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+    throw "ServerUrl is required."
+}
+
+if ([string]::IsNullOrWhiteSpace($EnrollmentToken)) {
+    throw "EnrollmentToken is required."
 }
 
 $deployPath = $DeployDir.Replace('/', '\')
 $dataPath = $DataDir.Replace('/', '\')
 $logsPath = Join-Path $dataPath "logs"
-$exePath = Join-Path $deployPath "RunnerRunner.HostSilo.exe"
+$exePath = Join-Path $deployPath "RunnerRunner.HostWorker.exe"
 $settingsPath = Join-Path $deployPath "appsettings.Production.json"
 
 if ([string]::IsNullOrWhiteSpace($HostId)) {
-    if ([string]::IsNullOrWhiteSpace($AdvertisedIPAddress)) {
-        $HostId = $HostName
-    }
-    else {
-        $HostId = "windows-host-$AdvertisedIPAddress"
-    }
+    $HostId = $HostName
 }
 
 New-Item -ItemType Directory -Force -Path $deployPath | Out-Null
 New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
 
 if (-not (Test-Path $exePath)) {
-    throw "RunnerRunner.HostSilo.exe not found in $deployPath"
+    throw "RunnerRunner.HostWorker.exe not found in $deployPath"
 }
 
 $settings = @{
-    HostSilo = @{
+    HostWorker = @{
+        ServerUrl = $ServerUrl
+        EnrollmentToken = $EnrollmentToken
         HostId = $HostId
         HostName = $HostName
         Platform = "Windows"
-    }
-    Database = @{
-        ConnectionString = $DatabaseConnectionString
-    }
-    Orleans = @{
-        AdvertisedIPAddress = $AdvertisedIPAddress
+        DataRoot = $dataPath
+        LogRoot = $logsPath
     }
 }
 
@@ -69,8 +66,8 @@ $binaryPath = "`"$exePath`""
 if ($ServiceAccount -eq "LocalSystem") {
     New-Service `
         -Name $ServiceName `
-        -DisplayName "RunnerRunner HostSilo" `
-        -Description "RunnerRunner host-local Orleans worker for Docker, Tart, and native runner execution." `
+        -DisplayName "RunnerRunner HostWorker" `
+        -Description "RunnerRunner authenticated host worker for Docker, Tart, and native runner execution." `
         -BinaryPathName $binaryPath `
         -StartupType Automatic `
         -ErrorAction Stop | Out-Null
@@ -80,8 +77,8 @@ else {
     $credential = [System.Management.Automation.PSCredential]::new($ServiceAccount, $securePassword)
     New-Service `
         -Name $ServiceName `
-        -DisplayName "RunnerRunner HostSilo" `
-        -Description "RunnerRunner host-local Orleans worker for Docker, Tart, and native runner execution." `
+        -DisplayName "RunnerRunner HostWorker" `
+        -Description "RunnerRunner authenticated host worker for Docker, Tart, and native runner execution." `
         -BinaryPathName $binaryPath `
         -StartupType Automatic `
         -Credential $credential `
@@ -91,5 +88,5 @@ else {
 sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/30000 | Out-Null
 Start-Service -Name $ServiceName
 
-Write-Host "RunnerRunner HostSilo installed as Windows Service '$ServiceName'."
+Write-Host "RunnerRunner HostWorker installed as Windows Service '$ServiceName'."
 Write-Host "Logs: $logsPath"

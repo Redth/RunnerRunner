@@ -10,13 +10,14 @@ using Host = RunnerRunner.Core.Models.Host;
 namespace RunnerRunner.Server.Hubs;
 
 /// <summary>
-/// LEGACY: SignalR hub kept only for compatibility with pre-HostSilo clients.
-/// Supported release artifacts use Orleans stream commands to HostSilo instead.
+/// LEGACY: SignalR hub kept only for compatibility with pre-HostWorker clients.
+/// Supported release artifacts use the HostWorker gRPC protocol instead.
 /// </summary>
 public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
 {
     private static readonly ConcurrentDictionary<string, ConnectedAgent> ConnectedAgents = new();
     public static event Action? OnQueueRelevantChange;
+    public static void NotifyQueueRelevantChange() => OnQueueRelevantChange?.Invoke();
     private readonly ILogger<AgentHub> _logger;
     private readonly IDocumentStore _store;
     private readonly IGrainFactory _grainFactory;

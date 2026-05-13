@@ -28,14 +28,14 @@ RunnerRunner.Server
   `-- Orleans grains for hosts, profiles, provisioning rules, runners
 
 Host machines
-  `-- RunnerRunner.HostSilo
-        |-- Orleans cluster member
+    `-- RunnerRunner.HostWorker
+        |-- Authenticated outbound gRPC worker connection
         `-- Docker, Tart, or Native runner backends
 ```
 
 **Server** - Blazor web UI for managing profiles, hosts, env vars, credentials, provisioning rules, and webhook routing. It owns the shared PostgreSQL-backed control plane and sends runner lifecycle commands to hosts.
 
-**HostSilo** - Per-host worker. `HostSilo` joins the Orleans cluster, receives host commands through Orleans streams, and executes Docker, Tart, or native runner lifecycles locally.
+**HostWorker** - Per-host worker. `HostWorker` connects outbound to the server over authenticated gRPC, receives host commands, writes durable local journals/logs, and executes Docker, Tart, or native runner lifecycles locally.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how provisioning rules, profiles, hosts, and runner instances combine to calculate capacity and concurrency.
 
@@ -62,81 +62,34 @@ aspire run
 
 This starts:
 - **Server** on `http://localhost:5080` — the web UI
-- **HostSilo** for host-local runner execution
+- **HostWorker** for host-local runner execution
 - **Aspire Dashboard** with real-time logs, traces, and metrics for all services
 
-### Option 2: Deploy Everything (One Command)
+### Option 2: Install from a GitHub Release (Linux Server)
 
-Deploy the full stack to your Linux host plus optional macOS/Windows HostSilo hosts in one shot:
-
-```bash
-./deploy/deploy-all.sh
-```
-
-This will:
-1. Build Docker images for Server + Linux HostSilo
-2. Push to your container registry (default: `ghcr.io/redth/runnerrunner`)
-3. SSH into the Linux host, deploy via `docker compose up`
-4. Publish native HostSilo binaries, SSH into macOS/Windows hosts, and install them as host services
-
-**Configure hosts** via environment variables:
+For production-style installs, use the published release bundle. It runs the server, PostgreSQL, and an optional bundled Linux HostWorker with Docker Compose and configures `runnerrunner-server update` as the supported update command.
 
 ```bash
-LINUX_HOST=192.168.2.2 \
-MACOS_HOST=192.168.2.134 \
-./deploy/deploy-all.sh
+curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
+chmod +x install-server.sh
+sudo ./install-server.sh --orleans-ip 192.168.2.4 --enrollment-token '<bootstrap-token>'
 ```
 
-All defaults are in the script — edit `deploy/deploy-all.sh` or override with env vars.
-
-**Prerequisites:** `docker login ghcr.io` locally, Docker on the Linux host, SSH access to both hosts.
-
-### Option 3: Deploy to Remote Linux Host (via SSH)
-
-Deploy the full stack to a remote Docker host with a single command:
+Update the Linux server and bundled Linux HostWorker with:
 
 ```bash
-# Deploy (will prompt for SSH password)
-aspire deploy
+sudo runnerrunner-server update
 ```
 
-This builds container images, pushes them to your registry, and runs `docker compose up` on the remote host via SSH.
+### Option 3: Add Native HostWorkers
 
-**Configuration** is in `src/RunnerRunner.AppHost/appsettings.json`:
+Create a per-host enrollment token from the **Hosts** page, then install the native HostWorker package for each macOS or Windows machine. Native HostWorkers update from the **Hosts** page after the server checks GitHub Releases.
 
-```json
-{
-  "DockerSSH": {
-    "TargetHost": "192.168.2.2",
-    "SshUsername": "root"
-  },
-  "DockerRegistry": {
-    "RegistryUrl": "ghcr.io",
-    "RepositoryPrefix": "your-org/runnerrunner"
-  }
-}
-```
+See [Release installs](#release-installs) for macOS and Windows commands.
 
-Or override with environment variables:
+### Option 4: Local Docker Compose
 
-```bash
-DockerSSH__TargetHost=192.168.2.2 \
-DockerSSH__SshUsername=root \
-DockerSSH__SshPassword=your-password \
-aspire deploy
-```
-
-**First time setup:**
-1. Ensure Docker is installed on the remote host
-2. Log in to your container registry locally: `docker login ghcr.io`
-3. Run `aspire deploy` — it handles everything else
-
-**Teardown remote deployment:**
-```bash
-aspire do teardown-env
-```
-
-### Option 4: Docker Compose (Production / Standalone)
+For local standalone testing without Aspire:
 
 ```bash
 docker compose up -d
@@ -151,9 +104,9 @@ The server is available at `http://localhost:4779` by default.
 cd src/RunnerRunner.Server
 dotnet run
 
-# Terminal 2: Start a local HostSilo
-cd src/RunnerRunner.HostSilo
-dotnet run -- --Database:ConnectionString="Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner"
+# Terminal 2: Start a local HostWorker
+cd src/RunnerRunner.HostWorker
+dotnet run -- --HostWorker:ServerUrl=http://localhost:5000 --HostWorker:EnrollmentToken=<host-token>
 ```
 
 ## Getting Started
@@ -283,14 +236,16 @@ profile info into the provider's job log through two complementary channels:
 
 ## Release installs
 
-RunnerRunner releases are HostSilo-only: there is no legacy SignalR agent package.
+RunnerRunner uses GitHub Releases as the public distribution and update catalog. Releases publish the Linux server compose bundle, HostWorker packages, install scripts, checksums, and `release-manifest.json`. There is no legacy SignalR agent package.
 
-### Linux server and bundled Linux HostSilo
+For standalone macOS, Windows, or additional Linux workers, generate a per-host token from the **Hosts** page and use it as the worker's enrollment token.
+
+### Linux server and bundled Linux HostWorker
 
 ```bash
 curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
 chmod +x install-server.sh
-sudo ./install-server.sh --orleans-ip 192.168.2.4 --host-silo-ip 192.168.2.4
+sudo ./install-server.sh --orleans-ip 192.168.2.4 --enrollment-token '<bootstrap-token>'
 ```
 
 Updates are intentionally one command:
@@ -299,13 +254,21 @@ Updates are intentionally one command:
 sudo runnerrunner-server update
 ```
 
-The release compose bundle consumes published GHCR images and runs PostgreSQL, `RunnerRunner.Server`, and a Linux `RunnerRunner.HostSilo`.
+The release compose bundle consumes published GHCR images and runs PostgreSQL, `RunnerRunner.Server`, and a Linux `RunnerRunner.HostWorker`.
 
-### Linux HostSilo
+The checked-in SSH deploy helpers are not the recommended release path. They are kept for development and debugging when you need to push local builds to a lab host.
 
-Linux Docker-backed hosts should run the HostSilo container with the host Docker socket mounted. The bundled Linux compose stack already does this. Native `linux-x64` and `linux-arm64` HostSilo tarballs are also published for hosts that need native process execution.
+### HostWorker updates from the UI
 
-### macOS HostSilo
+The server checks GitHub Releases for the latest `runnerrunner-hostworker-*` assets. On the **Hosts** page, click **Check HostWorker Updates** to compare each connected worker's reported version with the latest release. If a native worker has an update, click **Update** to send it an update command.
+
+Native workers download the matching release asset for their platform, verify the SHA256 from `release-manifest.json`, stage the update under their data root, and restart through the platform service layer. Containerized Linux workers are updated by the compose/server update path instead of self-mutating their container image.
+
+### Linux HostWorker
+
+Linux Docker-backed hosts should run the HostWorker container with the host Docker socket mounted. The bundled Linux compose stack already does this. Native `linux-x64` and `linux-arm64` HostWorker tarballs are also published for hosts that need native process execution.
+
+### macOS HostWorker
 
 macOS uses a native LaunchAgent, not Docker. Docker on macOS runs Linux containers inside a VM and cannot reliably control Tart, Xcode, Keychain, or native macOS runner processes on the host.
 
@@ -314,20 +277,20 @@ curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/instal
 chmod +x install-host-macos.sh
 ./install-host-macos.sh \
   --host-name mac-mini-01 \
-  --advertised-ip 192.168.2.134 \
-  --database-connection 'Host=192.168.2.4;Port=5433;Database=runnerrunner;Username=runnerrunner;Password=...'
+  --server-url 'https://runner.example.com' \
+  --enrollment-token '<host-token-from-hosts-page>'
 ```
 
-### Windows HostSilo
+### Windows HostWorker
 
 Windows uses a native Windows Service package by default. Windows Docker mode is not the main release path.
 
 ```powershell
-Expand-Archive .\runnerrunner-hostsilo-win-x64.zip -DestinationPath 'C:\Program Files\RunnerRunner' -Force
-powershell -ExecutionPolicy Bypass -File .\Install-HostSilo.ps1 `
+Expand-Archive .\runnerrunner-hostworker-win-x64.zip -DestinationPath 'C:\Program Files\RunnerRunner' -Force
+powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
   -HostName windows-build-01 `
-  -AdvertisedIPAddress 192.168.2.50 `
-  -DatabaseConnectionString 'Host=192.168.2.4;Port=5433;Database=runnerrunner;Username=runnerrunner;Password=...'
+  -ServerUrl 'https://runner.example.com' `
+  -EnrollmentToken '<host-token-from-hosts-page>'
 ```
 
 ## Docker Compose Topology
@@ -338,7 +301,7 @@ The checked-in `docker-compose.yml` runs the production-like local topology:
 |---|---|
 | `postgres` | PostgreSQL 17 for DocumentDB, Orleans clustering, grain state, and reminders |
 | `server` | Blazor UI, webhook API, Orleans server silo |
-| `host-silo` | Headless Orleans host silo with local runner execution |
+| `host-worker` | Authenticated outbound worker with local runner execution |
 
 Key ports:
 
@@ -347,15 +310,30 @@ Key ports:
 | `4779` | RunnerRunner web UI and API |
 | `5432` | PostgreSQL |
 | `11111` / `30000` | Server Orleans silo/gateway |
-| `11112` / `30001` | HostSilo Orleans silo/gateway |
 
-The compose file wires both server and host-silo to:
+The compose file wires the server to PostgreSQL and the HostWorker to the server over gRPC:
 
 ```text
 Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
+HostWorker__ServerUrl=http://server:4779
+HostWorker__EnrollmentToken=<bootstrap-token-or-host-token>
 ```
 
-> **Note:** macOS agents cannot run in Docker. Deploy the macOS agent or HostSilo as a native binary and point it at the server URL.
+> **Note:** macOS hosts cannot use the Linux HostWorker container to control Tart, Xcode, or Keychain resources. Deploy the macOS HostWorker as a native binary and point it at the server URL.
+
+### Optional observability stack
+
+The Linux compose bundle can run an OpenTelemetry Collector profile for traces, metrics, and structured logs:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 docker compose --profile observability up -d
+```
+
+The collector defaults to a debug exporter so self-hosted installs get a non-blocking OTLP endpoint without taking a dependency on a full logging platform. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at Grafana Alloy/Collector, Seq, Azure Monitor, or another OTLP-compatible sink for production retention and querying.
+
+### Development/debug deploy helpers
+
+The scripts under `deploy/` that build locally and copy artifacts over SSH are intended for lab and debugging workflows only. Public installs should use GitHub Release artifacts, `runnerrunner-server update`, and the HostWorker update controls in the **Hosts** page so installed services stay aligned with the release manifest and platform service managers.
 
 ## Execution Backends
 
@@ -399,23 +377,31 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `Database:ConnectionString` | `Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner` | PostgreSQL connection string for DocumentDB and Orleans |
 | `ConnectionStrings:DefaultConnection` | *(empty)* | Alternate PostgreSQL connection string source |
 | `ASPNETCORE_URLS` | `http://localhost:5000` | Server listen URL |
-| `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised to other Orleans silos in production |
+| `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised by the server Orleans silo in production |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
+| `HostWorkerUpdates:Repository` | `Redth/RunnerRunner` | GitHub repository used for HostWorker update checks |
+| `HostWorkerUpdates:CacheMinutes` | `30` | How long the latest GitHub release check is cached |
 
-### HostSilo
+### HostWorker
 
 | Setting | Default | Description |
 |---|---|---|
-| `Database:ConnectionString` | *(empty)* | PostgreSQL connection string for Orleans clustering and runner state |
-| `RunnerRunner:HostId` | Machine hostname | Stable host identity |
-| `RunnerRunner:HostName` | Machine hostname | Display name for this host |
-| `RunnerRunner:Platform` | Current OS | Optional platform override reported to the server |
-| `RunnerRunner:Architecture` | Current process architecture | Optional architecture override reported to the server |
-| `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised to other Orleans silos in production |
+| `HostWorker:ServerUrl` | `http://localhost:5000` | RunnerRunner server URL for the outbound gRPC connection |
+| `HostWorker:EnrollmentToken` | *(empty)* | Per-host token generated from the Hosts page, or the bootstrap token for bundled installs |
+| `HostWorker:HostId` | Machine hostname | Stable host identity |
+| `HostWorker:HostName` | Machine hostname | Display name for this host |
+| `HostWorker:Platform` | Current OS | Optional platform override reported to the server |
+| `HostWorker:Architecture` | Current process architecture | Optional architecture override reported to the server |
+| `HostWorker:DataRoot` | Platform default | Durable command journal and runner metadata root |
+| `HostWorker:LogRoot` | `<DataRoot>/logs` | Durable worker/runner log root |
+| `HostWorker:RestartCommand` | *(empty)* | Optional Unix command run by the self-update handoff script after files are copied |
+| `HostWorker:WindowsServiceName` | `RunnerRunnerHostWorker` | Windows service name used by the self-update handoff script |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
 
 All settings can be provided via:
 - `appsettings.json`
-- Environment variables (e.g. `RunnerRunner__HostName`)
-- Command-line args (e.g. `--RunnerRunner:HostName=mac-mini-01`)
+- Environment variables (e.g. `HostWorker__HostName`)
+- Command-line args (e.g. `--HostWorker:HostName=mac-mini-01`)
 
 ## Development
 
@@ -444,7 +430,7 @@ src/
 ├── RunnerRunner.ServiceDefaults/   # Shared OTEL, health checks, service discovery
 ├── RunnerRunner.Core/              # Domain models, interfaces, command/event contracts
 ├── RunnerRunner.Server/            # Blazor web UI + orchestration engine
-├── RunnerRunner.HostSilo/          # Per-host Orleans silo execution path
+├── RunnerRunner.HostWorker/          # Authenticated per-host worker execution path
 └── RunnerRunner.Agent/             # Reusable runner backend/lifecycle library
 
 tests/

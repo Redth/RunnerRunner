@@ -30,6 +30,7 @@ services:
       - server-data:/app/data
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
+      - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN:-dev-hostworker-token}
       - ASPNETCORE_URLS=http://+:4779
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP:-}
     labels:
@@ -41,25 +42,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  host-silo:
+  host-worker:
     build:
       context: .
-      dockerfile: src/RunnerRunner.HostSilo/Dockerfile
-    container_name: runnerrunner-host-silo
-    ports:
-      - "${LINUX_BIND_IP:-0.0.0.0}:11112:11112"
-      - "${LINUX_BIND_IP:-0.0.0.0}:30001:30001"
+      dockerfile: src/RunnerRunner.HostWorker/Dockerfile
+    container_name: runnerrunner-host-worker
     environment:
-      - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
-      - HostSilo__HostId=local-docker-host
-      - HostSilo__HostName=local-docker-host
-      - HostSilo__Platform=Linux
-      - Orleans__AdvertisedIPAddress=${ORLEANS_HOST_SILO_IP:-}
-      - Orleans__SiloPort=11112
-      - Orleans__GatewayPort=30001
+      - HostWorker__ServerUrl=http://server:4779
+      - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN:-dev-hostworker-token}
+      - HostWorker__HostId=local-docker-host
+      - HostWorker__HostName=local-docker-host
+      - HostWorker__Platform=Linux
+      - HostWorker__DataRoot=/var/lib/runnerrunner
       - DOTNET_ENVIRONMENT=Production
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - hostworker-data:/var/lib/runnerrunner
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,3 +68,4 @@ services:
 volumes:
   server-data:
   postgres-data:
+  hostworker-data:

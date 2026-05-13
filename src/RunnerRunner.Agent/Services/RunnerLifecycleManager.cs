@@ -174,7 +174,7 @@ public class RunnerLifecycleManager
     /// <summary>
     /// Expands system environment variable references ($VAR, ${VAR}) and tilde (~)
     /// in env var values using the host's current environment. Shells out to a login
-    /// shell so that changes made after the HostSilo started (e.g. xcode-select,
+    /// shell so that changes made after the HostWorker started (e.g. xcode-select,
     /// PATH modifications in .zshrc) are picked up without a restart.
     /// </summary>
     private static Dictionary<string, string> ExpandHostEnvironmentVariables(Dictionary<string, string> vars)

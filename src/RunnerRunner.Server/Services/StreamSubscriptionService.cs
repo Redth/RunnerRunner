@@ -67,7 +67,7 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var reconciliationStream = streamProvider.GetStream<ReconciliationReport>(
-                    StreamId.Create(OrleansHostCommandDispatcher.ReconciliationStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.ReconciliationStreamNamespace, "all"));
                 _reconciliationSub = await reconciliationStream.SubscribeAsync((evt, token) =>
                 {
                     OnReconciliationReportReceived?.Invoke(evt);
@@ -75,14 +75,14 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var imageListStream = streamProvider.GetStream<ImageListEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.ImageListStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.ImageListStreamNamespace, "all"));
                 _imageListSub = await imageListStream.SubscribeAsync(async (evt, token) =>
                 {
                     await UpdateImageCacheAsync(evt);
                 });
 
                 var imageRefreshStream = streamProvider.GetStream<ImageRefreshStatusEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.ImageRefreshStatusStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.ImageRefreshStatusStreamNamespace, "all"));
                 _imageRefreshStatusSub = await imageRefreshStream.SubscribeAsync((evt, token) =>
                 {
                     OnImageRefreshStatusReceived?.Invoke(evt);
@@ -90,7 +90,7 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var imagePullProgressStream = streamProvider.GetStream<ImagePullProgressEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.ImagePullProgressStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.ImagePullProgressStreamNamespace, "all"));
                 _imagePullProgressSub = await imagePullProgressStream.SubscribeAsync((evt, token) =>
                 {
                     OnImagePullProgressReceived?.Invoke(evt);
@@ -98,7 +98,7 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var imagePullCompleteStream = streamProvider.GetStream<ImagePullCompleteEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.ImagePullCompleteStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.ImagePullCompleteStreamNamespace, "all"));
                 _imagePullCompleteSub = await imagePullCompleteStream.SubscribeAsync((evt, token) =>
                 {
                     OnImagePullCompleteReceived?.Invoke(evt);
@@ -106,7 +106,7 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var imageDeletedStream = streamProvider.GetStream<ImageDeletedEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.ImageDeletedStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.ImageDeletedStreamNamespace, "all"));
                 _imageDeletedSub = await imageDeletedStream.SubscribeAsync((evt, token) =>
                 {
                     OnImageDeletedReceived?.Invoke(evt);
@@ -114,7 +114,7 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var hostLogsStream = streamProvider.GetStream<HostLogsEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.HostLogsStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.HostLogsStreamNamespace, "all"));
                 _hostLogsSub = await hostLogsStream.SubscribeAsync((evt, token) =>
                 {
                     OnHostLogsReceived?.Invoke(evt);
@@ -122,7 +122,7 @@ public class StreamSubscriptionService : IHostedService
                 });
 
                 var runnerLogsStream = streamProvider.GetStream<RunnerLogsEvent>(
-                    StreamId.Create(OrleansHostCommandDispatcher.RunnerLogsStreamNamespace, "all"));
+                    StreamId.Create(HostWorkerStreamNames.RunnerLogsStreamNamespace, "all"));
                 _runnerLogsSub = await runnerLogsStream.SubscribeAsync((evt, token) =>
                 {
                     OnRunnerLogsReceived?.Invoke(evt);
@@ -157,7 +157,7 @@ public class StreamSubscriptionService : IHostedService
 
     private async Task UpdateImageCacheAsync(ImageListEvent evt)
     {
-        _logger.LogInformation("Received image list from HostSilo {HostId}: {Count} images", evt.HostId, evt.Images.Count);
+        _logger.LogInformation("Received image list from HostWorker {HostId}: {Count} images", evt.HostId, evt.Images.Count);
 
         var oldImages = (await _store.Query<AgentImage>().ToList()).Where(i => i.HostId == evt.HostId).ToList();
         foreach (var old in oldImages)
@@ -187,4 +187,25 @@ public class StreamSubscriptionService : IHostedService
             Success = true
         });
     }
+
+    public static void PublishReconciliation(ReconciliationReport report)
+        => OnReconciliationReportReceived?.Invoke(report);
+
+    public static void PublishImageRefreshStatus(ImageRefreshStatusEvent evt)
+        => OnImageRefreshStatusReceived?.Invoke(evt);
+
+    public static void PublishImagePullProgress(ImagePullProgressEvent evt)
+        => OnImagePullProgressReceived?.Invoke(evt);
+
+    public static void PublishImagePullComplete(ImagePullCompleteEvent evt)
+        => OnImagePullCompleteReceived?.Invoke(evt);
+
+    public static void PublishImageDeleted(ImageDeletedEvent evt)
+        => OnImageDeletedReceived?.Invoke(evt);
+
+    public static void PublishHostLogs(HostLogsEvent evt)
+        => OnHostLogsReceived?.Invoke(evt);
+
+    public static void PublishRunnerLogs(RunnerLogsEvent evt)
+        => OnRunnerLogsReceived?.Invoke(evt);
 }
