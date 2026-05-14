@@ -353,6 +353,7 @@ internal sealed class HostCommandProcessor : BackgroundService
                 HostId = _identity.HostId,
                 ImageType = command.ImageType,
                 ImageName = command.ImageName,
+                TaskId = command.TaskId,
                 Success = true
             }, ct);
 
@@ -365,6 +366,7 @@ internal sealed class HostCommandProcessor : BackgroundService
                 HostId = _identity.HostId,
                 ImageType = command.ImageType,
                 ImageName = command.ImageName,
+                TaskId = command.TaskId,
                 Success = false,
                 Error = ex.Message
             }, ct);
@@ -374,6 +376,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         ImagePullProgressEvent WithHost(ImagePullProgressEvent evt)
         {
             evt.HostId = _identity.HostId;
+            evt.TaskId = command.TaskId;
             return evt;
         }
     }

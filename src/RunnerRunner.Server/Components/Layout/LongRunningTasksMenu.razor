@@ -1,0 +1,176 @@
+@using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Services
+@using Shiny.DocumentDb
+@inject LongRunningTaskService Tasks
+@inject IDocumentStore Store
+@implements IDisposable
+
+<div class="long-tasks">
+    <button class="long-tasks-toggle @(isOpen ? "active" : "")"
+            type="button"
+            title="Long-running tasks"
+            aria-label="Long-running tasks"
+            @onclick="ToggleOpen">
+        <i class="bi @(runningCount > 0 ? "bi-activity" : "bi-list-task")"></i>
+        @if (runningCount > 0)
+        {
+            <span class="long-tasks-badge">@runningCount</span>
+        }
+    </button>
+
+    @if (isOpen)
+    {
+        <div class="long-tasks-popover">
+            <div class="long-tasks-header">
+                <div>
+                    <h6>Long-running tasks</h6>
+                    <span>@HeaderText</span>
+                </div>
+                @if (taskSnapshot.Any(t => t.Status != LongRunningTaskStatus.Running))
+                {
+                    <button type="button" class="btn btn-sm btn-link" @onclick="ClearCompleted">Clear completed</button>
+                }
+            </div>
+
+            @if (taskSnapshot.Count == 0)
+            {
+                <div class="long-tasks-empty">
+                    <i class="bi bi-check2-circle"></i>
+                    <span>No running tasks.</span>
+                </div>
+            }
+            else
+            {
+                <div class="long-tasks-list">
+                    @foreach (var task in taskSnapshot)
+                    {
+                        <div class="long-task-item">
+                            <div class="long-task-title-row">
+                                <strong>@task.Title</strong>
+                                <span class="badge @StatusBadge(task.Status)">@StatusText(task.Status)</span>
+                            </div>
+                            <div class="long-task-meta">
+                                <span><i class="bi bi-hdd-rack"></i> @FormatLocation(task)</span>
+                                <span><i class="bi bi-clock"></i> @FormatUpdated(task.UpdatedAt)</span>
+                            </div>
+                            @if (task.Status == LongRunningTaskStatus.Running || task.ProgressPercent > 0)
+                            {
+                                <div class="progress long-task-progress">
+                                    <div class="progress-bar @(task.Status == LongRunningTaskStatus.Running ? "progress-bar-striped progress-bar-animated" : "")"
+                                         role="progressbar"
+                                         style="width: @task.ProgressPercent.ToString("F0")%"
+                                         aria-valuenow="@task.ProgressPercent"
+                                         aria-valuemin="0"
+                                         aria-valuemax="100">
+                                        @task.ProgressPercent.ToString("F0")%
+                                    </div>
+                                </div>
+                            }
+                            <div class="long-task-status">@task.StatusText</div>
+                            @if (!string.IsNullOrWhiteSpace(task.Error))
+                            {
+                                <div class="long-task-error">@task.Error</div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LongRunningTaskInfo> taskSnapshot = [];
+    private Dictionary<string, Host> hosts = new(StringComparer.OrdinalIgnoreCase);
+    private int runningCount;
+    private bool isOpen;
+
+    private string HeaderText => runningCount == 0
+        ? "No active work"
+        : runningCount == 1
+            ? "1 task running"
+            : $"{runningCount} tasks running";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadHostsAsync();
+        RefreshSnapshot();
+        Tasks.OnChanged += HandleTasksChanged;
+    }
+
+    private async Task LoadHostsAsync()
+    {
+        hosts = (await Store.Query<Host>().ToList())
+            .ToDictionary(h => h.Id, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void ToggleOpen()
+    {
+        isOpen = !isOpen;
+        if (isOpen)
+            _ = InvokeAsync(async () =>
+            {
+                await LoadHostsAsync();
+                StateHasChanged();
+            });
+    }
+
+    private void ClearCompleted()
+    {
+        Tasks.ClearCompleted();
+    }
+
+    private void HandleTasksChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            RefreshSnapshot();
+            StateHasChanged();
+        });
+    }
+
+    private void RefreshSnapshot()
+    {
+        taskSnapshot = Tasks.GetSnapshot();
+        runningCount = taskSnapshot.Count(t => t.Status == LongRunningTaskStatus.Running);
+    }
+
+    private string FormatLocation(LongRunningTaskInfo task)
+    {
+        if (!string.IsNullOrWhiteSpace(task.HostId) && hosts.TryGetValue(task.HostId, out var host))
+            return host.Label;
+
+        return string.IsNullOrWhiteSpace(task.Location) ? "Unknown host" : task.Location;
+    }
+
+    private static string FormatUpdated(DateTimeOffset updatedAt)
+    {
+        var elapsed = DateTimeOffset.UtcNow - updatedAt;
+        if (elapsed < TimeSpan.FromMinutes(1))
+            return "just now";
+        if (elapsed < TimeSpan.FromHours(1))
+            return $"{(int)elapsed.TotalMinutes}m ago";
+        return updatedAt.LocalDateTime.ToString("HH:mm");
+    }
+
+    private static string StatusBadge(LongRunningTaskStatus status) => status switch
+    {
+        LongRunningTaskStatus.Running => "bg-primary",
+        LongRunningTaskStatus.Succeeded => "bg-success",
+        LongRunningTaskStatus.Failed => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private static string StatusText(LongRunningTaskStatus status) => status switch
+    {
+        LongRunningTaskStatus.Running => "Running",
+        LongRunningTaskStatus.Succeeded => "Done",
+        LongRunningTaskStatus.Failed => "Failed",
+        _ => status.ToString()
+    };
+
+    public void Dispose()
+    {
+        Tasks.OnChanged -= HandleTasksChanged;
+    }
+}

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using RunnerRunner.Core.HostWorkers;
 using RunnerRunner.Core.Hub;
+using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Services.HostWorkers;
 
 namespace RunnerRunner.Server.Tests.Services;
@@ -12,7 +14,8 @@ public class GrpcHostCommandDispatcherTests
     {
         var registry = new HostWorkerConnectionRegistry();
         await using var connection = registry.Register("host-1", "worker-name");
-        var dispatcher = new GrpcHostCommandDispatcher(registry, NullLogger<GrpcHostCommandDispatcher>.Instance);
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var dispatcher = new GrpcHostCommandDispatcher(registry, tasks, NullLogger<GrpcHostCommandDispatcher>.Instance);
 
         await dispatcher.DispatchDeployRunnerAsync("worker-name", new DeployRunnerCommand
         {
@@ -35,14 +38,41 @@ public class GrpcHostCommandDispatcherTests
     [Fact]
     public async Task DispatchListImagesAsync_ThrowsWhenWorkerIsMissing()
     {
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
         var dispatcher = new GrpcHostCommandDispatcher(
             new HostWorkerConnectionRegistry(),
+            tasks,
             NullLogger<GrpcHostCommandDispatcher>.Instance);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => dispatcher.DispatchListImagesAsync("missing-host", new ListImagesCommand()));
 
         Assert.Contains("missing-host", ex.Message);
+    }
+
+    [Fact]
+    public async Task DispatchPullImageAsync_TracksTaskAndSendsTaskId()
+    {
+        var registry = new HostWorkerConnectionRegistry();
+        await using var connection = registry.Register("host-1");
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var dispatcher = new GrpcHostCommandDispatcher(registry, tasks, NullLogger<GrpcHostCommandDispatcher>.Instance);
+
+        await dispatcher.DispatchPullImageAsync("host-1", new PullImageCommand
+        {
+            ImageType = ImageType.Docker,
+            ImageName = "library/ubuntu",
+            Tag = "latest"
+        });
+
+        var message = await ReadOneAsync(connection);
+        var envelope = HostWorkerProtocol.DeserializeCommand(message);
+        var task = Assert.Single(tasks.GetSnapshot());
+
+        Assert.Equal(HostCommandKind.PullImage, envelope.Kind);
+        Assert.NotNull(envelope.PullImage?.TaskId);
+        Assert.Equal(task.Id, envelope.PullImage.TaskId);
+        Assert.Equal(LongRunningTaskStatus.Running, task.Status);
     }
 
     [Fact]
@@ -65,7 +95,8 @@ public class GrpcHostCommandDispatcherTests
     {
         var registry = new HostWorkerConnectionRegistry();
         await using var connection = registry.Register("host-1");
-        var dispatcher = new GrpcHostCommandDispatcher(registry, NullLogger<GrpcHostCommandDispatcher>.Instance);
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var dispatcher = new GrpcHostCommandDispatcher(registry, tasks, NullLogger<GrpcHostCommandDispatcher>.Instance);
 
         await dispatcher.DispatchApplyHostWorkerUpdateAsync("host-1", new HostWorkerUpdateCommand
         {

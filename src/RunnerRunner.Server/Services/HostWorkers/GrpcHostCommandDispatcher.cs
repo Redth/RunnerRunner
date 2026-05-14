@@ -6,13 +6,16 @@ namespace RunnerRunner.Server.Services.HostWorkers;
 public sealed class GrpcHostCommandDispatcher : IHostCommandDispatcher
 {
     private readonly HostWorkerConnectionRegistry _registry;
+    private readonly LongRunningTaskService _tasks;
     private readonly ILogger<GrpcHostCommandDispatcher> _logger;
 
     public GrpcHostCommandDispatcher(
         HostWorkerConnectionRegistry registry,
+        LongRunningTaskService tasks,
         ILogger<GrpcHostCommandDispatcher> logger)
     {
         _registry = registry;
+        _tasks = tasks;
         _logger = logger;
     }
 
@@ -44,12 +47,23 @@ public sealed class GrpcHostCommandDispatcher : IHostCommandDispatcher
             ListImages = command
         }, command.FilterType?.ToString());
 
-    public Task DispatchPullImageAsync(string hostId, PullImageCommand command)
-        => DispatchAsync(hostId, HostCommandKind.PullImage, new HostCommandEnvelope
+    public async Task DispatchPullImageAsync(string hostId, PullImageCommand command)
+    {
+        var taskId = _tasks.TrackImagePull(hostId, command);
+        try
         {
-            Kind = HostCommandKind.PullImage,
-            PullImage = command
-        }, $"{command.ImageType}:{command.RegistryUrl}/{command.ImageName}:{command.Tag}");
+            await DispatchAsync(hostId, HostCommandKind.PullImage, new HostCommandEnvelope
+            {
+                Kind = HostCommandKind.PullImage,
+                PullImage = command
+            }, $"{command.ImageType}:{command.RegistryUrl}/{command.ImageName}:{command.Tag}");
+        }
+        catch (Exception ex)
+        {
+            _tasks.MarkFailed(taskId, ex.Message);
+            throw;
+        }
+    }
 
     public Task DispatchDeleteImageAsync(string hostId, DeleteImageCommand command)
         => DispatchAsync(hostId, HostCommandKind.DeleteImage, new HostCommandEnvelope

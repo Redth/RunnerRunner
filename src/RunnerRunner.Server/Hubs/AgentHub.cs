@@ -361,7 +361,8 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             ProgressPercent = evt.ProgressPercent,
             BytesDownloaded = evt.BytesDownloaded,
             BytesTotal = evt.BytesTotal,
-            Status = evt.Status
+            Status = evt.Status,
+            TaskId = evt.TaskId
         });
     }
 
@@ -374,7 +375,8 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             ImageType = evt.ImageType,
             ImageName = evt.ImageName,
             Success = evt.Success,
-            Error = evt.Error
+            Error = evt.Error,
+            TaskId = evt.TaskId
         });
 
         // Refresh image list from the agent that just finished pulling

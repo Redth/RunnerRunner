@@ -123,6 +123,7 @@ builder.Services.AddSingleton<HostWorkerLogCache>();
 builder.Services.AddSingleton<HostWorkerLocalUpdateStore>();
 builder.Services.AddSingleton<HostWorkerUpdateService>();
 builder.Services.AddSingleton<HostWorkerEventProcessor>();
+builder.Services.AddSingleton<LongRunningTaskService>();
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
 builder.Services.AddScoped<CapacityPlanningService>();
 
