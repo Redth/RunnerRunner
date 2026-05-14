@@ -11,7 +11,8 @@ permissions:
 
 env:
   DOTNET_VERSION: "10.0.x"
-  IMAGE_PREFIX: ghcr.io/redth/runnerrunner
+  SERVER_IMAGE: ghcr.io/redth/runnerrunner-server
+  HOSTWORKER_IMAGE: ghcr.io/redth/runnerrunner-hostworker
 
 jobs:
   release:
@@ -47,9 +48,9 @@ jobs:
           build-args: |
             INFORMATIONAL_VERSION=${{ github.ref_name }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/server:${{ github.ref_name }}
-            ${{ env.IMAGE_PREFIX }}/server:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/server:latest
+            ${{ env.SERVER_IMAGE }}:${{ github.ref_name }}
+            ${{ env.SERVER_IMAGE }}:${{ github.sha }}
+            ${{ env.SERVER_IMAGE }}:latest
 
       - name: Build and push HostWorker image
         uses: docker/build-push-action@v6
@@ -61,9 +62,9 @@ jobs:
           build-args: |
             INFORMATIONAL_VERSION=${{ github.ref_name }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.ref_name }}
-            ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.sha }}
-            ${{ env.IMAGE_PREFIX }}/hostworker:latest
+            ${{ env.HOSTWORKER_IMAGE }}:${{ github.ref_name }}
+            ${{ env.HOSTWORKER_IMAGE }}:${{ github.sha }}
+            ${{ env.HOSTWORKER_IMAGE }}:latest
 
       - name: Publish native HostWorker assets
         shell: bash
@@ -126,14 +127,14 @@ jobs:
               "version": os.environ["GITHUB_REF_NAME"],
               "gitSha": os.environ["GITHUB_SHA"],
               "images": {
-                  "server": [
-                      f"{os.environ['IMAGE_PREFIX']}/server:{os.environ['GITHUB_REF_NAME']}",
-                      f"{os.environ['IMAGE_PREFIX']}/server:{os.environ['GITHUB_SHA']}"
-                  ],
-                  "hostworker": [
-                      f"{os.environ['IMAGE_PREFIX']}/hostworker:{os.environ['GITHUB_REF_NAME']}",
-                      f"{os.environ['IMAGE_PREFIX']}/hostworker:{os.environ['GITHUB_SHA']}"
-                  ]
+                   "server": [
+                       f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
+                       f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_SHA']}"
+                   ],
+                   "hostworker": [
+                       f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
+                       f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_SHA']}"
+                   ]
               },
               "assets": assets
           }

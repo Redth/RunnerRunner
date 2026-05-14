@@ -103,7 +103,7 @@ Create a per-host enrollment token in **Hosts**, then save this as `compose.yaml
 ```yaml
 services:
   host-worker:
-    image: ghcr.io/redth/runnerrunner/hostworker:latest
+    image: ghcr.io/redth/runnerrunner-hostworker:latest
     container_name: runnerrunner-host-worker
     restart: unless-stopped
     environment:
@@ -311,8 +311,8 @@ RunnerRunner publishes multi-architecture `linux/amd64` and `linux/arm64` images
 
 | Image | Use |
 |---|---|
-| `ghcr.io/redth/runnerrunner/server:<tag>` | Server, web UI, API, and Orleans silo |
-| `ghcr.io/redth/runnerrunner/hostworker:<tag>` | Self-contained Linux HostWorker for Docker-backed runner hosts |
+| `ghcr.io/redth/runnerrunner-server:<tag>` | Server, web UI, API, and Orleans silo |
+| `ghcr.io/redth/runnerrunner-hostworker:<tag>` | Self-contained Linux HostWorker for Docker-backed runner hosts |
 
 Tagged releases publish `<tag>`, `<git-sha>`, and `latest`. The `main` branch image workflow publishes `main` and `<git-sha>` for early adopters and lab installs.
 
