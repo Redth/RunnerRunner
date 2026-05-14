@@ -19,4 +19,8 @@
     <ProjectReference Include="..\RunnerRunner.Core\RunnerRunner.Core.csproj" />
     <ProjectReference Include="..\RunnerRunner.ServiceDefaults\RunnerRunner.ServiceDefaults.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RunnerRunner.HostWorker.Tests" />
+  </ItemGroup>
 </Project>

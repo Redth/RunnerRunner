@@ -16,11 +16,18 @@ internal static class HostWorkerIdentityResolver
         var platform = Enum.TryParse<HostPlatform>(config["HostWorker:Platform"], true, out var parsedPlatform)
             ? parsedPlatform
             : DetectCurrentPlatform();
-        var architecture = config["HostWorker:Architecture"]
-            ?? System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString();
+        var architecture = config["HostWorker:Architecture"];
+        if (string.IsNullOrWhiteSpace(architecture))
+            architecture = RuntimeInformation.OSArchitecture.ToString();
+
         var defaultHostId = Environment.MachineName;
-        var hostId = config["HostWorker:HostId"] ?? defaultHostId;
-        var hostName = config["HostWorker:HostName"] ?? hostId;
+        var hostId = config["HostWorker:HostId"];
+        if (string.IsNullOrWhiteSpace(hostId))
+            hostId = defaultHostId;
+
+        var hostName = config["HostWorker:HostName"];
+        if (string.IsNullOrWhiteSpace(hostName))
+            hostName = hostId;
 
         return new HostWorkerIdentity(hostId, hostName, platform, architecture);
     }
