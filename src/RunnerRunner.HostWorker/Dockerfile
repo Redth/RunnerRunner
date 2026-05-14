@@ -1,4 +1,5 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG DOTNET_BUILD_PLATFORM=linux/amd64
+FROM --platform=$DOTNET_BUILD_PLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 ARG INFORMATIONAL_VERSION=0.0.0
@@ -9,7 +10,8 @@ RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
         arm64|aarch64) rid="linux-arm64" ;; \
         *) echo "Unsupported target architecture: ${arch}" >&2; exit 1 ;; \
     esac \
-    && dotnet publish src/RunnerRunner.HostWorker/RunnerRunner.HostWorker.csproj \
+    && PROTOBUF_TOOLS_OS=linux PROTOBUF_TOOLS_CPU=x64 \
+        dotnet publish src/RunnerRunner.HostWorker/RunnerRunner.HostWorker.csproj \
         -c Release \
         -r "${rid}" \
         --self-contained \
