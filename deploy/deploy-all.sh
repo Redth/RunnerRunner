@@ -218,7 +218,7 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U runnerrunner"]
+      test: ["CMD-SHELL", "pg_isready -h localhost -U runnerrunner -d runnerrunner"]
       interval: 5s
       timeout: 5s
       retries: 5
