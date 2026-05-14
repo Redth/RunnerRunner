@@ -198,6 +198,8 @@ public class PullImageCommand
     public DockerImageConfig? DockerConfig { get; set; }
     [Id(7)]
     public TartImageConfig? TartConfig { get; set; }
+    [Id(8)]
+    public string? TaskId { get; set; }
 }
 
 // --- Events (Agent → Server) ---
@@ -379,6 +381,8 @@ public class ImagePullProgressEvent
     public long BytesTotal { get; set; }
     [Id(6)]
     public string? Status { get; set; }
+    [Id(7)]
+    public string? TaskId { get; set; }
 }
 
 [GenerateSerializer]
@@ -394,6 +398,8 @@ public class ImagePullCompleteEvent
     public bool Success { get; set; }
     [Id(4)]
     public string? Error { get; set; }
+    [Id(5)]
+    public string? TaskId { get; set; }
 }
 
 [GenerateSerializer]
