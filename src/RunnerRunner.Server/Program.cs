@@ -8,6 +8,7 @@ using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Http.Features;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +36,12 @@ builder.Services.AddGrpc();
 // HTTP client for provider APIs
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = builder.Configuration.GetValue(
+        "HostWorkerUpdates:MaxUploadBytes",
+        500L * 1024L * 1024L);
+});
 
 // Orleans silo (co-hosted with Blazor server)
 builder.UseOrleans(silo =>
@@ -113,6 +120,7 @@ builder.Services.AddSingleton<RunnerRegistrationCleanupService>();
 builder.Services.AddSingleton<IRegistryCatalogService, RegistryCatalogService>();
 builder.Services.AddSingleton<HostWorkerConnectionRegistry>();
 builder.Services.AddSingleton<HostWorkerLogCache>();
+builder.Services.AddSingleton<HostWorkerLocalUpdateStore>();
 builder.Services.AddSingleton<HostWorkerUpdateService>();
 builder.Services.AddSingleton<HostWorkerEventProcessor>();
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
@@ -163,6 +171,7 @@ app.MapRazorComponents<App>()
 // Legacy compatibility hub; HostWorker runtime commands use gRPC.
 app.MapHub<AgentHub>("/hubs/agent");
 app.MapGrpcService<HostWorkerGrpcService>();
+app.MapHostWorkerUpdateEndpoints();
 
 // Webhook endpoints for GitHub/Gitea workflow_job events
 app.MapWebhookEndpoints();

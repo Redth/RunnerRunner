@@ -1,5 +1,6 @@
 @page "/hosts"
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Forms
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
@@ -7,10 +8,12 @@
 @using RunnerRunner.Server.Services.HostWorkers
 @inject IDocumentStore Store
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 @inject IGrainFactory GrainFactory
 @inject CapacityPlanningService CapacityService
 @inject IHostCommandDispatcher HostCommandDispatcher
 @inject HostWorkerUpdateService HostWorkerUpdateService
+@inject HostWorkerLocalUpdateStore HostWorkerUpdateStore
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -27,9 +30,6 @@
     <a class="btn btn-outline-primary" href="/provisioning-rules">
         <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
     </a>
-    <button class="btn btn-outline-secondary" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
-        <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check HostWorker Updates")
-    </button>
     @if (!string.IsNullOrWhiteSpace(updateError))
     {
         <div class="alert alert-warning mt-2 mb-0">
@@ -43,6 +43,73 @@
             <br /><small>Use this token when starting one new HostWorker. It is stored hashed and will not be shown again.</small>
         </div>
     }
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="d-flex flex-wrap align-items-end gap-2">
+            <div>
+                <label class="form-label form-label-sm mb-1">HostWorker update source</label>
+                <select class="form-select form-select-sm" value="@selectedUpdateSource.ToSourceId()" @onchange="OnUpdateSourceChanged">
+                    <option value="release">GitHub Releases</option>
+                    <option value="upload">Uploaded builds</option>
+                    <option value="local-folder">SSH/local folder</option>
+                </select>
+            </div>
+            <div style="min-width: 220px;">
+                <label class="form-label form-label-sm mb-1">Version</label>
+                @if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
+                {
+                    <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest or v1.2.3" />
+                }
+                else
+                {
+                    <select class="form-select form-select-sm" @bind="selectedUpdateVersion">
+                        @if (availableUpdateVersions.Count == 0)
+                        {
+                            <option value="">No builds found</option>
+                        }
+                        @foreach (var version in availableUpdateVersions)
+                        {
+                            <option value="@version.Version">@version.Version (@version.Assets.Count assets)</option>
+                        }
+                    </select>
+                }
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
+                <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check")
+            </button>
+            @if (selectedUpdateSource != HostWorkerUpdateSourceKind.Release)
+            {
+                <button class="btn btn-outline-secondary btn-sm" @onclick="LoadUpdateVersions">
+                    <i class="bi bi-arrow-clockwise me-1"></i> Refresh builds
+                </button>
+            }
+        </div>
+        <div class="small text-muted mt-2">
+            Releases use GitHub assets. Uploaded builds are stored by the server. SSH/local folder builds are read from
+            <code>@HostWorkerUpdateStore.LocalFolderRoot</code> with artifacts under version folders.
+        </div>
+        <div class="row g-2 align-items-end mt-2">
+            <div class="col-md-3">
+                <label class="form-label form-label-sm mb-1">Upload version</label>
+                <input class="form-control form-control-sm" @bind="uploadVersion" placeholder="dev-main-abc123" />
+            </div>
+            <div class="col-md-5">
+                <label class="form-label form-label-sm mb-1">Upload artifact</label>
+                <InputFile class="form-control form-control-sm" OnChange="OnUpdateArtifactSelected" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-outline-primary btn-sm" @onclick="UploadHostWorkerBuild" disabled="@(!CanUploadBuild)">
+                    <i class="bi bi-upload me-1"></i> @(uploadingUpdate ? "Uploading..." : "Upload build")
+                </button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(uploadMessage))
+            {
+                <div class="col-12 small text-muted">@uploadMessage</div>
+            }
+        </div>
+    </div>
 </div>
 
 <div class="row g-2 mb-3 align-items-end">
@@ -197,7 +264,7 @@
                     @if (CanUpdate(host))
                     {
                         <button class="btn btn-sm btn-outline-success me-1" @onclick="() => QueueHostWorkerUpdate(host)" disabled="@updatingHosts.Contains(host.Id)">
-                            <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : "Update")
+                            <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply build")
                         </button>
                     }
                     <a class="btn btn-sm btn-outline-primary me-1" href="/provisioning-rules"><i class="bi bi-diagram-3"></i> Rules</a>
@@ -299,6 +366,18 @@
     private bool checkingUpdates;
     private string? updateError;
     private readonly HashSet<string> updatingHosts = [];
+    private HostWorkerUpdateSourceKind selectedUpdateSource = HostWorkerUpdateSourceKind.Release;
+    private string? selectedUpdateVersion;
+    private IReadOnlyList<HostWorkerUpdateVersion> availableUpdateVersions = [];
+    private string uploadVersion = $"dev-{DateTime.UtcNow:yyyyMMddHHmmss}";
+    private IBrowserFile? selectedUpdateFile;
+    private bool uploadingUpdate;
+    private string? uploadMessage;
+
+    private bool CanUploadBuild
+        => !uploadingUpdate
+           && selectedUpdateFile != null
+           && !string.IsNullOrWhiteSpace(uploadVersion);
 
     // Filter & sort state
     private string searchText = "";
@@ -446,6 +525,7 @@
     protected override async Task OnInitializedAsync()
     {
         await ReloadData();
+        await LoadUpdateVersions();
     }
 
     private async Task ReloadData()
@@ -457,14 +537,18 @@
 
     private async Task CheckHostWorkerUpdates()
     {
+        if (!CanCheckSelectedUpdateSource())
+            return;
+
         checkingUpdates = true;
         updateError = null;
         try
         {
+            var selection = CreateUpdateSelection();
             var first = true;
             foreach (var host in hosts.Where(h => h.IsApproved && !string.IsNullOrWhiteSpace(h.AgentVersion)))
             {
-                await HostWorkerUpdateService.RefreshHostUpdateStateAsync(host, forceRefresh: first);
+                await HostWorkerUpdateService.RefreshHostUpdateStateAsync(host, selection, forceRefresh: first);
                 first = false;
             }
             await ReloadData();
@@ -481,11 +565,16 @@
 
     private async Task QueueHostWorkerUpdate(Host host)
     {
+        if (!CanCheckSelectedUpdateSource())
+            return;
+
         updatingHosts.Add(host.Id);
         updateError = null;
         try
         {
-            await HostWorkerUpdateService.QueueUpdateAsync(host.Id, force: false);
+            await HostWorkerUpdateService.QueueUpdateAsync(
+                host.Id,
+                CreateUpdateSelection(allowNonUpgrade: selectedUpdateSource != HostWorkerUpdateSourceKind.Release));
             await ReloadData();
         }
         catch (Exception ex)
@@ -498,9 +587,105 @@
         }
     }
 
-    private static bool CanUpdate(Host host)
+    private bool CanUpdate(Host host)
         => host.AgentStatus == AgentStatus.Online
-           && string.Equals(host.UpdateStatus, "UpdateAvailable", StringComparison.OrdinalIgnoreCase);
+           && (selectedUpdateSource == HostWorkerUpdateSourceKind.Release
+               ? string.Equals(host.UpdateStatus, "UpdateAvailable", StringComparison.OrdinalIgnoreCase)
+               : !string.IsNullOrWhiteSpace(selectedUpdateVersion));
+
+    private async Task OnUpdateSourceChanged(ChangeEventArgs e)
+    {
+        if (!HostWorkerUpdateSourceKinds.TryParse(e.Value?.ToString(), out var source))
+        {
+            updateError = $"Unsupported HostWorker update source '{e.Value}'.";
+            return;
+        }
+
+        selectedUpdateSource = source;
+        updateError = null;
+        await LoadUpdateVersions();
+    }
+
+    private async Task LoadUpdateVersions()
+    {
+        if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
+        {
+            availableUpdateVersions = [];
+            return;
+        }
+
+        availableUpdateVersions = await HostWorkerUpdateService.GetAvailableVersionsAsync(selectedUpdateSource);
+        if (availableUpdateVersions.Count == 0)
+        {
+            selectedUpdateVersion = null;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedUpdateVersion) ||
+            !availableUpdateVersions.Any(x => string.Equals(x.Version, selectedUpdateVersion, StringComparison.OrdinalIgnoreCase)))
+        {
+            selectedUpdateVersion = availableUpdateVersions[0].Version;
+        }
+    }
+
+    private void OnUpdateArtifactSelected(InputFileChangeEventArgs e)
+    {
+        selectedUpdateFile = e.File;
+        uploadMessage = selectedUpdateFile == null ? null : $"Selected {selectedUpdateFile.Name} ({selectedUpdateFile.Size:n0} bytes).";
+    }
+
+    private async Task UploadHostWorkerBuild()
+    {
+        if (selectedUpdateFile == null)
+            return;
+
+        uploadingUpdate = true;
+        updateError = null;
+        uploadMessage = null;
+        try
+        {
+            await using var stream = selectedUpdateFile.OpenReadStream(HostWorkerUpdateStore.MaxUploadBytes);
+            var artifact = await HostWorkerUpdateStore.SaveUploadAsync(
+                uploadVersion,
+                selectedUpdateFile.Name,
+                stream,
+                selectedUpdateFile.Size);
+
+            selectedUpdateSource = HostWorkerUpdateSourceKind.Upload;
+            selectedUpdateVersion = artifact.Version;
+            uploadMessage = $"Uploaded {artifact.AssetName} for {artifact.Version}.";
+            await LoadUpdateVersions();
+        }
+        catch (Exception ex)
+        {
+            updateError = $"Unable to upload HostWorker build: {ex.Message}";
+        }
+        finally
+        {
+            uploadingUpdate = false;
+        }
+    }
+
+    private HostWorkerUpdateSelection CreateUpdateSelection(bool allowNonUpgrade = false)
+        => new(
+            selectedUpdateSource,
+            string.IsNullOrWhiteSpace(selectedUpdateVersion) ? null : selectedUpdateVersion.Trim(),
+            Force: false,
+            AllowNonUpgrade: allowNonUpgrade,
+            PublicBaseUrl: Navigation.BaseUri);
+
+    private bool CanCheckSelectedUpdateSource()
+    {
+        if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release ||
+            !string.IsNullOrWhiteSpace(selectedUpdateVersion))
+        {
+            updateError = null;
+            return true;
+        }
+
+        updateError = $"No {selectedUpdateSource.ToDisplayName()} HostWorker build version is selected.";
+        return false;
+    }
 
     private static string FormatUpdateStatus(string status)
         => status switch

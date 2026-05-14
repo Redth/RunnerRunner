@@ -260,9 +260,35 @@ The checked-in SSH deploy helpers are not the recommended release path. They are
 
 ### HostWorker updates from the UI
 
-The server checks GitHub Releases for the latest `runnerrunner-hostworker-*` assets. On the **Hosts** page, click **Check HostWorker Updates** to compare each connected worker's reported version with the latest release. If a native worker has an update, click **Update** to send it an update command.
+The server can update native HostWorkers from three sources:
 
-Native workers download the matching release asset for their platform, verify the SHA256 from `release-manifest.json`, stage the update under their data root, and restart through the platform service layer. Containerized Linux workers are updated by the compose/server update path instead of self-mutating their container image.
+- **GitHub Releases** — published `runnerrunner-hostworker-*` release assets and checksums.
+- **Uploaded builds** — manually uploaded from the **Hosts** page or the server API.
+- **SSH/local folder** — artifacts copied into the server's local artifact folder, usually by `scp` or lab automation.
+
+On the **Hosts** page, choose the source and version, click **Check**, then apply the selected build to online native workers. Uploaded and local-folder builds are intentionally allowed to reinstall the same version string so debug builds can move back and forth without creating public releases.
+
+Native workers download the matching artifact for their platform, verify the SHA256 from the selected source, stage the update under their data root, and restart through the platform service layer. Containerized Linux workers are updated by the compose/server update path instead of self-mutating their container image.
+
+The same flow is exposed through token-protected API endpoints. Use the HostWorker enrollment token as `Authorization: Bearer <token>` or `X-RunnerRunner-Enrollment-Token: <token>`.
+
+```bash
+# Upload a local debug build to the server
+curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
+  -F version=dev-main-abc123 \
+  -F file=@artifacts/runnerrunner-hostworker-osx-arm64.tar.gz \
+  https://runner.example.com/api/hostworker-updates/upload
+
+# List uploaded builds
+curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
+  "https://runner.example.com/api/hostworker-updates?source=upload"
+
+# Queue that build for a host
+curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"source":"upload","version":"dev-main-abc123"}' \
+  https://runner.example.com/api/hostworker-updates/hosts/mac-mini-01/update
+```
 
 ### Linux HostWorker
 
@@ -381,6 +407,11 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
 | `HostWorkerUpdates:Repository` | `Redth/RunnerRunner` | GitHub repository used for HostWorker update checks |
 | `HostWorkerUpdates:CacheMinutes` | `30` | How long the latest GitHub release check is cached |
+| `HostWorkerUpdates:StorageRoot` | `{ContentRoot}/data/hostworker-updates` | Root for uploaded and local-folder HostWorker update artifacts |
+| `HostWorkerUpdates:UploadRoot` | `{StorageRoot}/uploads` | Server-managed upload artifact root |
+| `HostWorkerUpdates:LocalArtifactRoot` | `{StorageRoot}/local` | SSH/local-folder artifact root; place assets under version subfolders |
+| `HostWorkerUpdates:PublicBaseUrl` | Current request URL | External server URL used in HostWorker artifact download commands when not queued from an HTTP request |
+| `HostWorkerUpdates:MaxUploadBytes` | `524288000` | Maximum uploaded HostWorker artifact size |
 
 ### HostWorker
 
