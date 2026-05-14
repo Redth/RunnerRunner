@@ -1,4 +1,5 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG DOTNET_SDK_PLATFORM=linux/amd64
+FROM --platform=$DOTNET_SDK_PLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 ARG INFORMATIONAL_VERSION=0.0.0
