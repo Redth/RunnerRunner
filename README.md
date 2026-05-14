@@ -107,7 +107,7 @@ services:
     container_name: runnerrunner-host-worker
     restart: unless-stopped
     environment:
-      HostWorker__ServerUrl: https://runner.example.com
+      HostWorker__ServerUrl: http://runner.example.com:4780
       HostWorker__EnrollmentToken: <host-token-from-hosts-page>
       HostWorker__HostId: linux-worker-01
       HostWorker__HostName: linux-worker-01
@@ -394,6 +394,7 @@ Key ports:
 | Port | Service |
 |---|---|
 | `4779` | RunnerRunner web UI and API |
+| `4780` | HostWorker gRPC over cleartext HTTP/2 |
 | `5433` | PostgreSQL published on the host by default; containers use `5432` |
 | `11111` / `30000` | Server Orleans silo/gateway |
 
@@ -401,11 +402,11 @@ The compose file wires the server to PostgreSQL. When the optional worker profil
 
 ```text
 Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
-HostWorker__ServerUrl=http://server:4779
+HostWorker__ServerUrl=http://server:4780
 HostWorker__EnrollmentToken=<bootstrap-token-or-host-token>
 ```
 
-> **Note:** macOS hosts cannot use the Linux HostWorker container to control Tart, Xcode, or Keychain resources. Deploy the macOS HostWorker as a native binary and point it at the server URL.
+> **Note:** macOS hosts cannot use the Linux HostWorker container to control Tart, Xcode, or Keychain resources. Deploy the macOS HostWorker as a native binary and point it at the HostWorker gRPC URL, for example `http://192.168.2.4:4780`.
 
 ### Optional observability stack
 
@@ -463,7 +464,8 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 |---|---|---|
 | `Database:ConnectionString` | `Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner` | PostgreSQL connection string for DocumentDB and Orleans |
 | `ConnectionStrings:DefaultConnection` | *(empty)* | Alternate PostgreSQL connection string source |
-| `ASPNETCORE_URLS` | `http://localhost:5000` | Server listen URL |
+| `Kestrel:Endpoints:Web:Url` | `http://+:4779` | Web UI and API listen URL |
+| `Kestrel:Endpoints:HostWorkerGrpc:Url` | `http://+:4780` | HostWorker gRPC listen URL |
 | `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised by the server Orleans silo in production |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
 | `HostWorkerUpdates:Repository` | `Redth/RunnerRunner` | GitHub repository used for HostWorker update checks |

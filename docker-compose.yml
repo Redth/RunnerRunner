@@ -24,6 +24,7 @@ services:
     container_name: runnerrunner-server
     ports:
       - "${LINUX_BIND_IP:-0.0.0.0}:4779:4779"
+      - "${LINUX_BIND_IP:-0.0.0.0}:4780:4780"
       - "${LINUX_BIND_IP:-0.0.0.0}:11111:11111"
       - "${LINUX_BIND_IP:-0.0.0.0}:30000:30000"
     volumes:
@@ -31,7 +32,10 @@ services:
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN:-dev-hostworker-token}
-      - ASPNETCORE_URLS=http://+:4779
+      - Kestrel__Endpoints__Web__Url=http://+:4779
+      - Kestrel__Endpoints__Web__Protocols=Http1
+      - Kestrel__Endpoints__HostWorkerGrpc__Url=http://+:4780
+      - Kestrel__Endpoints__HostWorkerGrpc__Protocols=Http2
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP:-}
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
@@ -48,7 +52,7 @@ services:
       dockerfile: src/RunnerRunner.HostWorker/Dockerfile
     container_name: runnerrunner-host-worker
     environment:
-      - HostWorker__ServerUrl=http://server:4779
+      - HostWorker__ServerUrl=http://server:4780
       - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN:-dev-hostworker-token}
       - HostWorker__HostId=local-docker-host
       - HostWorker__HostName=local-docker-host

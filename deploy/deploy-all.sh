@@ -48,6 +48,7 @@ LINUX_USER="${LINUX_USER:-root}"
 LINUX_PASSWORD="${LINUX_PASSWORD:-}"
 LINUX_DEPLOY_DIR="${LINUX_DEPLOY_DIR:-/opt/stacks/runnerrunner}"
 SERVER_PORT="${SERVER_PORT:-4779}"
+HOSTWORKER_GRPC_PORT="${HOSTWORKER_GRPC_PORT:-4780}"
 HOSTWORKER_ENROLLMENT_TOKEN="${HOSTWORKER_ENROLLMENT_TOKEN:-dev-hostworker-token}"
 MACOS_HOSTWORKER_ENROLLMENT_TOKEN="${MACOS_HOSTWORKER_ENROLLMENT_TOKEN:-${HOSTWORKER_ENROLLMENT_TOKEN}}"
 WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN="${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN:-${HOSTWORKER_ENROLLMENT_TOKEN}}"
@@ -228,6 +229,7 @@ services:
     container_name: runnerrunner-server
     ports:
       - "${LINUX_BIND_IP}:${SERVER_PORT}:${SERVER_PORT}"
+      - "${LINUX_BIND_IP}:${HOSTWORKER_GRPC_PORT}:${HOSTWORKER_GRPC_PORT}"
       - "${LINUX_BIND_IP}:11111:11111"
       - "${LINUX_BIND_IP}:30000:30000"
     volumes:
@@ -236,7 +238,10 @@ services:
     environment:
       - Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
       - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN}
-      - ASPNETCORE_URLS=http://+:${SERVER_PORT}
+      - Kestrel__Endpoints__Web__Url=http://+:${SERVER_PORT}
+      - Kestrel__Endpoints__Web__Protocols=Http1
+      - Kestrel__Endpoints__HostWorkerGrpc__Url=http://+:${HOSTWORKER_GRPC_PORT}
+      - Kestrel__Endpoints__HostWorkerGrpc__Protocols=Http2
       - OTEL_SERVICE_NAME=runnerrunner-server
       - DOTNET_ENVIRONMENT=Production
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP}
@@ -256,7 +261,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - hostworker-data:/var/lib/runnerrunner
     environment:
-      - HostWorker__ServerUrl=http://server:${SERVER_PORT}
+      - HostWorker__ServerUrl=http://server:${HOSTWORKER_GRPC_PORT}
       - HostWorker__EnrollmentToken=${HOSTWORKER_ENROLLMENT_TOKEN}
       - HostWorker__HostId=linux-host-${LINUX_HOST}
       - HostWorker__HostName=linux-host-${LINUX_HOST}
@@ -327,7 +332,7 @@ step "Generating appsettings.Production.json..."
 cat > "${PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
 {
   "HostWorker": {
-    "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}",
+    "ServerUrl": "http://${LINUX_HOST}:${HOSTWORKER_GRPC_PORT}",
     "EnrollmentToken": "${MACOS_HOSTWORKER_ENROLLMENT_TOKEN}",
     "HostId": "mac-host-${MACOS_HOST}",
     "HostName": "mac-host-${MACOS_HOST}",
@@ -391,7 +396,7 @@ step "Generating Windows appsettings.Production.json..."
 cat > "${WINDOWS_PUBLISH_DIR}/appsettings.Production.json" <<SETTINGS_EOF
 {
   "HostWorker": {
-    "ServerUrl": "http://${LINUX_HOST}:${SERVER_PORT}",
+    "ServerUrl": "http://${LINUX_HOST}:${HOSTWORKER_GRPC_PORT}",
     "EnrollmentToken": "${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN}",
     "HostId": "windows-host-${WINDOWS_HOST}",
     "HostName": "windows-host-${WINDOWS_HOST}",
@@ -414,7 +419,7 @@ remote_scp "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
 
 step "Installing Windows HostWorker service..."
 remote_ssh "${WINDOWS_USER}" "${WINDOWS_HOST}" "${WINDOWS_PASSWORD}" \
-    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostWorker.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -HostId 'windows-host-${WINDOWS_HOST}' -HostName 'windows-host-${WINDOWS_HOST}' -ServerUrl 'http://${LINUX_HOST}:${SERVER_PORT}' -EnrollmentToken '${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN}'\""
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '${WINDOWS_DEPLOY_DIR//\//\\}\\Install-HostWorker.ps1' -DeployDir '${WINDOWS_DEPLOY_DIR//\//\\}' -HostId 'windows-host-${WINDOWS_HOST}' -HostName 'windows-host-${WINDOWS_HOST}' -ServerUrl 'http://${LINUX_HOST}:${HOSTWORKER_GRPC_PORT}' -EnrollmentToken '${WINDOWS_HOSTWORKER_ENROLLMENT_TOKEN}'\""
 
 success "Windows HostWorker deployed"
 
@@ -426,6 +431,7 @@ fi # end windows
 log "Deploy complete!"
 echo ""
 echo "  Server:       http://${LINUX_HOST}:${SERVER_PORT}"
+echo "  HostWorker:   http://${LINUX_HOST}:${HOSTWORKER_GRPC_PORT}"
 echo "  Server:       https://r2.jjagd.net (via NPM)"
 echo "  Linux server/silo: Docker container on ${LINUX_HOST}"
 if [[ -n "${MACOS_HOST}" ]]; then
