@@ -14,6 +14,11 @@ public static class OrleansSchemaInitializer
         new("orleansreminderstable", "03-PostgreSQL-Reminders.sql"),
     ];
 
+    private static readonly QueryMigration[] QueryMigrations =
+    [
+        new("CleanupDefunctSiloEntriesKey", "04-PostgreSQL-Clustering-Orleans10.sql"),
+    ];
+
     public static async Task EnsureCreatedAsync(
         string connectionString,
         ILogger logger,
@@ -53,6 +58,29 @@ public static class OrleansSchemaInitializer
                 var sql = await File.ReadAllTextAsync(scriptPath, cancellationToken);
                 await ExecuteNonQueryAsync(connection, sql, cancellationToken);
             }
+
+            foreach (var migration in QueryMigrations)
+            {
+                if (await QueryExistsAsync(connection, migration.QueryKey, cancellationToken))
+                {
+                    continue;
+                }
+
+                var scriptPath = Path.Combine(scriptDirectory, migration.FileName);
+                if (!File.Exists(scriptPath))
+                {
+                    throw new FileNotFoundException(
+                        $"Required Orleans PostgreSQL schema migration was not found: {scriptPath}",
+                        scriptPath);
+                }
+
+                logger.LogInformation(
+                    "Applying Orleans PostgreSQL schema migration {ScriptFile}.",
+                    migration.FileName);
+
+                var sql = await File.ReadAllTextAsync(scriptPath, cancellationToken);
+                await ExecuteNonQueryAsync(connection, sql, cancellationToken);
+            }
         }
         finally
         {
@@ -75,6 +103,18 @@ public static class OrleansSchemaInitializer
         return result is true;
     }
 
+    private static async Task<bool> QueryExistsAsync(
+        NpgsqlConnection connection,
+        string queryKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM OrleansQuery WHERE QueryKey = @query_key);";
+        command.Parameters.AddWithValue("query_key", queryKey);
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is true;
+    }
+
     private static async Task ExecuteNonQueryAsync(
         NpgsqlConnection connection,
         string commandText,
@@ -86,4 +126,6 @@ public static class OrleansSchemaInitializer
     }
 
     private sealed record SchemaScript(string RequiredTable, string FileName);
+
+    private sealed record QueryMigration(string QueryKey, string FileName);
 }
