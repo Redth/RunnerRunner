@@ -25,7 +25,10 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Test
-        run: dotnet test RunnerRunner.slnx --configuration Release
+        run: |
+          dotnet test tests/RunnerRunner.Core.Tests/RunnerRunner.Core.Tests.csproj --configuration Release
+          dotnet test tests/RunnerRunner.Server.Tests/RunnerRunner.Server.Tests.csproj --configuration Release
+          dotnet test tests/RunnerRunner.Agent.Tests/RunnerRunner.Agent.Tests.csproj --configuration Release
 
       - uses: docker/setup-qemu-action@v3
 
