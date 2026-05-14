@@ -9,7 +9,12 @@ internal sealed class HostWorkerPaths
             dataRoot = ResolveDefaultDataRoot();
 
         DataRoot = dataRoot;
-        LogRoot = configuration["HostWorker:LogRoot"] ?? Path.Combine(DataRoot, "logs");
+
+        var logRoot = configuration["HostWorker:LogRoot"];
+        if (string.IsNullOrWhiteSpace(logRoot))
+            logRoot = Path.Combine(DataRoot, "logs");
+
+        LogRoot = logRoot;
         CommandJournalPath = Path.Combine(DataRoot, "journals", "commands.jsonl");
 
         Directory.CreateDirectory(DataRoot);
