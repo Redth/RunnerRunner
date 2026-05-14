@@ -151,6 +151,15 @@ builder.Services.AddRazorComponents()
 
 var app = builder.Build();
 
+// Ensure Orleans ADO.NET backing tables exist before the silo starts.
+if (!app.Environment.IsDevelopment())
+{
+    var schemaLogger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("RunnerRunner.Server.Data.OrleansSchemaInitializer");
+    await OrleansSchemaInitializer.EnsureCreatedAsync(pgConnectionString, schemaLogger);
+}
+
 // Ensure all document store tables exist before serving requests
 await DatabaseInitializer.EnsureTablesCreatedAsync(app.Services);
 

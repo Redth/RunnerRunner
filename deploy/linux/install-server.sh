@@ -16,6 +16,7 @@ Options:
   --install-dir PATH             Install directory (default: /opt/runnerrunner)
   --bind-ip IP                   IP used for published Docker ports (default: 0.0.0.0)
   --server-port PORT             Server HTTP port (default: 4779)
+  --hostworker-grpc-port PORT    HostWorker gRPC HTTP/2 port (default: 4780)
   --orleans-ip IP                IP advertised by the server Orleans silo
   --enrollment-token TOKEN       Bootstrap enrollment token for bundled HostWorker
   --with-linux-worker            Also run a Linux HostWorker in this compose stack
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         --bind-ip) LINUX_BIND_IP="$2"; shift 2 ;;
         --server-port) SERVER_PORT="$2"; shift 2 ;;
+        --hostworker-grpc-port) HOSTWORKER_GRPC_PORT="$2"; shift 2 ;;
         --orleans-ip) ORLEANS_ADVERTISED_IP="$2"; shift 2 ;;
         --enrollment-token) HOSTWORKER_ENROLLMENT_TOKEN="$2"; shift 2 ;;
         --with-linux-worker) RUNNERRUNNER_ENABLE_LINUX_WORKER=1; shift ;;
@@ -101,6 +103,7 @@ POSTGRES_USER=runnerrunner
 POSTGRES_PASSWORD=${generated_password}
 LINUX_BIND_IP=${LINUX_BIND_IP:-0.0.0.0}
 SERVER_PORT=${SERVER_PORT:-4779}
+HOSTWORKER_GRPC_PORT=${HOSTWORKER_GRPC_PORT:-4780}
 POSTGRES_PORT=${POSTGRES_PORT:-5433}
 ORLEANS_ADVERTISED_IP=${ORLEANS_ADVERTISED_IP:-}
 HOSTWORKER_ENROLLMENT_TOKEN=${generated_enrollment_token}

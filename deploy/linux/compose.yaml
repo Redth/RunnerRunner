@@ -13,7 +13,7 @@ services:
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-runnerrunner} -d ${POSTGRES_DB:-runnerrunner}"]
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${POSTGRES_USER:-runnerrunner} -d ${POSTGRES_DB:-runnerrunner}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -23,6 +23,7 @@ services:
     container_name: runnerrunner-server
     ports:
       - "${LINUX_BIND_IP:-0.0.0.0}:${SERVER_PORT:-4779}:4779"
+      - "${LINUX_BIND_IP:-0.0.0.0}:${HOSTWORKER_GRPC_PORT:-4780}:4780"
       - "${LINUX_BIND_IP:-0.0.0.0}:11111:11111"
       - "${LINUX_BIND_IP:-0.0.0.0}:30000:30000"
     volumes:
@@ -30,7 +31,10 @@ services:
     environment:
       Database__ConnectionString: Host=postgres;Port=5432;Database=${POSTGRES_DB:-runnerrunner};Username=${POSTGRES_USER:-runnerrunner};Password=${POSTGRES_PASSWORD}
       HostWorker__EnrollmentToken: ${HOSTWORKER_ENROLLMENT_TOKEN:?HOSTWORKER_ENROLLMENT_TOKEN must be set}
-      ASPNETCORE_URLS: http://+:4779
+      Kestrel__Endpoints__Web__Url: http://+:4779
+      Kestrel__Endpoints__Web__Protocols: Http1
+      Kestrel__Endpoints__HostWorkerGrpc__Url: http://+:4780
+      Kestrel__Endpoints__HostWorkerGrpc__Protocols: Http2
       DOTNET_ENVIRONMENT: Production
       Orleans__AdvertisedIPAddress: ${ORLEANS_ADVERTISED_IP:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -48,7 +52,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - hostworker-data:/var/lib/runnerrunner
     environment:
-      HostWorker__ServerUrl: http://server:4779
+      HostWorker__ServerUrl: http://server:4780
       HostWorker__EnrollmentToken: ${HOSTWORKER_ENROLLMENT_TOKEN:?HOSTWORKER_ENROLLMENT_TOKEN must be set}
       HostWorker__HostId: ${HOSTWORKER_HOST_ID:-local-docker-host}
       HostWorker__HostName: ${HOSTWORKER_HOST_NAME:-local-docker-host}
