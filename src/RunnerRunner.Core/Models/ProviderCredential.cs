@@ -23,6 +23,16 @@ public class ProviderCredential
     public string? GitHubApiUrl { get; set; }
     [Id(7)]
     public string? GitHubServerUrl { get; set; }
+    [Id(16)]
+    public GitHubAuthType GitHubAuthType { get; set; } = GitHubAuthType.PersonalAccessToken;
+    [Id(17)]
+    public string? GitHubAppId { get; set; }
+    [Id(18)]
+    public string? GitHubAppPrivateKey { get; set; }
+    [Id(19)]
+    public string? GitHubAppInstallationId { get; set; }
+    [Id(20)]
+    public string? GitHubAppWebhookSecret { get; set; }
 
     // Gitea
     [Id(8)]
@@ -44,4 +54,10 @@ public class ProviderCredential
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     [Id(15)]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public enum GitHubAuthType
+{
+    PersonalAccessToken,
+    GitHubApp
 }

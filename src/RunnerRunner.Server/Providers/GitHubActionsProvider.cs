@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Services;
 
 namespace RunnerRunner.Server.Providers;
 
@@ -15,13 +16,18 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
     internal sealed record GitHubRunnerRegistration(long Id, string Name, string Status, bool Busy);
 
     private readonly IHttpClientFactory _httpFactory;
+    private readonly GitHubAuthenticationService _gitHubAuth;
     private readonly ILogger<GitHubActionsProvider> _logger;
 
     public RunnerProvider Provider => RunnerProvider.GitHubActions;
 
-    public GitHubActionsProvider(IHttpClientFactory httpFactory, ILogger<GitHubActionsProvider> logger)
+    public GitHubActionsProvider(
+        IHttpClientFactory httpFactory,
+        GitHubAuthenticationService gitHubAuth,
+        ILogger<GitHubActionsProvider> logger)
     {
         _httpFactory = httpFactory;
+        _gitHubAuth = gitHubAuth;
         _logger = logger;
     }
 
@@ -43,10 +49,7 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
             _logger.LogInformation("Requesting repo-level registration token for {Repo}", normalizedRepo);
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.GitHubToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
+        using var request = await _gitHubAuth.CreateRequestAsync(HttpMethod.Post, endpoint, credential, ct: ct);
 
         var response = await _httpFactory.CreateClient().SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
@@ -112,7 +115,7 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
     {
         var listEndpoint = BuildRunnersEndpoint(credential);
 
-        using var listRequest = CreateGitHubRequest(HttpMethod.Get, $"{listEndpoint}?per_page=100", credential.GitHubToken ?? "");
+        using var listRequest = await _gitHubAuth.CreateRequestAsync(HttpMethod.Get, $"{listEndpoint}?per_page=100", credential, ct: ct);
         var listResponse = await _httpFactory.CreateClient().SendAsync(listRequest, ct);
         listResponse.EnsureSuccessStatusCode();
 
@@ -141,7 +144,7 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
     private async Task DeleteRunnerAsync(ProviderCredential credential, long runnerId, CancellationToken ct)
     {
         var deleteEndpoint = $"{BuildRunnersEndpoint(credential)}/{runnerId}";
-        using var deleteRequest = CreateGitHubRequest(HttpMethod.Delete, deleteEndpoint, credential.GitHubToken ?? "");
+        using var deleteRequest = await _gitHubAuth.CreateRequestAsync(HttpMethod.Delete, deleteEndpoint, credential, ct: ct);
         var deleteResponse = await _httpFactory.CreateClient().SendAsync(deleteRequest, ct);
         deleteResponse.EnsureSuccessStatusCode();
     }
@@ -156,15 +159,6 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
 
         var parts = normalizedRepo.Split('/', 2);
         return $"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners";
-    }
-
-    private static HttpRequestMessage CreateGitHubRequest(HttpMethod method, string endpoint, string token)
-    {
-        var request = new HttpRequestMessage(method, endpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
-        return request;
     }
 
     private static string? NormalizeRepo(string? repo, string? org)

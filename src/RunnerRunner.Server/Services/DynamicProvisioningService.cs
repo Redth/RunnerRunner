@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using Orleans;
 using Shiny.DocumentDb;
@@ -41,6 +40,7 @@ public class DynamicProvisioningService : BackgroundService
     private readonly JitConfigService _jitConfigService;
     private readonly RunnerRegistrationCleanupService _runnerRegistrationCleanupService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly GitHubAuthenticationService _gitHubAuth;
     private readonly IHostCommandDispatcher _hostCommands;
     private readonly IGrainFactory _grainFactory;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _jobLocks = new();
@@ -59,6 +59,7 @@ public class DynamicProvisioningService : BackgroundService
         JitConfigService jitConfigService,
         RunnerRegistrationCleanupService runnerRegistrationCleanupService,
         IHttpClientFactory httpClientFactory,
+        GitHubAuthenticationService gitHubAuth,
         IHostCommandDispatcher hostCommands,
         IGrainFactory grainFactory)
     {
@@ -68,6 +69,7 @@ public class DynamicProvisioningService : BackgroundService
         _jitConfigService = jitConfigService;
         _runnerRegistrationCleanupService = runnerRegistrationCleanupService;
         _httpClientFactory = httpClientFactory;
+        _gitHubAuth = gitHubAuth;
         _hostCommands = hostCommands;
         _grainFactory = grainFactory;
         _retrySweepInterval = TimeSpan.FromSeconds(Math.Max(5, _configuration.GetValue("DynamicProvisioning:PendingRetrySeconds", 15)));
@@ -141,7 +143,7 @@ public class DynamicProvisioningService : BackgroundService
                 continue;
 
             var credential = await store.Get<ProviderCredential>(rule.ProviderCredentialId);
-            if (credential == null || string.IsNullOrWhiteSpace(credential.GitHubToken))
+            if (credential == null || !GitHubAuthenticationService.HasGitHubApiCredentials(credential))
                 continue;
 
             foreach (var repo in ResolveReposToPoll(rule, credential))
@@ -159,9 +161,7 @@ public class DynamicProvisioningService : BackgroundService
     {
         var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
         using var client = _httpClientFactory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential.GitHubToken);
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
-        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        await _gitHubAuth.ConfigureClientAsync(client, credential, ct: ct);
 
         foreach (var run in await ListRelevantGitHubWorkflowRunsAsync(client, apiUrl, repo, ct))
         {
@@ -259,6 +259,7 @@ public class DynamicProvisioningService : BackgroundService
                     JobId = jobId,
                     RunId = run.RunId,
                     Repository = repo,
+                    GitHubInstallationId = credential.GitHubAppInstallationId,
                     WorkflowName = run.WorkflowName,
                     Labels = labels,
                     Status = "pending",
@@ -717,7 +718,7 @@ public class DynamicProvisioningService : BackgroundService
                 jitResult = profile.Provider switch
                 {
                     RunnerProvider.GitHubActions => await _jitConfigService.GenerateGitHubJitConfig(
-                        credential, runnerName, effectiveLabels, profile.RunnerGroup, currentEvent.Repository),
+                        credential, runnerName, effectiveLabels, profile.RunnerGroup, currentEvent.Repository, currentEvent.GitHubInstallationId),
                     RunnerProvider.GiteaActions => await _jitConfigService.GenerateGiteaJitConfig(credential, runnerName),
                     _ => null
                 };
@@ -1335,16 +1336,14 @@ public class DynamicProvisioningService : BackgroundService
                 credential = await store.Get<ProviderCredential>(rule.ProviderCredentialId);
         }
 
-        if (credential == null || string.IsNullOrWhiteSpace(credential.GitHubToken))
+        if (credential == null || !GitHubAuthenticationService.HasGitHubApiCredentials(credential, evt.GitHubInstallationId))
             return;
 
         try
         {
             var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
             using var client = _httpClientFactory.CreateClient();
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential.GitHubToken);
-            client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
-            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            await _gitHubAuth.ConfigureClientAsync(client, credential, evt.GitHubInstallationId);
 
             using var response = await client.PostAsync(
                 $"{apiUrl}/repos/{evt.Repository}/actions/runs/{evt.RunId}/cancel",

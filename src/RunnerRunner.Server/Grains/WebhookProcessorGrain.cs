@@ -4,6 +4,7 @@ using System.Text.Json;
 using Orleans.Concurrency;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
+using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Webhooks;
 using Shiny.DocumentDb;
 
@@ -31,6 +32,12 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             "github" => nameof(RunnerProvider.GitHubActions),
             "gitea" => nameof(RunnerProvider.GiteaActions),
             _ => provider
+        };
+        var runnerProvider = provider switch
+        {
+            "github" => RunnerProvider.GitHubActions,
+            "gitea" => RunnerProvider.GiteaActions,
+            _ => (RunnerProvider?)null
         };
 
         using var scope = _serviceProvider.CreateScope();
@@ -68,14 +75,29 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         var workflowName = workflowJob.TryGetProperty("workflow_name", out var wn)
             ? wn.GetString() ?? "" : "";
         var repo = json.GetProperty("repository").GetProperty("full_name").GetString() ?? "";
+        var githubInstallationId = ExtractGitHubInstallationId(provider, json);
 
         var org = repo.Contains('/') ? repo.Split('/')[0] : "";
 
         // Load all enabled Webhook provisioning rules
         var allRules = await store.Query<ProvisioningRule>().ToList();
         var candidateRules = allRules
-            .Where(r => r.Enabled && r.Type == ProvisioningType.Webhook)
+            .Where(r => r.Enabled
+                && r.Type == ProvisioningType.Webhook
+                && (!runnerProvider.HasValue || r.Provider == runnerProvider.Value))
             .ToList();
+        var credentialIds = candidateRules
+            .Select(r => r.ProviderCredentialId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var credentialsById = new Dictionary<string, ProviderCredential>(StringComparer.Ordinal);
+        foreach (var credentialId in credentialIds)
+        {
+            var credential = await store.Get<ProviderCredential>(credentialId!);
+            if (credential != null)
+                credentialsById[credential.Id] = credential;
+        }
 
         // Find a rule where HMAC signature matches AND repo/org is in scope.
         // Multiple rules may share the same webhook secret, so we must check all
@@ -88,10 +110,13 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         var hmacMatchCount = 0;
         foreach (var rule in candidateRules)
         {
-            if (string.IsNullOrEmpty(rule.WebhookSecret))
+            credentialsById.TryGetValue(rule.ProviderCredentialId ?? "", out var credential);
+            var webhookSecret = ResolveWebhookSecret(rule, credential, runnerProvider);
+
+            if (string.IsNullOrEmpty(webhookSecret))
                 continue;
 
-            if (!ValidateHmac(body, rule.WebhookSecret, signatureHeader, provider))
+            if (!ValidateHmac(body, webhookSecret, signatureHeader, provider))
                 continue;
 
             hmacMatchCount++;
@@ -138,6 +163,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 JobId = jobId,
                 RunId = runId,
                 Repository = repo,
+                GitHubInstallationId = githubInstallationId,
                 WorkflowName = workflowName,
                 Labels = labels,
                 Status = status,
@@ -177,6 +203,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 JobId = jobId,
                 RunId = runId,
                 Repository = repo,
+                GitHubInstallationId = githubInstallationId,
                 WorkflowName = workflowName,
                 Labels = labels,
                 Status = "in_progress",
@@ -205,6 +232,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 JobId = jobId,
                 RunId = runId,
                 Repository = repo,
+                GitHubInstallationId = githubInstallationId,
                 WorkflowName = workflowName,
                 Labels = labels,
                 Status = "completed"
@@ -236,6 +264,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                     JobId = jobId,
                     RunId = runId,
                     Repository = repo,
+                    GitHubInstallationId = githubInstallationId,
                     WorkflowName = workflowName,
                     Labels = labels,
                     Status = "no_match",
@@ -274,6 +303,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 JobId = jobId,
                 RunId = runId,
                 Repository = repo,
+                GitHubInstallationId = githubInstallationId,
                 WorkflowName = workflowName,
                 Labels = labels,
                 MatchedProfileId = profileId,
@@ -309,6 +339,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             JobId = jobId,
             RunId = runId,
             Repository = repo,
+            GitHubInstallationId = githubInstallationId,
             WorkflowName = workflowName,
             Labels = labels,
             Status = "ignored"
@@ -340,5 +371,39 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(computed),
             Encoding.UTF8.GetBytes(expected.ToLowerInvariant()));
+    }
+
+    private static string? ResolveWebhookSecret(
+        ProvisioningRule rule,
+        ProviderCredential? credential,
+        RunnerProvider? provider)
+    {
+        if (!string.IsNullOrWhiteSpace(rule.WebhookSecret))
+            return rule.WebhookSecret;
+
+        if (provider == RunnerProvider.GitHubActions
+            && GitHubAuthenticationService.IsGitHubAppCredential(credential))
+        {
+            return credential?.GitHubAppWebhookSecret;
+        }
+
+        return null;
+    }
+
+    private static string? ExtractGitHubInstallationId(string provider, JsonElement json)
+    {
+        if (provider != "github"
+            || !json.TryGetProperty("installation", out var installation)
+            || !installation.TryGetProperty("id", out var id))
+        {
+            return null;
+        }
+
+        return id.ValueKind switch
+        {
+            JsonValueKind.Number => id.GetInt64().ToString(),
+            JsonValueKind.String => id.GetString(),
+            _ => null
+        };
     }
 }

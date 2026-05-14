@@ -115,6 +115,7 @@ builder.Services.AddSingleton<IRunnerProviderPlugin, AzDoAgentProvider>();
 
 // Services
 builder.Services.AddSingleton<AuditService>();
+builder.Services.AddSingleton<GitHubAuthenticationService>();
 builder.Services.AddSingleton<JitConfigService>();
 builder.Services.AddSingleton<RunnerRegistrationCleanupService>();
 builder.Services.AddSingleton<IRegistryCatalogService, RegistryCatalogService>();

@@ -132,17 +132,29 @@
                         </select>
                     </div>
                     <div class="col-md-4 mb-3">
-                        <label class="form-label">Webhook Secret</label>
+                        <label class="form-label">@(UsesGitHubAppCredential() ? "Webhook Secret Override" : "Webhook Secret")</label>
                         <div class="input-group">
                             <input class="form-control" @bind="editRule.WebhookSecret" />
                             <button class="btn btn-outline-secondary" type="button" @onclick="GenerateSecret">Generate</button>
                         </div>
+                        @if (UsesGitHubAppCredential())
+                        {
+                            <div class="form-text">Leave blank to use the selected GitHub App credential's webhook secret.</div>
+                        }
                     </div>
                     <div class="col-md-2 mb-3">
                         <label class="form-label">Max Concurrent</label>
                         <input type="number" class="form-control" @bind="editRule.MaxConcurrent" min="1" />
                     </div>
                 </div>
+
+                @if (UsesGitHubAppCredential())
+                {
+                    <div class="alert alert-info py-2">
+                        <i class="bi bi-github me-1"></i>
+                        This rule can receive GitHub App <code>workflow_job</code> webhooks through the app-level webhook. Runner API calls use the installation ID from the webhook event, falling back to the credential's default installation ID.
+                    </div>
+                }
 
                 <div class="row">
                     <div class="col-md-3 mb-3">
@@ -516,6 +528,14 @@
                 formError = "Webhook rules require at least one label-to-profile mapping. Use '*' for a catch-all mapping.";
                 return;
             }
+
+            if (UsesGitHubAppCredential()
+                && string.IsNullOrWhiteSpace(editRule.WebhookSecret)
+                && string.IsNullOrWhiteSpace(SelectedCredential()?.GitHubAppWebhookSecret))
+            {
+                formError = "GitHub App webhook rules require either a rule webhook secret override or a webhook secret on the selected credential.";
+                return;
+            }
         }
         else
         {
@@ -562,6 +582,15 @@
         StateHasChanged();
     }
     private void OnProviderChanged() => StateHasChanged();
+
+    private ProviderCredential? SelectedCredential() =>
+        string.IsNullOrWhiteSpace(editRule.ProviderCredentialId)
+            ? null
+            : credentials.FirstOrDefault(c => c.Id == editRule.ProviderCredentialId);
+
+    private bool UsesGitHubAppCredential() =>
+        editRule.Provider == RunnerProvider.GitHubActions
+        && SelectedCredential()?.GitHubAuthType == GitHubAuthType.GitHubApp;
 
     // --- Org chip helpers ---
     private void AddOrg()

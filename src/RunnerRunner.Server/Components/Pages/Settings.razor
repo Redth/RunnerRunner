@@ -42,6 +42,15 @@
             {
                 <div class="row mb-3">
                     <div class="col-md-4">
+                        <label class="form-label">GitHub Auth Type</label>
+                        <select class="form-select" @bind="editCred.GitHubAuthType">
+                            @foreach (var authType in Enum.GetValues<GitHubAuthType>())
+                            {
+                                <option value="@authType">@GetGitHubAuthTypeLabel(authType)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-4">
                         <label class="form-label">GitHub Org</label>
                         <input class="form-control" @bind="editCred.GitHubOrg" />
                     </div>
@@ -49,11 +58,61 @@
                         <label class="form-label">GitHub Repo (optional)</label>
                         <input class="form-control" @bind="editCred.GitHubRepo" />
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label">GitHub Token (PAT)</label>
-                        <input type="password" class="form-control" @bind="editCred.GitHubToken" />
-                    </div>
                 </div>
+
+                @if (editCred.GitHubAuthType == GitHubAuthType.PersonalAccessToken)
+                {
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">GitHub Token (PAT)</label>
+                            <input type="password" class="form-control" @bind="editCred.GitHubToken" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">GitHub API URL (optional)</label>
+                            <input class="form-control" @bind="editCred.GitHubApiUrl" placeholder="https://api.github.com" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">GitHub Server URL (optional)</label>
+                            <input class="form-control" @bind="editCred.GitHubServerUrl" placeholder="https://github.com" />
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-info py-2">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Configure the GitHub App webhook URL as <code>@GitHubWebhookUrl</code>, subscribe to <code>workflow_job</code>, and grant runner-management permissions.
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label">App ID</label>
+                            <input class="form-control" @bind="editCred.GitHubAppId" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Default Installation ID</label>
+                            <input class="form-control" @bind="editCred.GitHubAppInstallationId" />
+                            <div class="form-text">Required for static runners and polling. Webhooks can supply this automatically.</div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Webhook Secret</label>
+                            <input type="password" class="form-control" @bind="editCred.GitHubAppWebhookSecret" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">GitHub API URL (optional)</label>
+                            <input class="form-control" @bind="editCred.GitHubApiUrl" placeholder="https://api.github.com" />
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Private Key PEM</label>
+                        <textarea class="form-control font-monospace" rows="7" @bind="editCred.GitHubAppPrivateKey"></textarea>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">GitHub Server URL (optional)</label>
+                            <input class="form-control" @bind="editCred.GitHubServerUrl" placeholder="https://github.com" />
+                        </div>
+                    </div>
+                }
             }
             else if (editCred.Provider == RunnerProvider.GiteaActions)
             {
@@ -184,9 +243,21 @@
 
     private string GetCredentialSummary(ProviderCredential cred) => cred.Provider switch
     {
-        RunnerProvider.GitHubActions => $"{cred.GitHubOrg}/{cred.GitHubRepo ?? "*"}",
+        RunnerProvider.GitHubActions => cred.GitHubAuthType == GitHubAuthType.GitHubApp
+            ? $"GitHub App {cred.GitHubAppId ?? "?"} · {cred.GitHubOrg}/{cred.GitHubRepo ?? "*"}"
+            : $"PAT · {cred.GitHubOrg}/{cred.GitHubRepo ?? "*"}",
         RunnerProvider.GiteaActions => cred.GiteaInstanceUrl ?? "",
         RunnerProvider.AzureDevOps => $"{cred.AzDoOrgUrl} / {cred.AzDoProjectName}",
         _ => ""
+    };
+
+    private string GitHubWebhookUrl => $"{Navigation.BaseUri.TrimEnd('/')}/api/webhooks/github";
+
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+
+    private static string GetGitHubAuthTypeLabel(GitHubAuthType authType) => authType switch
+    {
+        GitHubAuthType.GitHubApp => "GitHub App",
+        _ => "Personal Access Token"
     };
 }

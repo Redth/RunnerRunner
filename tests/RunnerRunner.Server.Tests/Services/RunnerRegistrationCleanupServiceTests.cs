@@ -68,6 +68,34 @@ public class RunnerRegistrationCleanupServiceTests
     }
 
     [Fact]
+    public void ScopeGitHubCredentialToRepository_PreservesGitHubAppInstallationFromWebhook()
+    {
+        var credential = new ProviderCredential
+        {
+            Name = "github-app",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubOrg = "redth",
+            GitHubAuthType = GitHubAuthType.GitHubApp,
+            GitHubAppId = "98765",
+            GitHubAppInstallationId = "default-installation",
+            GitHubAppPrivateKey = "private-key",
+            GitHubAppWebhookSecret = "secret"
+        };
+
+        var scoped = RunnerRegistrationCleanupService.ScopeGitHubCredentialToRepository(
+            credential,
+            "poolmath/PoolMath",
+            "webhook-installation");
+
+        Assert.Equal("poolmath", scoped.GitHubOrg);
+        Assert.Equal("poolmath/PoolMath", scoped.GitHubRepo);
+        Assert.Equal("webhook-installation", scoped.GitHubAppInstallationId);
+        Assert.Equal("98765", scoped.GitHubAppId);
+        Assert.Equal("private-key", scoped.GitHubAppPrivateKey);
+        Assert.Equal("secret", scoped.GitHubAppWebhookSecret);
+    }
+
+    [Fact]
     public void ScopeGitHubCredentialToRepository_PreservesCredentialWhenRepositoryMissing()
     {
         var credential = new ProviderCredential

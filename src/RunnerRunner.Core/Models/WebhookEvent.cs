@@ -37,6 +37,7 @@ public class WebhookEvent
 
     /// <summary>Full repository name, e.g. "dotnet/maui"</summary>
     public string Repository { get; set; } = "";
+    public string? GitHubInstallationId { get; set; }
     public string WorkflowName { get; set; } = "";
 
     /// <summary>Labels from the job's runs-on field</summary>

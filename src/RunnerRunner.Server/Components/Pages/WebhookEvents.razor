@@ -59,7 +59,13 @@ else
                 <tr>
                     <td>@evt.ReceivedAt.ToString("g")</td>
                     <td><span class="badge @(evt.Action == "queued" ? "bg-primary" : "bg-secondary")">@evt.Action</span></td>
-                    <td>@evt.Repository</td>
+                    <td>
+                        @evt.Repository
+                        @if (!string.IsNullOrWhiteSpace(evt.GitHubInstallationId))
+                        {
+                            <div><small class="text-muted">installation @evt.GitHubInstallationId</small></div>
+                        }
+                    </td>
                     <td>@evt.WorkflowName</td>
                     <td>@GetSourceName(evt)</td>
                     <td>
@@ -184,6 +190,7 @@ else
             var term = searchText.Trim();
             q = q.Where(e =>
                 e.Repository.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (e.GitHubInstallationId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || e.WorkflowName.Contains(term, StringComparison.OrdinalIgnoreCase)
                 || e.Status.Contains(term, StringComparison.OrdinalIgnoreCase));
         }
