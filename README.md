@@ -39,18 +39,18 @@ Host machines
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how provisioning rules, profiles, hosts, and runner instances combine to calculate capacity and concurrency.
 
-## Quick Start
-
-### Prerequisites
+## Prerequisites
 
 - A Linux machine or VM for the control plane
 - Docker Engine with the Docker Compose plugin
 - A DNS name or stable IP for the web UI and HostWorkers to reach
 - Provider credentials for GitHub Actions, Gitea Actions, or Azure DevOps
 
-### Recommended install: Docker Compose server stack
+## Install the Server
 
-Start with one Linux server that runs only the control plane: PostgreSQL plus `RunnerRunner.Server`, which includes the web UI and API. Add workers after the UI is online.
+The server is the control plane: PostgreSQL plus `RunnerRunner.Server`, which includes the web UI, API, and Orleans silo. Start with the server, then add HostWorkers after the UI is online.
+
+### Installer Script
 
 ```bash
 curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
@@ -62,23 +62,56 @@ sudo ./install-server.sh \
 
 Use the real LAN IP or public IP for `--orleans-ip`. The installer writes `/opt/runnerrunner/compose.yaml`, creates `/opt/runnerrunner/.env`, pulls the published GHCR images, and starts the stack.
 
-Open the UI at:
+Open the UI at `http://192.168.2.4:4779`.
 
-```text
-http://192.168.2.4:4779
+To update:
+
+```bash
+sudo runnerrunner-server update
 ```
 
-Day-two operations are intentionally boring:
+Useful day-two commands:
 
 ```bash
 sudo runnerrunner-server status
 sudo runnerrunner-server logs
-sudo runnerrunner-server update
+sudo runnerrunner-server restart
 ```
 
-### Optional: run a Linux worker in the same compose stack
+### With Compose
 
-If this Linux machine should also run Docker-based runners, enable the bundled Linux HostWorker. This mounts the host Docker socket, so only do this on a machine you trust to execute CI workloads.
+Alternatively, use compose directly:
+
+```bash
+sudo mkdir -p /opt/runnerrunner
+cd /opt/runnerrunner
+curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/runnerrunner-linux-compose.tar.gz | sudo tar -xz
+
+sudo tee .env >/dev/null <<'ENV'
+RUNNERRUNNER_VERSION=latest
+POSTGRES_DB=runnerrunner
+POSTGRES_USER=runnerrunner
+POSTGRES_PASSWORD=<change-me>
+LINUX_BIND_IP=0.0.0.0
+SERVER_PORT=4779
+HOSTWORKER_GRPC_PORT=4780
+POSTGRES_PORT=5433
+ORLEANS_ADVERTISED_IP=192.168.2.4
+HOSTWORKER_ENROLLMENT_TOKEN=<bootstrap-token>
+COMPOSE_PROFILES=
+ENV
+
+sudo docker compose --env-file .env -f compose.yaml pull
+sudo docker compose --env-file .env -f compose.yaml up -d --remove-orphans
+```
+
+## Install Host Workers
+
+Create a per-host enrollment token in **Hosts** before installing standalone workers. The server listens for HostWorker gRPC connections on port `4780` by default.
+
+### Linux
+
+Use the installer script when the Linux worker should run in the same compose stack as the server:
 
 ```bash
 sudo ./install-server.sh \
@@ -88,17 +121,13 @@ sudo ./install-server.sh \
   --enrollment-token '<bootstrap-or-host-token>'
 ```
 
-For an existing install, enable the worker profile and restart:
+For an existing server install, enable the bundled worker profile and restart the compose stack:
 
 ```bash
 sudo runnerrunner-server enable-linux-worker
 ```
 
-### Optional: run a Linux worker as a separate compose stack
-
-Use a separate stack when the worker is on a different Linux host, when you want to scale workers independently, or when you do not want CI workloads sharing the control-plane server.
-
-Create a per-host enrollment token in **Hosts**, then save this as `compose.yaml` on the worker host:
+Or compose a standalone Linux worker on a separate host:
 
 ```yaml
 services:
@@ -122,18 +151,14 @@ volumes:
   hostworker-data:
 ```
 
-Start it with:
-
 ```bash
 docker compose up -d
 docker compose logs -f host-worker
 ```
 
-### Native host worker installers
+### macOS
 
-Use native workers for macOS and Windows, and for Linux hosts that need native process execution instead of Docker containers. Create a per-host enrollment token from **Hosts** first.
-
-macOS installs as a LaunchAgent for the current interactive user so Tart, Xcode, Keychain, and user-session resources are available:
+Use the installer script for native macOS hosts. This supports Docker, Tart, and native macOS runner backends because the HostWorker runs as a LaunchAgent in the interactive user session:
 
 ```bash
 curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-host-macos.sh -o install-host-macos.sh
@@ -144,7 +169,27 @@ chmod +x install-host-macos.sh
   --enrollment-token '<host-token-from-hosts-page>'
 ```
 
-Windows installs as a Windows Service:
+Use Docker for Linux Docker containers only:
+
+```bash
+docker run -d \
+  --name runnerrunner-host-worker \
+  --restart unless-stopped \
+  -e HostWorker__ServerUrl='http://runner.example.com:4780' \
+  -e HostWorker__EnrollmentToken='<host-token-from-hosts-page>' \
+  -e HostWorker__HostId='mac-docker-linux-01' \
+  -e HostWorker__HostName='mac-docker-linux-01' \
+  -e HostWorker__Platform='Linux' \
+  -e HostWorker__DataRoot='/var/lib/runnerrunner' \
+  -e DOTNET_ENVIRONMENT='Production' \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v runnerrunner-hostworker-data:/var/lib/runnerrunner \
+  ghcr.io/redth/runnerrunner/hostworker:latest
+```
+
+### Windows
+
+Use the installer script:
 
 ```powershell
 Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/runnerrunner-hostworker-win-x64.zip -OutFile .\runnerrunner-hostworker-win-x64.zip
@@ -154,6 +199,38 @@ powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
   -HostName windows-build-01 `
   -ServerUrl 'https://runner.example.com' `
   -EnrollmentToken '<host-token-from-hosts-page>'
+```
+
+Use Docker for Windows-based runner containers by running the native Windows HostWorker service with Docker Engine in Windows container mode:
+
+```powershell
+docker info --format '{{.OSType}}'
+# windows
+
+powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
+  -HostName windows-docker-01 `
+  -ServerUrl 'https://runner.example.com' `
+  -EnrollmentToken '<host-token-from-hosts-page>'
+```
+
+Then create runner profiles with **Host Platform** = `Windows` and **Execution Backend** = `Docker`.
+
+Use Docker for Linux containers by running the Linux HostWorker container against Docker Desktop's Linux engine from WSL:
+
+```bash
+docker run -d \
+  --name runnerrunner-host-worker \
+  --restart unless-stopped \
+  -e HostWorker__ServerUrl='http://runner.example.com:4780' \
+  -e HostWorker__EnrollmentToken='<host-token-from-hosts-page>' \
+  -e HostWorker__HostId='windows-linux-docker-01' \
+  -e HostWorker__HostName='windows-linux-docker-01' \
+  -e HostWorker__Platform='Linux' \
+  -e HostWorker__DataRoot='/var/lib/runnerrunner' \
+  -e DOTNET_ENVIRONMENT='Production' \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v runnerrunner-hostworker-data:/var/lib/runnerrunner \
+  ghcr.io/redth/runnerrunner/hostworker:latest
 ```
 
 ## Getting Started
@@ -281,27 +358,9 @@ profile info into the provider's job log through two complementary channels:
   registration token before the agent pulls the image, so the image
   digest isn't currently included in `rr-*` labels.
 
-## Release installs
+## Release artifacts and updates
 
 RunnerRunner uses GitHub Releases as the public distribution and update catalog. Releases publish the Linux server compose bundle, HostWorker packages, install scripts, checksums, and `release-manifest.json`. There is no legacy SignalR agent package.
-
-For standalone macOS, Windows, or additional Linux workers, generate a per-host token from the **Hosts** page and use it as the worker's enrollment token.
-
-### Linux server
-
-```bash
-curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
-chmod +x install-server.sh
-sudo ./install-server.sh --orleans-ip 192.168.2.4
-```
-
-Updates are intentionally one command:
-
-```bash
-sudo runnerrunner-server update
-```
-
-The release compose bundle consumes published GHCR images and runs PostgreSQL plus `RunnerRunner.Server`. Add a Linux worker either with the `linux-worker` compose profile in the same stack or with a separate worker-only compose stack.
 
 The checked-in SSH deploy helpers are not the recommended release path. They are kept for development and debugging when you need to push local builds to a lab host.
 
@@ -346,37 +405,6 @@ curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"source":"upload","version":"dev-main-abc123"}' \
   https://runner.example.com/api/hostworker-updates/hosts/mac-mini-01/update
-```
-
-### Linux HostWorker
-
-Linux Docker-backed hosts should run the self-contained HostWorker container with the host Docker socket mounted. Use the same-stack `linux-worker` compose profile for a small single-host install, or a worker-only compose stack for separate Linux capacity. Native self-contained `linux-x64` and `linux-arm64` HostWorker tarballs are also published for hosts that need native process execution.
-
-### macOS HostWorker
-
-macOS uses a native LaunchAgent, not Docker. Docker on macOS runs Linux containers inside a VM and cannot reliably control Tart, Xcode, Keychain, or native macOS runner processes on the host.
-
-```bash
-curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-host-macos.sh -o install-host-macos.sh
-chmod +x install-host-macos.sh
-./install-host-macos.sh \
-  --host-name mac-mini-01 \
-  --server-url 'https://runner.example.com' \
-  --enrollment-token '<host-token-from-hosts-page>'
-```
-
-### Windows HostWorker
-
-Windows uses a native Windows Service package by default. Windows Docker mode is not the main release path.
-
-```powershell
-Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/runnerrunner-hostworker-win-x64.zip -OutFile .\runnerrunner-hostworker-win-x64.zip
-Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/Install-HostWorker.ps1 -OutFile .\Install-HostWorker.ps1
-Expand-Archive .\runnerrunner-hostworker-win-x64.zip -DestinationPath 'C:\Program Files\RunnerRunner' -Force
-powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
-  -HostName windows-build-01 `
-  -ServerUrl 'https://runner.example.com' `
-  -EnrollmentToken '<host-token-from-hosts-page>'
 ```
 
 ## Docker Compose Topology
