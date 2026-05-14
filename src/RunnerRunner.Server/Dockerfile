@@ -7,7 +7,9 @@ RUN dotnet restore RunnerRunner.Server/RunnerRunner.Server.csproj
 COPY src/RunnerRunner.Core/ RunnerRunner.Core/
 COPY src/RunnerRunner.ServiceDefaults/ RunnerRunner.ServiceDefaults/
 COPY src/RunnerRunner.Server/ RunnerRunner.Server/
-RUN dotnet publish RunnerRunner.Server/RunnerRunner.Server.csproj -c Release -o /app/publish
+ARG INFORMATIONAL_VERSION=0.0.0
+RUN dotnet publish RunnerRunner.Server/RunnerRunner.Server.csproj -c Release -o /app/publish \
+    /p:InformationalVersion=${INFORMATIONAL_VERSION}
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
