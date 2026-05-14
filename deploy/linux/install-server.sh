@@ -18,6 +18,7 @@ Options:
   --server-port PORT             Server HTTP port (default: 4779)
   --orleans-ip IP                IP advertised by the server Orleans silo
   --enrollment-token TOKEN       Bootstrap enrollment token for bundled HostWorker
+  --with-linux-worker            Also run a Linux HostWorker in this compose stack
   --postgres-password PASSWORD   PostgreSQL password (generated if omitted)
 USAGE
 }
@@ -32,6 +33,22 @@ generate_password() {
     fi
 }
 
+enable_linux_worker_profile() {
+    local env_file="$1"
+    local profiles
+
+    if grep -q '^COMPOSE_PROFILES=' "${env_file}"; then
+        profiles="$(grep '^COMPOSE_PROFILES=' "${env_file}" | cut -d= -f2-)"
+        case ",${profiles}," in
+            *,linux-worker,*) ;;
+            *) profiles="${profiles:+${profiles},}linux-worker" ;;
+        esac
+        sed -i "s/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=${profiles}/" "${env_file}"
+    else
+        echo "COMPOSE_PROFILES=linux-worker" >> "${env_file}"
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
@@ -40,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --server-port) SERVER_PORT="$2"; shift 2 ;;
         --orleans-ip) ORLEANS_ADVERTISED_IP="$2"; shift 2 ;;
         --enrollment-token) HOSTWORKER_ENROLLMENT_TOKEN="$2"; shift 2 ;;
+        --with-linux-worker) RUNNERRUNNER_ENABLE_LINUX_WORKER=1; shift ;;
         --postgres-password) POSTGRES_PASSWORD="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -72,6 +90,10 @@ fi
 if [[ ! -f "${INSTALL_DIR}/.env" ]]; then
     generated_password="${POSTGRES_PASSWORD:-$(generate_password)}"
     generated_enrollment_token="${HOSTWORKER_ENROLLMENT_TOKEN:-$(generate_password)}"
+    compose_profiles=""
+    if [[ "${RUNNERRUNNER_ENABLE_LINUX_WORKER:-0}" == "1" ]]; then
+        compose_profiles="linux-worker"
+    fi
     cat > "${INSTALL_DIR}/.env" <<ENV
 RUNNERRUNNER_VERSION=${VERSION}
 POSTGRES_DB=runnerrunner
@@ -84,6 +106,7 @@ ORLEANS_ADVERTISED_IP=${ORLEANS_ADVERTISED_IP:-}
 HOSTWORKER_ENROLLMENT_TOKEN=${generated_enrollment_token}
 HOSTWORKER_HOST_ID=${HOSTWORKER_HOST_ID:-local-docker-host}
 HOSTWORKER_HOST_NAME=${HOSTWORKER_HOST_NAME:-local-docker-host}
+COMPOSE_PROFILES=${compose_profiles}
 ENV
     chmod 0600 "${INSTALL_DIR}/.env"
 else
@@ -91,6 +114,9 @@ else
         sed -i "s/^RUNNERRUNNER_VERSION=.*/RUNNERRUNNER_VERSION=${VERSION}/" "${INSTALL_DIR}/.env"
     else
         echo "RUNNERRUNNER_VERSION=${VERSION}" >> "${INSTALL_DIR}/.env"
+    fi
+    if [[ "${RUNNERRUNNER_ENABLE_LINUX_WORKER:-0}" == "1" ]]; then
+        enable_linux_worker_profile "${INSTALL_DIR}/.env"
     fi
 fi
 
@@ -105,12 +131,27 @@ cat > "${BIN_PATH}" <<BIN
 #!/usr/bin/env bash
 set -euo pipefail
 cd "${INSTALL_DIR}"
+
+enable_linux_worker() {
+  if grep -q '^COMPOSE_PROFILES=' .env; then
+    profiles="\$(grep '^COMPOSE_PROFILES=' .env | cut -d= -f2-)"
+    case ",\${profiles}," in
+      *,linux-worker,*) ;;
+      *) profiles="\${profiles:+\${profiles},}linux-worker" ;;
+    esac
+    sed -i "s/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=\${profiles}/" .env
+  else
+    echo "COMPOSE_PROFILES=linux-worker" >> .env
+  fi
+}
+
 case "\${1:-status}" in
   update) shift; exec "${INSTALL_DIR}/update-server.sh" "\$@" ;;
   status) exec docker compose --env-file .env -f compose.yaml ps ;;
   logs) shift; exec docker compose --env-file .env -f compose.yaml logs -f "\$@" ;;
   restart) exec docker compose --env-file .env -f compose.yaml up -d --remove-orphans ;;
-  *) echo "Usage: runnerrunner-server {status|logs|restart|update}" >&2; exit 1 ;;
+  enable-linux-worker) enable_linux_worker; exec docker compose --env-file .env -f compose.yaml up -d --remove-orphans ;;
+  *) echo "Usage: runnerrunner-server {status|logs|restart|update|enable-linux-worker}" >&2; exit 1 ;;
 esac
 BIN
 chmod 0755 "${BIN_PATH}"

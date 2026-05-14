@@ -43,70 +43,117 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how 
 
 ### Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- Docker (for Docker-based runners and docker-compose deployment)
-- [Aspire CLI](https://learn.microsoft.com/dotnet/aspire/fundamentals/setup-tooling) (optional, for local dev)
+- A Linux machine or VM for the control plane
+- Docker Engine with the Docker Compose plugin
+- A DNS name or stable IP for the web UI and HostWorkers to reach
+- Provider credentials for GitHub Actions, Gitea Actions, or Azure DevOps
 
-### Option 1: Aspire (Local Development — Recommended)
+### Recommended install: Docker Compose server stack
 
-The easiest way to run everything locally with a full dashboard:
-
-```bash
-# Install Aspire CLI if you haven't
-dotnet tool install -g aspire
-
-# Run the full stack
-cd src/RunnerRunner.AppHost
-aspire run
-```
-
-This starts:
-- **Server** on `http://localhost:5080` — the web UI
-- **HostWorker** for host-local runner execution
-- **Aspire Dashboard** with real-time logs, traces, and metrics for all services
-
-### Option 2: Install from a GitHub Release (Linux Server)
-
-For production-style installs, use the published release bundle. It runs the server, PostgreSQL, and an optional bundled Linux HostWorker with Docker Compose and configures `runnerrunner-server update` as the supported update command.
+Start with one Linux server that runs only the control plane: PostgreSQL plus `RunnerRunner.Server`, which includes the web UI and API. Add workers after the UI is online.
 
 ```bash
 curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
 chmod +x install-server.sh
-sudo ./install-server.sh --orleans-ip 192.168.2.4 --enrollment-token '<bootstrap-token>'
+sudo ./install-server.sh \
+  --orleans-ip 192.168.2.4 \
+  --server-port 4779
 ```
 
-Update the Linux server and bundled Linux HostWorker with:
+Use the real LAN IP or public IP for `--orleans-ip`. The installer writes `/opt/runnerrunner/compose.yaml`, creates `/opt/runnerrunner/.env`, pulls the published GHCR images, and starts the stack.
+
+Open the UI at:
+
+```text
+http://192.168.2.4:4779
+```
+
+Day-two operations are intentionally boring:
 
 ```bash
+sudo runnerrunner-server status
+sudo runnerrunner-server logs
 sudo runnerrunner-server update
 ```
 
-### Option 3: Add Native HostWorkers
+### Optional: run a Linux worker in the same compose stack
 
-Create a per-host enrollment token from the **Hosts** page, then install the native HostWorker package for each macOS or Windows machine. Native HostWorkers update from the **Hosts** page after the server checks GitHub Releases.
+If this Linux machine should also run Docker-based runners, enable the bundled Linux HostWorker. This mounts the host Docker socket, so only do this on a machine you trust to execute CI workloads.
 
-See [Release installs](#release-installs) for macOS and Windows commands.
+```bash
+sudo ./install-server.sh \
+  --orleans-ip 192.168.2.4 \
+  --server-port 4779 \
+  --with-linux-worker \
+  --enrollment-token '<bootstrap-or-host-token>'
+```
 
-### Option 4: Local Docker Compose
+For an existing install, enable the worker profile and restart:
 
-For local standalone testing without Aspire:
+```bash
+sudo runnerrunner-server enable-linux-worker
+```
+
+### Optional: run a Linux worker as a separate compose stack
+
+Use a separate stack when the worker is on a different Linux host, when you want to scale workers independently, or when you do not want CI workloads sharing the control-plane server.
+
+Create a per-host enrollment token in **Hosts**, then save this as `compose.yaml` on the worker host:
+
+```yaml
+services:
+  host-worker:
+    image: ghcr.io/redth/runnerrunner/hostworker:latest
+    container_name: runnerrunner-host-worker
+    restart: unless-stopped
+    environment:
+      HostWorker__ServerUrl: https://runner.example.com
+      HostWorker__EnrollmentToken: <host-token-from-hosts-page>
+      HostWorker__HostId: linux-worker-01
+      HostWorker__HostName: linux-worker-01
+      HostWorker__Platform: Linux
+      HostWorker__DataRoot: /var/lib/runnerrunner
+      DOTNET_ENVIRONMENT: Production
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - hostworker-data:/var/lib/runnerrunner
+
+volumes:
+  hostworker-data:
+```
+
+Start it with:
 
 ```bash
 docker compose up -d
+docker compose logs -f host-worker
 ```
 
-The server is available at `http://localhost:4779` by default.
+### Native host worker installers
 
-### Option 5: Manual (dotnet run)
+Use native workers for macOS and Windows, and for Linux hosts that need native process execution instead of Docker containers. Create a per-host enrollment token from **Hosts** first.
+
+macOS installs as a LaunchAgent for the current interactive user so Tart, Xcode, Keychain, and user-session resources are available:
 
 ```bash
-# Terminal 1: Start the server
-cd src/RunnerRunner.Server
-dotnet run
+curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-host-macos.sh -o install-host-macos.sh
+chmod +x install-host-macos.sh
+./install-host-macos.sh \
+  --host-name mac-mini-01 \
+  --server-url 'https://runner.example.com' \
+  --enrollment-token '<host-token-from-hosts-page>'
+```
 
-# Terminal 2: Start a local HostWorker
-cd src/RunnerRunner.HostWorker
-dotnet run -- --HostWorker:ServerUrl=http://localhost:5000 --HostWorker:EnrollmentToken=<host-token>
+Windows installs as a Windows Service:
+
+```powershell
+Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/runnerrunner-hostworker-win-x64.zip -OutFile .\runnerrunner-hostworker-win-x64.zip
+Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/Install-HostWorker.ps1 -OutFile .\Install-HostWorker.ps1
+Expand-Archive .\runnerrunner-hostworker-win-x64.zip -DestinationPath 'C:\Program Files\RunnerRunner' -Force
+powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
+  -HostName windows-build-01 `
+  -ServerUrl 'https://runner.example.com' `
+  -EnrollmentToken '<host-token-from-hosts-page>'
 ```
 
 ## Getting Started
@@ -240,12 +287,12 @@ RunnerRunner uses GitHub Releases as the public distribution and update catalog.
 
 For standalone macOS, Windows, or additional Linux workers, generate a per-host token from the **Hosts** page and use it as the worker's enrollment token.
 
-### Linux server and bundled Linux HostWorker
+### Linux server
 
 ```bash
 curl -fsSL https://github.com/redth/RunnerRunner/releases/latest/download/install-server.sh -o install-server.sh
 chmod +x install-server.sh
-sudo ./install-server.sh --orleans-ip 192.168.2.4 --enrollment-token '<bootstrap-token>'
+sudo ./install-server.sh --orleans-ip 192.168.2.4
 ```
 
 Updates are intentionally one command:
@@ -254,9 +301,20 @@ Updates are intentionally one command:
 sudo runnerrunner-server update
 ```
 
-The release compose bundle consumes published GHCR images and runs PostgreSQL, `RunnerRunner.Server`, and a Linux `RunnerRunner.HostWorker`.
+The release compose bundle consumes published GHCR images and runs PostgreSQL plus `RunnerRunner.Server`. Add a Linux worker either with the `linux-worker` compose profile in the same stack or with a separate worker-only compose stack.
 
 The checked-in SSH deploy helpers are not the recommended release path. They are kept for development and debugging when you need to push local builds to a lab host.
+
+### Published Docker images
+
+RunnerRunner publishes multi-architecture `linux/amd64` and `linux/arm64` images to GitHub Container Registry:
+
+| Image | Use |
+|---|---|
+| `ghcr.io/redth/runnerrunner/server:<tag>` | Server, web UI, API, and Orleans silo |
+| `ghcr.io/redth/runnerrunner/hostworker:<tag>` | Self-contained Linux HostWorker for Docker-backed runner hosts |
+
+Tagged releases publish `<tag>`, `<git-sha>`, and `latest`. The `main` branch image workflow publishes `main` and `<git-sha>` for early adopters and lab installs.
 
 ### HostWorker updates from the UI
 
@@ -292,7 +350,7 @@ curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
 
 ### Linux HostWorker
 
-Linux Docker-backed hosts should run the HostWorker container with the host Docker socket mounted. The bundled Linux compose stack already does this. Native `linux-x64` and `linux-arm64` HostWorker tarballs are also published for hosts that need native process execution.
+Linux Docker-backed hosts should run the self-contained HostWorker container with the host Docker socket mounted. Use the same-stack `linux-worker` compose profile for a small single-host install, or a worker-only compose stack for separate Linux capacity. Native self-contained `linux-x64` and `linux-arm64` HostWorker tarballs are also published for hosts that need native process execution.
 
 ### macOS HostWorker
 
@@ -312,6 +370,8 @@ chmod +x install-host-macos.sh
 Windows uses a native Windows Service package by default. Windows Docker mode is not the main release path.
 
 ```powershell
+Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/runnerrunner-hostworker-win-x64.zip -OutFile .\runnerrunner-hostworker-win-x64.zip
+Invoke-WebRequest https://github.com/redth/RunnerRunner/releases/latest/download/Install-HostWorker.ps1 -OutFile .\Install-HostWorker.ps1
 Expand-Archive .\runnerrunner-hostworker-win-x64.zip -DestinationPath 'C:\Program Files\RunnerRunner' -Force
 powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
   -HostName windows-build-01 `
@@ -321,23 +381,23 @@ powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
 
 ## Docker Compose Topology
 
-The checked-in `docker-compose.yml` runs the production-like local topology:
+The published Linux compose bundle is the recommended deployment shape:
 
 | Service | Purpose |
 |---|---|
 | `postgres` | PostgreSQL 17 for DocumentDB, Orleans clustering, grain state, and reminders |
-| `server` | Blazor UI, webhook API, Orleans server silo |
-| `host-worker` | Authenticated outbound worker with local runner execution |
+| `server` | Blazor web UI, webhook API, Orleans server silo |
+| `host-worker` | Optional Linux worker enabled with `COMPOSE_PROFILES=linux-worker` |
 
 Key ports:
 
 | Port | Service |
 |---|---|
 | `4779` | RunnerRunner web UI and API |
-| `5432` | PostgreSQL |
+| `5433` | PostgreSQL published on the host by default; containers use `5432` |
 | `11111` / `30000` | Server Orleans silo/gateway |
 
-The compose file wires the server to PostgreSQL and the HostWorker to the server over gRPC:
+The compose file wires the server to PostgreSQL. When the optional worker profile is enabled, the HostWorker connects back to the server over authenticated outbound gRPC:
 
 ```text
 Database__ConnectionString=Host=postgres;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner
@@ -352,7 +412,8 @@ HostWorker__EnrollmentToken=<bootstrap-token-or-host-token>
 The Linux compose bundle can run an OpenTelemetry Collector profile for traces, metrics, and structured logs:
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 docker compose --profile observability up -d
+cd /opt/runnerrunner
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 docker compose --env-file .env -f compose.yaml --profile observability up -d
 ```
 
 The collector defaults to a debug exporter so self-hosted installs get a non-blocking OTLP endpoint without taking a dependency on a full logging platform. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at Grafana Alloy/Collector, Seq, Azure Monitor, or another OTLP-compatible sink for production retention and querying.

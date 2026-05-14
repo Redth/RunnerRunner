@@ -55,6 +55,8 @@ jobs:
           file: src/RunnerRunner.HostWorker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            INFORMATIONAL_VERSION=${{ github.ref_name }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.ref_name }}
             ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.sha }}
