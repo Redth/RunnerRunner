@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using RunnerRunner.HostWorker;
 using RunnerRunner.HostWorker.Services;
 
 namespace RunnerRunner.HostWorker.Tests.Services;
@@ -131,6 +134,43 @@ public class HostWorkerPathsTests
 
             if (Directory.Exists(logRoot))
                 Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostWorkerLoggingProvider_DoesNotCreateLoggerFactoryDependencyCycle()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"rr-hostworker-di-paths-{Guid.NewGuid():N}");
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["HostWorker:DataRoot"] = dataRoot
+                })
+                .Build();
+
+            var services = new ServiceCollection();
+            services.AddSingleton<IConfiguration>(configuration);
+            services.AddLogging();
+            services.AddSingleton(_ => HostWorkerIdentityResolver.Resolve(configuration));
+            services.AddSingleton<HostWorkerPaths>();
+            services.AddSingleton<HostWorkerLocalLogStore>();
+            services.AddSingleton<HostWorkerLogPublisher>();
+            services.AddSingleton<ILoggerProvider, HostWorkerObservedLoggerProvider>();
+
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            });
+
+            _ = provider.GetRequiredService<ILoggerFactory>();
+        }
+        finally
+        {
+            if (Directory.Exists(dataRoot))
+                Directory.Delete(dataRoot, recursive: true);
         }
     }
 }

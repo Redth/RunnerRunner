@@ -7,7 +7,7 @@ internal sealed class HostWorkerPaths
     {
     }
 
-    public HostWorkerPaths(IConfiguration configuration, ILogger<HostWorkerPaths> logger)
+    internal HostWorkerPaths(IConfiguration configuration, ILogger<HostWorkerPaths> logger)
         : this(configuration, ResolveDefaultDataRoot, logger)
     {
     }
