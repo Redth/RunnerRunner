@@ -223,6 +223,19 @@ public class AgentInfo
     public List<string> Capabilities { get; set; } = [];
     [Id(7)]
     public List<RunningRunnerInfo> CurrentRunners { get; set; } = [];
+    [Id(8)]
+    public HostWorkerRuntimeInfo? Runtime { get; set; }
+}
+
+[GenerateSerializer]
+public class HostWorkerRuntimeInfo
+{
+    [Id(0)]
+    public bool IsContainer { get; set; }
+    [Id(1)]
+    public string? ContainerId { get; set; }
+    [Id(2)]
+    public string? ContainerImage { get; set; }
 }
 
 [GenerateSerializer]
@@ -539,6 +552,8 @@ public class HostWorkerUpdateCommand
     public required string Sha256 { get; set; }
     [Id(4)]
     public bool Force { get; set; }
+    [Id(5)]
+    public string? ContainerImage { get; set; }
 }
 
 [GenerateSerializer]

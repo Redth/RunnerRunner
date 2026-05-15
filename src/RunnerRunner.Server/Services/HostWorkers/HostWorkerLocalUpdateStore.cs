@@ -25,7 +25,7 @@ public static class HostWorkerUpdateSourceKinds
     public static string ToDisplayName(this HostWorkerUpdateSourceKind source)
         => source switch
         {
-            HostWorkerUpdateSourceKind.Release => "GitHub Releases",
+            HostWorkerUpdateSourceKind.Release => "GitHub ref",
             HostWorkerUpdateSourceKind.Upload => "Uploaded builds",
             HostWorkerUpdateSourceKind.LocalFolder => "Local folder",
             _ => source.ToString()

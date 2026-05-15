@@ -51,16 +51,16 @@
             <div>
                 <label class="form-label form-label-sm mb-1">HostWorker update source</label>
                 <select class="form-select form-select-sm" value="@selectedUpdateSource.ToSourceId()" @onchange="OnUpdateSourceChanged">
-                    <option value="release">GitHub Releases</option>
+                    <option value="release">GitHub ref</option>
                     <option value="upload">Uploaded builds</option>
                     <option value="local-folder">SSH/local folder</option>
                 </select>
             </div>
             <div style="min-width: 220px;">
-                <label class="form-label form-label-sm mb-1">Version</label>
+                <label class="form-label form-label-sm mb-1">@(selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Ref" : "Version")</label>
                 @if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
                 {
-                    <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest or v1.2.3" />
+                    <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest, tag, branch, or commit" />
                 }
                 else
                 {
@@ -87,7 +87,7 @@
             }
         </div>
         <div class="small text-muted mt-2">
-            Releases use GitHub assets. Uploaded builds are stored by the server. SSH/local folder builds are read from
+            GitHub refs resolve to a release tag first, then to matching workflow artifacts for a branch or commit. Containerized HostWorkers use the matching GHCR image. Uploaded builds are stored by the server. SSH/local folder builds are read from
             <code>@HostWorkerUpdateStore.LocalFolderRoot</code> with artifacts under version folders.
         </div>
         <div class="row g-2 align-items-end mt-2">
@@ -210,7 +210,15 @@
                         {
                             <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@host.Architecture</span>
                         }
+                        @if (host.IsContainerized)
+                        {
+                            <span class="host-chip cap-chip"><i class="bi bi-box me-1"></i>container</span>
+                        }
                     </div>
+                    @if (!string.IsNullOrWhiteSpace(host.ContainerImage))
+                    {
+                        <div class="small text-muted mt-1">@host.ContainerImage</div>
+                    }
                     @if (host.Capabilities.Any())
                     {
                         <div class="d-flex flex-wrap gap-1 mt-1">
@@ -555,7 +563,7 @@
         }
         catch (Exception ex)
         {
-            updateError = $"Unable to check GitHub releases: {ex.Message}";
+            updateError = $"Unable to check HostWorker updates: {ex.Message}";
         }
         finally
         {

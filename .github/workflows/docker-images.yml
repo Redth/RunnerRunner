@@ -64,6 +64,84 @@ jobs:
             ${{ env.HOSTWORKER_IMAGE }}:main
             ${{ env.HOSTWORKER_IMAGE }}:${{ github.sha }}
 
+      - name: Publish native HostWorker assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/release artifacts/publish
+          for rid in linux-x64 linux-arm64 osx-x64 osx-arm64 win-x64; do
+            out="artifacts/publish/${rid}"
+            dotnet publish src/RunnerRunner.HostWorker/RunnerRunner.HostWorker.csproj \
+              -c Release \
+              -r "${rid}" \
+              --self-contained \
+              -o "${out}" \
+              /p:InformationalVersion="${GITHUB_SHA}" \
+              /p:SourceRevisionId="${GITHUB_SHA}" \
+              /p:RunnerRunnerCommitSha="${GITHUB_SHA}" \
+              /p:RunnerRunnerBuildTag="${GITHUB_REF_NAME}" \
+              --nologo
+
+            if [[ "${rid}" == win-* ]]; then
+              (cd "${out}" && zip -qr "../../release/runnerrunner-hostworker-${rid}.zip" .)
+            else
+              tar -czf "artifacts/release/runnerrunner-hostworker-${rid}.tar.gz" -C "${out}" .
+            fi
+          done
+
+      - name: Generate HostWorker artifact manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts/release
+          python - <<'PY'
+          import hashlib, json, os
+          assets = []
+          for name in sorted(os.listdir(".")):
+              if not name.startswith("runnerrunner-hostworker-"):
+                  continue
+              if os.path.isfile(name):
+                  with open(name, "rb") as f:
+                      digest = hashlib.sha256(f.read()).hexdigest()
+                  assets.append({"name": name, "sha256": digest})
+          manifest = {
+              "version": os.environ["GITHUB_SHA"],
+              "gitSha": os.environ["GITHUB_SHA"],
+              "images": {
+                  "server": [
+                      f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_SHA']}",
+                      f"{os.environ['SERVER_IMAGE']}:main"
+                  ],
+                  "hostworker": [
+                      f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_SHA']}",
+                      f"{os.environ['HOSTWORKER_IMAGE']}:main"
+                  ],
+                  "hostworkerWindows": [
+                      f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_SHA']}",
+                      f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:main"
+                  ]
+              },
+              "assets": assets
+          }
+          with open("release-manifest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          PY
+
+      - name: Upload HostWorker update manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: runnerrunner-hostworker-manifest
+          path: artifacts/release/release-manifest.json
+          if-no-files-found: error
+
+      - name: Upload HostWorker update assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: runnerrunner-hostworker-assets
+          path: artifacts/release/runnerrunner-hostworker-*
+          if-no-files-found: error
+
   publish-windows-hostworker:
     runs-on: windows-2022
 

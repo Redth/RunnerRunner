@@ -60,6 +60,7 @@ services:
       HostWorker__HostName: ${HOSTWORKER_HOST_NAME:-local-docker-host}
       HostWorker__Platform: Linux
       HostWorker__DataRoot: /var/lib/runnerrunner
+      HostWorker__ContainerImage: ${HOSTWORKER_IMAGE:-ghcr.io/redth/runnerrunner-hostworker:${RUNNERRUNNER_VERSION:-latest}}
       DOTNET_ENVIRONMENT: Production
       Logging__Console__FormatterName: ${LOGGING_CONSOLE_FORMATTER_NAME:-simple}
       Logging__Console__IncludeScopes: ${LOGGING_CONSOLE_INCLUDE_SCOPES:-false}

@@ -3,6 +3,8 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using Docker.DotNet;
+using Docker.DotNet.Models;
 using RunnerRunner.Core.Hub;
 
 namespace RunnerRunner.HostWorker.Services;
@@ -31,8 +33,11 @@ internal sealed class HostWorkerSelfUpdater
         Func<HostWorkerUpdateStatusEvent, CancellationToken, Task> publish,
         CancellationToken ct)
     {
-        if (IsContainer())
-            throw new InvalidOperationException("This HostWorker is running in a container. Update the compose stack or container image instead.");
+        if (HostWorkerRuntimeDetector.IsContainer())
+        {
+            await ApplyContainerAsync(command, publish, ct);
+            return;
+        }
 
         await PublishAsync("downloading", $"Downloading {command.AssetName}.", false, false, null, command, publish, ct);
 
@@ -58,6 +63,47 @@ internal sealed class HostWorkerSelfUpdater
 
         await PublishAsync("restarting", $"Restarting into {command.TargetVersion}.", true, true, null, command, publish, ct);
         ScheduleExit();
+    }
+
+    private async Task ApplyContainerAsync(
+        HostWorkerUpdateCommand command,
+        Func<HostWorkerUpdateStatusEvent, CancellationToken, Task> publish,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(command.ContainerImage))
+            throw new InvalidOperationException("This HostWorker is running in a container, but no target container image was provided.");
+
+        var currentContainerId = HostWorkerRuntimeDetector.TryDetectContainerId();
+        if (string.IsNullOrWhiteSpace(currentContainerId))
+            throw new InvalidOperationException("Unable to determine the current HostWorker container ID.");
+
+        await PublishAsync("pulling", $"Pulling {command.ContainerImage}.", false, false, null, command, publish, ct);
+        using var client = CreateDockerClient();
+        await client.Images.CreateImageAsync(
+            CreateImageParameters(command.ContainerImage),
+            null,
+            new Progress<JSONMessage>(message =>
+            {
+                if (!string.IsNullOrWhiteSpace(message.Status))
+                    _logger.LogDebug("HostWorker image pull: {Status}", message.Status);
+            }),
+            ct);
+
+        await PublishAsync("creating", "Creating replacement HostWorker container.", false, false, null, command, publish, ct);
+        var current = await client.Containers.InspectContainerAsync(currentContainerId, ct);
+        var replacementName = BuildReplacementContainerName(current.Name);
+        var createResponse = await client.Containers.CreateContainerAsync(new CreateContainerParameters
+        {
+            Image = command.ContainerImage,
+            Name = replacementName,
+            Env = BuildReplacementEnvironment(current.Config.Env, command.ContainerImage),
+            Labels = BuildReplacementLabels(current.Config.Labels, current.ID),
+            HostConfig = current.HostConfig
+        }, ct);
+
+        await client.Containers.StartContainerAsync(createResponse.ID, null, ct);
+        await PublishAsync("restarting", $"Started replacement container {createResponse.ID[..12]} with {command.ContainerImage}.", true, true, null, command, publish, ct);
+        ScheduleContainerStop(currentContainerId);
     }
 
     private async Task DownloadAsync(string url, string outputPath, CancellationToken ct)
@@ -126,10 +172,6 @@ internal sealed class HostWorkerSelfUpdater
         return new UnixFlatInstallPlan(payloadPath, appDirectory, restartCommand, _logger);
     }
 
-    private static bool IsContainer()
-        => string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
-           || File.Exists("/.dockerenv");
-
     private Task PublishAsync(
         string stage,
         string message,
@@ -172,6 +214,97 @@ internal sealed class HostWorkerSelfUpdater
             await Task.Delay(TimeSpan.FromSeconds(2));
             Environment.Exit(0);
         });
+    }
+
+    private void ScheduleContainerStop(string currentContainerId)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            try
+            {
+                using var client = CreateDockerClient();
+                await client.Containers.StopContainerAsync(
+                    currentContainerId,
+                    new ContainerStopParameters { WaitBeforeKillSeconds = 10 },
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to stop replaced HostWorker container {ContainerId}", currentContainerId);
+            }
+        });
+    }
+
+    private static DockerClient CreateDockerClient()
+    {
+        var dockerHost = Environment.GetEnvironmentVariable("DOCKER_HOST");
+        Uri endpoint;
+        if (!string.IsNullOrWhiteSpace(dockerHost))
+        {
+            endpoint = new Uri(dockerHost);
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            endpoint = new Uri("npipe://./pipe/docker_engine");
+        }
+        else
+        {
+            endpoint = new Uri("unix:///var/run/docker.sock");
+        }
+
+        return new DockerClientConfiguration(endpoint).CreateClient();
+    }
+
+    private static ImagesCreateParameters CreateImageParameters(string image)
+    {
+        var lastSlash = image.LastIndexOf('/');
+        var tagIndex = image.LastIndexOf(':');
+        if (tagIndex > lastSlash)
+        {
+            return new ImagesCreateParameters
+            {
+                FromImage = image[..tagIndex],
+                Tag = image[(tagIndex + 1)..]
+            };
+        }
+
+        return new ImagesCreateParameters { FromImage = image };
+    }
+
+    private static string BuildReplacementContainerName(string? currentName)
+    {
+        var normalized = string.IsNullOrWhiteSpace(currentName)
+            ? "runnerrunner-host-worker"
+            : currentName.TrimStart('/');
+        var suffix = "-update-" + Guid.NewGuid().ToString("N")[..12];
+        var prefixLength = Math.Min(normalized.Length, 63 - suffix.Length);
+        return normalized[..prefixLength] + suffix;
+    }
+
+    private static IList<string> BuildReplacementEnvironment(IList<string>? environment, string targetImage)
+    {
+        const string containerImageKey = "HostWorker__ContainerImage";
+        var result = environment?.ToList() ?? [];
+        var index = result.FindIndex(x => x.StartsWith(containerImageKey + "=", StringComparison.OrdinalIgnoreCase));
+        var value = $"{containerImageKey}={targetImage}";
+        if (index >= 0)
+            result[index] = value;
+        else
+            result.Add(value);
+
+        return result;
+    }
+
+    private static IDictionary<string, string> BuildReplacementLabels(IDictionary<string, string>? labels, string currentContainerId)
+    {
+        var replacementLabels = labels == null
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : new Dictionary<string, string>(labels, StringComparer.Ordinal);
+
+        replacementLabels["runnerrunner.hostworker.replaces"] = currentContainerId;
+        replacementLabels["runnerrunner.hostworker.updated-at"] = DateTimeOffset.UtcNow.ToString("O");
+        return replacementLabels;
     }
 
     private abstract class InstallPlan

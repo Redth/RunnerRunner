@@ -400,15 +400,15 @@ Tagged releases publish `<tag>`, `<git-sha>`, and `latest`. The `main` branch im
 
 ### HostWorker updates from the UI
 
-The server can update native HostWorkers from three sources:
+The server can update HostWorkers from three sources:
 
-- **GitHub Releases** — published `runnerrunner-hostworker-*` release assets and checksums.
+- **GitHub ref** — `latest`, a release tag, branch name, or commit SHA from the configured source repository. Release tags use GitHub Release assets first; branches and commits resolve to the matching successful workflow artifacts.
 - **Uploaded builds** — manually uploaded from the **Hosts** page or the server API.
 - **SSH/local folder** — artifacts copied into the server's local artifact folder, usually by `scp` or lab automation.
 
-On the **Hosts** page, choose the source and version, click **Check**, then apply the selected build to online native workers. Uploaded and local-folder builds are intentionally allowed to reinstall the same version string so debug builds can move back and forth without creating public releases.
+On the **Hosts** page, choose the source and ref/version, click **Check**, then apply the selected build to online workers. Uploaded and local-folder builds are intentionally allowed to reinstall the same version string so debug builds can move back and forth without creating public releases.
 
-Native workers download the matching artifact for their platform, verify the SHA256 from the selected source, stage the update under their data root, and restart through the platform service layer. Containerized Linux workers are updated by the compose/server update path instead of self-mutating their container image.
+Native workers download the matching artifact for their platform, verify the SHA256 from the selected source, stage the update under their data root, and restart through the platform service layer. Containerized HostWorkers use the manifest's matching GHCR image instead: the current container pulls the target image, creates a replacement container with the same environment, mounts, network, and restart policy, starts it, then stops the old container. A later `docker compose up` can still recreate the worker from the compose file image tag.
 
 The same flow is exposed through token-protected API endpoints. Use the HostWorker enrollment token as `Authorization: Bearer <token>` or `X-RunnerRunner-Enrollment-Token: <token>`.
 
@@ -521,7 +521,10 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised by the server Orleans silo in production |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
 | `HostWorkerUpdates:Repository` | `Redth/RunnerRunner` | GitHub repository used for HostWorker update checks |
+| `HostWorkerUpdates:GitHubToken` | *(empty)* | Optional GitHub token used for private repositories, higher API limits, and workflow artifact downloads |
 | `HostWorkerUpdates:CacheMinutes` | `30` | How long the latest GitHub release check is cached |
+| `HostWorkerUpdates:ManifestArtifactName` | `runnerrunner-hostworker-manifest` | GitHub Actions artifact containing `release-manifest.json` for branch/commit update refs |
+| `HostWorkerUpdates:AssetsArtifactName` | `runnerrunner-hostworker-assets` | GitHub Actions artifact containing native HostWorker archives for branch/commit update refs |
 | `HostWorkerUpdates:StorageRoot` | `{ContentRoot}/data/hostworker-updates` | Root for uploaded and local-folder HostWorker update artifacts |
 | `HostWorkerUpdates:UploadRoot` | `{StorageRoot}/uploads` | Server-managed upload artifact root |
 | `HostWorkerUpdates:LocalArtifactRoot` | `{StorageRoot}/local` | SSH/local-folder artifact root; place assets under version subfolders |
@@ -544,6 +547,7 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorker:LogRoot` | `<DataRoot>/logs` | Durable worker/runner log root |
 | `HostWorker:RestartCommand` | *(empty)* | Optional Unix command run by the self-update handoff script after files are copied |
 | `HostWorker:WindowsServiceName` | `RunnerRunnerHostWorker` | Windows service name used by the self-update handoff script |
+| `HostWorker:ContainerImage` | *(empty)* | Optional image reference reported by containerized HostWorkers so the Hosts page can show the currently configured container image |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
 | `Logging:Console:FormatterName` | `json` outside Development; compose bundles set `simple` | Console log format; set to `simple` for Docker/Dockhand-style text logs or `json` for stdout log shippers |
 | `Logging:Console:IncludeScopes` | `true` for JSON, `false` in compose bundles | Include activity/request scopes in console logs |

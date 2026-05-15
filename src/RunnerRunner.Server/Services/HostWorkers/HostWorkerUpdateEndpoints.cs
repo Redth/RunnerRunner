@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Shiny.DocumentDb;
 using Host = RunnerRunner.Core.Models.Host;
 
@@ -133,6 +134,59 @@ public static class HostWorkerUpdateEndpoints
 
             await localUpdateStore.WriteArtifactAsync(artifact, response.Body, ct);
             return Results.Empty;
+        });
+
+        group.MapGet("/github-artifacts/{runId:long}/{artifactName}/{assetName}", async (
+            long runId,
+            string artifactName,
+            string assetName,
+            string? sha256,
+            HttpResponse response,
+            HostWorkerUpdateService updateService,
+            CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(sha256))
+                return Results.Unauthorized();
+
+            if (!HostWorkerUpdateSelector.IsHostWorkerAssetName(assetName))
+                return Results.NotFound();
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"runnerrunner-hostworker-update-{Guid.NewGuid():N}-{assetName}");
+            try
+            {
+                await updateService.ExtractGitHubActionsArtifactAssetAsync(runId, artifactName, assetName, tempPath, ct);
+
+                await using (var hashStream = File.OpenRead(tempPath))
+                {
+                    var actualSha256 = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, ct)).ToLowerInvariant();
+                    if (!HostEnrollmentToken.FixedTimeEquals(actualSha256, sha256))
+                        return Results.Unauthorized();
+                }
+
+                var fileInfo = new FileInfo(tempPath);
+                response.ContentType = assetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    ? "application/zip"
+                    : "application/gzip";
+                response.Headers.ContentLength = fileInfo.Length;
+                response.Headers.ContentDisposition = $"attachment; filename=\"{assetName}\"";
+
+                await using var input = File.OpenRead(tempPath);
+                await input.CopyToAsync(response.Body, ct);
+                return Results.Empty;
+            }
+            catch (FileNotFoundException)
+            {
+                return Results.NotFound();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
         });
 
         return endpoints;
