@@ -61,7 +61,7 @@
                 <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages" disabled="@refreshInProgress">
                     <i class="bi bi-arrow-clockwise"></i> Refresh
                 </button>
-                <button class="btn btn-primary btn-sm" @onclick="() => showPullForm = true">
+                <button class="btn btn-primary btn-sm" @onclick="OpenPullForm" disabled="@pullInProgress">
                     <i class="bi bi-cloud-arrow-down"></i> Pull Image
                 </button>
                 @if (!string.IsNullOrWhiteSpace(refreshStatus))
@@ -77,19 +77,22 @@
             </div>
 
             @* Pull progress indicator *@
-            @if (pullInProgress)
+            @if (showPullStatus)
             {
-                <div class="card mb-3">
+                <div class="card mb-3 @PullStatusCardClass">
                     <div class="card-body">
-                        <h6><i class="bi bi-cloud-arrow-down me-1"></i> Pulling @pullImageName</h6>
-                        <div class="progress" style="height: 24px;">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated"
-                                 role="progressbar" style="width: @pullProgress%"
-                                 aria-valuenow="@pullProgress" aria-valuemin="0" aria-valuemax="100">
-                                @pullProgress.ToString("F0")%
+                        <h6 class="@PullStatusTextClass"><i class="bi @PullStatusIcon me-1"></i> @PullStatusTitle</h6>
+                        @if (pullInProgress || pullProgress > 0)
+                        {
+                            <div class="progress" style="height: 24px;">
+                                <div class="progress-bar @PullProgressBarClass"
+                                     role="progressbar" style="width: @pullProgress%"
+                                     aria-valuenow="@pullProgress" aria-valuemin="0" aria-valuemax="100">
+                                    @pullProgress.ToString("F0")%
+                                </div>
                             </div>
-                        </div>
-                        <small class="text-muted mt-1 d-block">@pullStatus</small>
+                        }
+                        <small class="@PullStatusTextClass mt-1 d-block">@pullStatus</small>
                     </div>
                 </div>
             }
@@ -316,9 +319,13 @@
 
     // Pull progress
     private bool pullInProgress;
+    private bool showPullStatus;
+    private bool pullStatusIsError;
+    private bool pullStatusIsSuccess;
     private string pullImageName = "";
     private double pullProgress;
     private string pullStatus = "";
+    private string? activePullTaskId;
 
     // Refresh progress
     private bool refreshInProgress;
@@ -348,6 +355,7 @@
         refreshInProgress = false;
         refreshStatusIsError = false;
         refreshStatus = "";
+        ClearPullStatus();
         if (string.IsNullOrEmpty(selectedHostId)) return;
         await LoadImages();
         await RefreshImages();
@@ -401,28 +409,57 @@
     private async Task StartPull()
     {
         var host = hosts.FirstOrDefault(h => h.Id == selectedHostId);
-        if (host == null) return;
-        if (host.AgentStatus != AgentStatus.Online) return;
+        if (host == null)
+        {
+            ShowPullError("Select a host before pulling an image.");
+            return;
+        }
+
+        if (host.AgentStatus != AgentStatus.Online)
+        {
+            ShowPullError($"{host.Label} is not currently online.");
+            return;
+        }
+
+        var imageName = pullImage.Trim();
+        if (string.IsNullOrWhiteSpace(imageName))
+        {
+            showPullForm = true;
+            ShowPullError("Enter an image name to pull.");
+            return;
+        }
 
         var registry = registries.FirstOrDefault(r => r.Id == pullRegistryId);
+        var tag = string.IsNullOrWhiteSpace(pullTag) ? "latest" : pullTag.Trim();
+        var taskId = Guid.NewGuid().ToString("N");
+        var imageReference = ImageReference.Build(registry?.RegistryUrl, imageName, tag);
 
-        pullInProgress = true;
-        pullImageName = $"{pullImage}:{pullTag}";
-        pullProgress = 0;
-        pullStatus = "Starting...";
+        BeginPullStatus(imageReference, taskId);
         showPullForm = false;
 
         var command = new PullImageCommand
         {
             ImageType = pullType,
-            ImageName = pullImage,
-            Tag = pullTag,
+            ImageName = imageName,
+            Tag = tag,
             RegistryUrl = registry?.RegistryUrl,
             Username = registry?.Username,
-            Password = registry?.Password
+            Password = registry?.Password,
+            TaskId = taskId
         };
 
-        await HostCommandDispatcher.DispatchPullImageAsync(host.Id, command);
+        try
+        {
+            await HostCommandDispatcher.DispatchPullImageAsync(host.Id, command);
+        }
+        catch (Exception ex)
+        {
+            pullInProgress = false;
+            pullStatusIsError = true;
+            pullStatusIsSuccess = false;
+            pullStatus = $"Failed to queue pull: {ex.Message}";
+            activePullTaskId = null;
+        }
     }
 
     private async Task ConfirmAndDeleteImage(AgentImage img)
@@ -450,22 +487,52 @@
 
     private void HandlePullProgress(ImagePullProgressEvent evt)
     {
-        if (!IsSelectedHostEvent(evt.HostId)) return;
-        pullProgress = evt.ProgressPercent;
-        pullStatus = evt.Status ?? $"{FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}";
+        if (!IsCurrentPullEvent(evt.HostId, evt.TaskId, evt.ImageName)) return;
+
+        if (!string.IsNullOrWhiteSpace(evt.TaskId))
+            activePullTaskId = evt.TaskId;
+        if (!string.IsNullOrWhiteSpace(evt.ImageName))
+            pullImageName = evt.ImageName;
+
+        showPullStatus = true;
+        pullInProgress = true;
+        pullStatusIsError = false;
+        pullStatusIsSuccess = false;
+        pullProgress = Math.Clamp(evt.ProgressPercent, 0, 100);
+        pullStatus = FormatPullProgressStatus(evt);
         InvokeAsync(StateHasChanged);
     }
 
     private void HandlePullComplete(ImagePullCompleteEvent evt)
     {
-        if (!IsSelectedHostEvent(evt.HostId)) return;
+        if (!IsCurrentPullEvent(evt.HostId, evt.TaskId, evt.ImageName)) return;
+
+        if (!string.IsNullOrWhiteSpace(evt.TaskId))
+            activePullTaskId = evt.TaskId;
+        if (!string.IsNullOrWhiteSpace(evt.ImageName))
+            pullImageName = evt.ImageName;
+
+        showPullStatus = true;
         pullInProgress = false;
-        pullStatus = evt.Success ? "Complete!" : $"Failed: {evt.Error}";
-        InvokeAsync(async () =>
+        pullStatusIsError = !evt.Success;
+        pullStatusIsSuccess = evt.Success;
+        pullProgress = evt.Success ? 100 : pullProgress;
+        pullStatus = evt.Success
+            ? "Pull complete."
+            : $"Pull failed: {evt.Error ?? "HostWorker did not provide an error."}";
+
+        if (evt.Success)
         {
-            await RefreshImages();
-            StateHasChanged();
-        });
+            InvokeAsync(async () =>
+            {
+                await RefreshImages();
+                StateHasChanged();
+            });
+        }
+        else
+        {
+            InvokeAsync(StateHasChanged);
+        }
     }
 
     private void HandleImageDeleted(ImageDeletedEvent evt)
@@ -500,6 +567,74 @@
         !string.IsNullOrWhiteSpace(hostId) &&
         string.Equals(selectedHostId, hostId, StringComparison.OrdinalIgnoreCase);
 
+    private bool IsCurrentPullEvent(string? hostId, string? taskId, string? imageName)
+    {
+        if (!IsSelectedHostEvent(hostId))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(activePullTaskId))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(taskId))
+            return string.Equals(activePullTaskId, taskId, StringComparison.OrdinalIgnoreCase);
+
+        return !string.IsNullOrWhiteSpace(imageName) &&
+            string.Equals(pullImageName, imageName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OpenPullForm()
+    {
+        if (!pullInProgress)
+            ClearPullStatus();
+
+        showPullForm = true;
+    }
+
+    private void BeginPullStatus(string imageReference, string taskId)
+    {
+        activePullTaskId = taskId;
+        pullInProgress = true;
+        showPullStatus = true;
+        pullStatusIsError = false;
+        pullStatusIsSuccess = false;
+        pullImageName = imageReference;
+        pullProgress = 0;
+        pullStatus = "Queued pull request.";
+    }
+
+    private void ShowPullError(string message)
+    {
+        activePullTaskId = null;
+        pullInProgress = false;
+        showPullStatus = true;
+        pullStatusIsError = true;
+        pullStatusIsSuccess = false;
+        pullProgress = 0;
+        pullStatus = message;
+    }
+
+    private void ClearPullStatus()
+    {
+        activePullTaskId = null;
+        pullInProgress = false;
+        showPullStatus = false;
+        pullStatusIsError = false;
+        pullStatusIsSuccess = false;
+        pullImageName = "";
+        pullProgress = 0;
+        pullStatus = "";
+    }
+
+    private static string FormatPullProgressStatus(ImagePullProgressEvent evt)
+    {
+        if (!string.IsNullOrWhiteSpace(evt.Status))
+            return evt.Status;
+
+        return evt.BytesDownloaded > 0 && evt.BytesTotal > 0
+            ? $"{FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}"
+            : "Pulling...";
+    }
+
     private static string FormatSize(long bytes)
     {
         if (bytes <= 0) return "—";
@@ -511,6 +646,38 @@
 
     private static string FormatDate(DateTime? dt) =>
         dt.HasValue ? dt.Value.ToString("yyyy-MM-dd HH:mm") : "—";
+
+    private string PullStatusTitle => string.IsNullOrWhiteSpace(pullImageName)
+        ? "Pull image"
+        : pullInProgress
+            ? $"Pulling {pullImageName}"
+            : pullStatusIsError
+                ? $"Pull failed for {pullImageName}"
+                : $"Pulled {pullImageName}";
+
+    private string PullStatusIcon => pullInProgress
+        ? "bi-cloud-arrow-down"
+        : pullStatusIsError
+            ? "bi-exclamation-triangle"
+            : "bi-check-circle";
+
+    private string PullStatusCardClass => pullStatusIsError
+        ? "border-danger"
+        : pullStatusIsSuccess
+            ? "border-success"
+            : "";
+
+    private string PullStatusTextClass => pullStatusIsError
+        ? "text-danger"
+        : pullStatusIsSuccess
+            ? "text-success"
+            : "text-muted";
+
+    private string PullProgressBarClass => pullStatusIsError
+        ? "bg-danger"
+        : pullStatusIsSuccess
+            ? "bg-success"
+            : "progress-bar-striped progress-bar-animated";
 
     private void SwitchToDocker() => SwitchTab("docker");
     private void SwitchToTart() => SwitchTab("tart");

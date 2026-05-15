@@ -28,6 +28,25 @@ public class LongRunningTaskServiceTests
     }
 
     [Fact]
+    public void TrackImagePullFormatsTartRegistryImageWithTag()
+    {
+        using var service = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var command = new PullImageCommand
+        {
+            ImageType = ImageType.Tart,
+            ImageName = "example/macos",
+            RegistryUrl = "https://ghcr.io",
+            Tag = "sonoma"
+        };
+
+        service.TrackImagePull("host-1", command);
+
+        var task = Assert.Single(service.GetSnapshot());
+        Assert.Equal("ghcr.io/example/macos:sonoma", task.Subject);
+        Assert.Equal("Pull ghcr.io/example/macos:sonoma", task.Title);
+    }
+
+    [Fact]
     public void ImagePullProgressAndCompleteUpdateTrackedTask()
     {
         using var service = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);

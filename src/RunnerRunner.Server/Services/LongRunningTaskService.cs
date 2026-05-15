@@ -206,9 +206,7 @@ public sealed class LongRunningTaskService : IDisposable
     private void NotifyChanged() => OnChanged?.Invoke();
 
     private static string FormatImageName(PullImageCommand command) =>
-        command.ImageType == ImageType.Docker
-            ? ImageReference.Build(command.RegistryUrl, command.ImageName, command.Tag)
-            : command.ImageName;
+        ImageReference.Build(command.RegistryUrl, command.ImageName, command.Tag);
 
     private static string FormatBytes(long downloaded, long total)
     {

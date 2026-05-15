@@ -815,28 +815,48 @@
             return;
         }
 
+        var requested = 0;
+        var failures = new List<string>();
         pullRequestInProgress = true;
 
-        var requested = 0;
-        foreach (var host in targetHosts)
+        try
         {
-            await HostCommandDispatcher.DispatchPullImageAsync(host.Id, new PullImageCommand
+            foreach (var host in targetHosts)
             {
-                ImageType = registry.RegistryType == RegistryType.Tart ? ImageType.Tart : ImageType.Docker,
-                ImageName = selectedRepository,
-                Tag = selectedTag,
-                RegistryUrl = registry.RegistryUrl,
-                Username = registry.Username,
-                Password = registry.Password
-            });
+                try
+                {
+                    await HostCommandDispatcher.DispatchPullImageAsync(host.Id, new PullImageCommand
+                    {
+                        ImageType = registry.RegistryType == RegistryType.Tart ? ImageType.Tart : ImageType.Docker,
+                        ImageName = selectedRepository,
+                        Tag = selectedTag,
+                        RegistryUrl = registry.RegistryUrl,
+                        Username = registry.Username,
+                        Password = registry.Password
+                    });
 
-            requested++;
+                    requested++;
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{host.Label}: {ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            pullRequestInProgress = false;
         }
 
-        pullRequestInProgress = false;
-        showPullDialog = false;
-        actionIsError = requested == 0;
-        actionStatus = requested == 0
+        if (requested > 0)
+            showPullDialog = false;
+
+        actionIsError = requested == 0 || failures.Count > 0;
+        actionStatus = failures.Count > 0
+            ? requested == 0
+                ? $"Unable to request pull: {string.Join("; ", failures)}"
+                : $"Requested pull of {selectedRepository}:{selectedTag} on {requested} host(s), but {failures.Count} host(s) failed: {string.Join("; ", failures)}"
+            : requested == 0
             ? "No online hosts were available for that pull request."
             : $"Requested pull of {selectedRepository}:{selectedTag} on {requested} host(s).";
     }
