@@ -3,11 +3,24 @@ namespace RunnerRunner.HostWorker.Services;
 internal sealed class HostWorkerPaths
 {
     public HostWorkerPaths(IConfiguration configuration)
-        : this(configuration, ResolveDefaultDataRoot)
+        : this(configuration, ResolveDefaultDataRoot, null)
+    {
+    }
+
+    public HostWorkerPaths(IConfiguration configuration, ILogger<HostWorkerPaths> logger)
+        : this(configuration, ResolveDefaultDataRoot, logger)
     {
     }
 
     internal HostWorkerPaths(IConfiguration configuration, Func<string> defaultDataRootFactory)
+        : this(configuration, defaultDataRootFactory, null)
+    {
+    }
+
+    private HostWorkerPaths(
+        IConfiguration configuration,
+        Func<string> defaultDataRootFactory,
+        ILogger<HostWorkerPaths>? logger)
     {
         var dataRoot = configuration["HostWorker:DataRoot"];
         if (string.IsNullOrWhiteSpace(dataRoot))
@@ -21,6 +34,12 @@ internal sealed class HostWorkerPaths
 
         LogRoot = logRoot;
         CommandJournalPath = Path.Combine(DataRoot, "journals", "commands.jsonl");
+
+        logger?.LogInformation(
+            "HostWorker paths resolved. DataRoot: {DataRoot}; LogRoot: {LogRoot}; CommandJournalPath: {CommandJournalPath}",
+            DataRoot,
+            LogRoot,
+            CommandJournalPath);
 
         CreateRequiredDirectory(DataRoot, "HostWorker:DataRoot");
         CreateRequiredDirectory(LogRoot, "HostWorker:LogRoot");
