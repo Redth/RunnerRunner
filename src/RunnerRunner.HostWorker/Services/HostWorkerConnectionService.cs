@@ -3,6 +3,7 @@ using Grpc.Net.Client;
 using RunnerRunner.Agent.Services;
 using RunnerRunner.Core.HostWorkers;
 using RunnerRunner.Core.Hub;
+using RunnerRunner.Core.Models;
 using System.Threading.Channels;
 
 namespace RunnerRunner.HostWorker.Services;
@@ -177,17 +178,30 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
     }
 
     private IReadOnlyCollection<string> DetectCapabilities()
+        => DetectCapabilities(_identity, _configuration["DOCKER_HOST"], File.Exists, ToolExists);
+
+    internal static IReadOnlyCollection<string> DetectCapabilities(
+        HostWorkerIdentity identity,
+        string? dockerHost,
+        Func<string, bool> fileExists,
+        Func<string, bool> toolExists)
     {
         var capabilities = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "native"
         };
 
-        if (File.Exists("/var/run/docker.sock") || ToolExists("docker"))
+        if (!string.IsNullOrWhiteSpace(dockerHost)
+            || fileExists("/var/run/docker.sock")
+            || toolExists("docker"))
+        {
             capabilities.Add("docker");
+        }
 
-        if (_identity.Platform == RunnerRunner.Core.Models.HostPlatform.MacOS && ToolExists("tart"))
+        if (identity.Platform == HostPlatform.MacOS && toolExists("tart"))
+        {
             capabilities.Add("tart");
+        }
 
         return capabilities;
     }

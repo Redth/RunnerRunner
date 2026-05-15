@@ -1,9 +1,19 @@
 # escape=`
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-windowsservercore-ltsc2022
+ARG INFORMATIONAL_VERSION=0.0.0
+ARG SOURCE_REVISION_ID=unknown
+ARG BUILD_TAG=unknown
 
 WORKDIR /app
+LABEL org.opencontainers.image.title="RunnerRunner HostWorker Windows" `
+      org.opencontainers.image.version="${INFORMATIONAL_VERSION}" `
+      org.opencontainers.image.revision="${SOURCE_REVISION_ID}" `
+      org.opencontainers.image.ref.name="${BUILD_TAG}"
 COPY . .
 
 ENV DOTNET_ENVIRONMENT=Production
+ENV HostWorker__Platform=Windows
+ENV HostWorker__DataRoot=C:\ProgramData\RunnerRunner
+ENV DOCKER_HOST=npipe://./pipe/docker_engine
 
 ENTRYPOINT ["C:\\app\\RunnerRunner.HostWorker.exe"]

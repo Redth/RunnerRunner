@@ -215,6 +215,26 @@ powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
 
 Then create runner profiles with **Host Platform** = `Windows` and **Execution Backend** = `Docker`.
 
+Or run the HostWorker itself as a Windows container on a Windows Docker host. This uses the separate Windows HostWorker image and the Docker named pipe to launch actual Windows-based runner containers:
+
+```powershell
+docker info --format '{{.OSType}}'
+# windows
+
+docker run -d `
+  --name runnerrunner-host-worker-windows `
+  --restart unless-stopped `
+  -e 'HostWorker__ServerUrl=http://runner.example.com:4780' `
+  -e 'HostWorker__EnrollmentToken=<host-token-from-hosts-page>' `
+  -e 'HostWorker__HostId=windows-docker-01' `
+  -e 'HostWorker__HostName=windows-docker-01' `
+  -e 'HostWorker__Platform=Windows' `
+  -e 'DOTNET_ENVIRONMENT=Production' `
+  --mount 'type=npipe,source=\\.\pipe\docker_engine,target=\\.\pipe\docker_engine' `
+  --mount 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:\ProgramData\RunnerRunner' `
+  ghcr.io/redth/runnerrunner-hostworker-windows:latest
+```
+
 Use Docker for Linux containers by running the Linux HostWorker container against Docker Desktop's Linux engine from WSL:
 
 ```bash
@@ -368,12 +388,13 @@ The checked-in SSH deploy helpers are not the recommended release path. They are
 
 ### Published Docker images
 
-RunnerRunner publishes multi-architecture `linux/amd64` and `linux/arm64` images to GitHub Container Registry:
+RunnerRunner publishes multi-architecture `linux/amd64` and `linux/arm64` images plus a Windows HostWorker image to GitHub Container Registry:
 
 | Image | Use |
 |---|---|
 | `ghcr.io/redth/runnerrunner-server:<tag>` | Server, web UI, API, and Orleans silo |
 | `ghcr.io/redth/runnerrunner-hostworker:<tag>` | Self-contained Linux HostWorker for Docker-backed runner hosts |
+| `ghcr.io/redth/runnerrunner-hostworker-windows:<tag>` | Self-contained Windows HostWorker for Windows Docker hosts running Windows-based runner containers |
 
 Tagged releases publish `<tag>`, `<git-sha>`, and `latest`. The `main` branch image workflow publishes `main` and `<git-sha>` for early adopters and lab installs.
 
