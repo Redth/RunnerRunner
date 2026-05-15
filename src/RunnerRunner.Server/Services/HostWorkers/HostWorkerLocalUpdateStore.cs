@@ -84,8 +84,16 @@ public sealed class HostWorkerLocalUpdateStore
         if (string.IsNullOrWhiteSpace(storageRoot))
             storageRoot = Path.Combine(environment.ContentRootPath, "data", "hostworker-updates");
 
-        UploadRoot = configuration["HostWorkerUpdates:UploadRoot"] ?? Path.Combine(storageRoot, "uploads");
-        LocalFolderRoot = configuration["HostWorkerUpdates:LocalArtifactRoot"] ?? Path.Combine(storageRoot, "local");
+        var uploadRoot = configuration["HostWorkerUpdates:UploadRoot"];
+        if (string.IsNullOrWhiteSpace(uploadRoot))
+            uploadRoot = Path.Combine(storageRoot, "uploads");
+
+        var localFolderRoot = configuration["HostWorkerUpdates:LocalArtifactRoot"];
+        if (string.IsNullOrWhiteSpace(localFolderRoot))
+            localFolderRoot = Path.Combine(storageRoot, "local");
+
+        UploadRoot = uploadRoot;
+        LocalFolderRoot = localFolderRoot;
         MaxUploadBytes = configuration.GetValue("HostWorkerUpdates:MaxUploadBytes", 500L * 1024L * 1024L);
 
         Directory.CreateDirectory(UploadRoot);

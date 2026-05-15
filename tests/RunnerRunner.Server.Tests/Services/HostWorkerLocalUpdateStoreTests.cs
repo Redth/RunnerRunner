@@ -59,6 +59,49 @@ public class HostWorkerLocalUpdateStoreTests
         Assert.Contains("Unsupported HostWorker update artifact", ex.Message);
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", "")]
+    [InlineData("   ", "   ")]
+    public void EmptyPathRoots_UseStorageRootDefaults(string? configuredUploadRoot, string? configuredLocalArtifactRoot)
+    {
+        using var fixture = StoreFixture.Create(configuredUploadRoot, configuredLocalArtifactRoot);
+
+        Assert.Equal(Path.Combine(fixture.Root, "uploads"), fixture.Store.UploadRoot);
+        Assert.Equal(Path.Combine(fixture.Root, "local"), fixture.Store.LocalFolderRoot);
+        Assert.True(Directory.Exists(fixture.Store.UploadRoot));
+        Assert.True(Directory.Exists(fixture.Store.LocalFolderRoot));
+    }
+
+    [Fact]
+    public void ConfiguredPathRoots_AreUsed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"rr-hostworker-updates-{Guid.NewGuid():N}");
+        var uploadRoot = Path.Combine(Path.GetTempPath(), $"rr-hostworker-upload-{Guid.NewGuid():N}");
+        var localRoot = Path.Combine(Path.GetTempPath(), $"rr-hostworker-local-{Guid.NewGuid():N}");
+
+        try
+        {
+            using var fixture = StoreFixture.Create(uploadRoot, localRoot, root);
+
+            Assert.Equal(uploadRoot, fixture.Store.UploadRoot);
+            Assert.Equal(localRoot, fixture.Store.LocalFolderRoot);
+            Assert.True(Directory.Exists(uploadRoot));
+            Assert.True(Directory.Exists(localRoot));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+
+            if (Directory.Exists(uploadRoot))
+                Directory.Delete(uploadRoot, recursive: true);
+
+            if (Directory.Exists(localRoot))
+                Directory.Delete(localRoot, recursive: true);
+        }
+    }
+
     private sealed class StoreFixture : IDisposable
     {
         private StoreFixture(string root, HostWorkerLocalUpdateStore store)
@@ -72,13 +115,18 @@ public class HostWorkerLocalUpdateStoreTests
         public string LocalRoot { get; }
         public HostWorkerLocalUpdateStore Store { get; }
 
-        public static StoreFixture Create()
+        public static StoreFixture Create(
+            string? uploadRoot = null,
+            string? localArtifactRoot = null,
+            string? storageRoot = null)
         {
-            var root = Path.Combine(Path.GetTempPath(), $"rr-hostworker-updates-{Guid.NewGuid():N}");
+            var root = storageRoot ?? Path.Combine(Path.GetTempPath(), $"rr-hostworker-updates-{Guid.NewGuid():N}");
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["HostWorkerUpdates:StorageRoot"] = root
+                    ["HostWorkerUpdates:StorageRoot"] = root,
+                    ["HostWorkerUpdates:UploadRoot"] = uploadRoot,
+                    ["HostWorkerUpdates:LocalArtifactRoot"] = localArtifactRoot
                 })
                 .Build();
             var environment = Substitute.For<IWebHostEnvironment>();
