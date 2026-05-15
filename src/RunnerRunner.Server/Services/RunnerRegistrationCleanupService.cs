@@ -49,8 +49,11 @@ public class RunnerRegistrationCleanupService
 
             if (profile.Provider == RunnerProvider.GitHubActions)
             {
-                var repository = await ResolveRepositoryAsync(store, instance);
-                scopedCredential = ScopeGitHubCredentialToRepository(credential, repository);
+                var scope = await ResolveGitHubScopeAsync(store, instance);
+                scopedCredential = ScopeGitHubCredentialToRepository(
+                    credential,
+                    scope.Repository,
+                    scope.InstallationId);
 
                 if (string.IsNullOrWhiteSpace(scopedCredential.GitHubOrg)
                     && string.IsNullOrWhiteSpace(scopedCredential.GitHubRepo))
@@ -88,19 +91,17 @@ public class RunnerRegistrationCleanupService
             await store.Query<RunnerInstance>().ToList());
 
         var credentials = (await store.Query<ProviderCredential>().ToList())
-            .Where(c => c.Provider == RunnerProvider.GitHubActions && !string.IsNullOrWhiteSpace(c.GitHubToken))
+            .Where(c => c.Provider == RunnerProvider.GitHubActions)
             .ToList();
 
-        var recentRepositories = (await store.Query<WebhookEvent>().ToList())
+        var recentEvents = (await store.Query<WebhookEvent>().ToList())
             .Where(e =>
                 string.Equals(e.Provider, RunnerProvider.GitHubActions.ToString(), StringComparison.OrdinalIgnoreCase)
                 && !string.IsNullOrWhiteSpace(e.Repository))
-            .Select(e => e.Repository!.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var removed = 0;
-        foreach (var scopedCredential in BuildGitHubSweepScopes(credentials, recentRepositories))
+        foreach (var scopedCredential in BuildGitHubSweepScopes(credentials, recentEvents))
         {
             try
             {
@@ -132,7 +133,8 @@ public class RunnerRegistrationCleanupService
 
     internal static ProviderCredential ScopeGitHubCredentialToRepository(
         ProviderCredential credential,
-        string? repository)
+        string? repository,
+        string? installationId = null)
     {
         var clone = new ProviderCredential
         {
@@ -144,6 +146,13 @@ public class RunnerRegistrationCleanupService
             GitHubToken = credential.GitHubToken,
             GitHubApiUrl = credential.GitHubApiUrl,
             GitHubServerUrl = credential.GitHubServerUrl,
+            GitHubAuthType = credential.GitHubAuthType,
+            GitHubAppId = credential.GitHubAppId,
+            GitHubAppPrivateKey = credential.GitHubAppPrivateKey,
+            GitHubAppInstallationId = string.IsNullOrWhiteSpace(installationId)
+                ? credential.GitHubAppInstallationId
+                : installationId,
+            GitHubAppWebhookSecret = credential.GitHubAppWebhookSecret,
             GiteaInstanceUrl = credential.GiteaInstanceUrl,
             GiteaRunnerToken = credential.GiteaRunnerToken,
             AzDoOrgUrl = credential.AzDoOrgUrl,
@@ -170,52 +179,82 @@ public class RunnerRegistrationCleanupService
     internal static IEnumerable<ProviderCredential> BuildGitHubSweepScopes(
         IEnumerable<ProviderCredential> credentials,
         IEnumerable<string> recentRepositories)
+        => BuildGitHubSweepScopes(
+            credentials,
+            recentRepositories.Select(repository => new WebhookEvent
+            {
+                Provider = RunnerProvider.GitHubActions.ToString(),
+                Repository = repository
+            }));
+
+    internal static IEnumerable<ProviderCredential> BuildGitHubSweepScopes(
+        IEnumerable<ProviderCredential> credentials,
+        IEnumerable<WebhookEvent> recentEvents)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var repositories = recentRepositories
-            .Where(r => !string.IsNullOrWhiteSpace(r))
-            .Select(r => r.Trim().Trim('/'))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var repositoryScopes = recentEvents
+            .Where(e => !string.IsNullOrWhiteSpace(e.Repository))
+            .GroupBy(e => e.Repository.Trim().Trim('/'), StringComparer.OrdinalIgnoreCase)
+            .Select(g => new
+            {
+                Repository = g.Key,
+                InstallationId = g
+                    .Select(e => e.GitHubInstallationId)
+                    .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id))
+            })
             .ToList();
 
         foreach (var credential in credentials)
         {
-            if (string.IsNullOrWhiteSpace(credential.GitHubToken))
+            if (!GitHubAuthenticationService.HasGitHubApiCredentials(credential)
+                && !CanUseEventInstallationId(credential))
+            {
                 continue;
+            }
 
             if (!string.IsNullOrWhiteSpace(credential.GitHubRepo))
             {
                 var repoScoped = ScopeGitHubCredentialToRepository(credential, credential.GitHubRepo);
                 var repoKey = $"repo:{repoScoped.GitHubRepo}";
-                if (seen.Add(repoKey))
+                if (seen.Add(repoKey) && GitHubAuthenticationService.HasGitHubApiCredentials(repoScoped))
                     yield return repoScoped;
             }
 
             if (!string.IsNullOrWhiteSpace(credential.GitHubOrg))
             {
                 var orgKey = $"org:{credential.GitHubOrg}";
-                if (seen.Add(orgKey))
+                if (seen.Add(orgKey) && GitHubAuthenticationService.HasGitHubApiCredentials(credential))
                     yield return ScopeGitHubCredentialToRepository(credential, null);
 
-                foreach (var repo in repositories.Where(r =>
-                             r.StartsWith($"{credential.GitHubOrg}/", StringComparison.OrdinalIgnoreCase)))
+                foreach (var repoScope in repositoryScopes.Where(r =>
+                             r.Repository.StartsWith($"{credential.GitHubOrg}/", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var repoScoped = ScopeGitHubCredentialToRepository(credential, repo);
+                    var repoScoped = ScopeGitHubCredentialToRepository(
+                        credential,
+                        repoScope.Repository,
+                        repoScope.InstallationId);
                     var repoKey = $"repo:{repoScoped.GitHubRepo}";
-                    if (seen.Add(repoKey))
+                    if (seen.Add(repoKey) && GitHubAuthenticationService.HasGitHubApiCredentials(repoScoped))
                         yield return repoScoped;
                 }
             }
         }
     }
 
-    private static async Task<string?> ResolveRepositoryAsync(IDocumentStore store, RunnerInstance instance)
+    private static bool CanUseEventInstallationId(ProviderCredential credential) =>
+        credential.GitHubAuthType == GitHubAuthType.GitHubApp
+        && !string.IsNullOrWhiteSpace(credential.GitHubAppId)
+        && !string.IsNullOrWhiteSpace(credential.GitHubAppPrivateKey);
+
+    private sealed record GitHubCleanupScope(string? Repository, string? InstallationId);
+
+    private static async Task<GitHubCleanupScope> ResolveGitHubScopeAsync(IDocumentStore store, RunnerInstance instance)
     {
         if (!string.IsNullOrWhiteSpace(instance.WebhookEventId))
         {
             var evt = await store.Get<WebhookEvent>(instance.WebhookEventId);
             if (!string.IsNullOrWhiteSpace(evt?.Repository))
-                return evt.Repository;
+                return new GitHubCleanupScope(evt.Repository, evt.GitHubInstallationId);
         }
 
         if (!string.IsNullOrWhiteSpace(instance.JobId))
@@ -226,9 +265,9 @@ public class RunnerRegistrationCleanupService
                 .FirstOrDefault();
 
             if (!string.IsNullOrWhiteSpace(evt?.Repository))
-                return evt.Repository;
+                return new GitHubCleanupScope(evt.Repository, evt.GitHubInstallationId);
         }
 
-        return null;
+        return new GitHubCleanupScope(null, null);
     }
 }

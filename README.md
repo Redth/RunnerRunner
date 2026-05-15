@@ -241,9 +241,11 @@ Navigate to **Settings** in the web UI and add your CI provider credentials:
 
 | Provider | Required Fields |
 |---|---|
-| **GitHub Actions** | Organization, PAT (with `admin:org` or `repo` scope) |
+| **GitHub Actions** | Organization plus either a PAT (`admin:org` or `repo` scope) or a GitHub App credential |
 | **Gitea Actions** | Instance URL, Runner Token (from Gitea admin) |
 | **Azure DevOps** | Organization URL, Project Name, PAT, Pool Name |
+
+For GitHub App credentials, create an app with the RunnerRunner webhook URL (`/api/webhooks/github`), subscribe to `workflow_job`, grant self-hosted runner management permissions, and install it in the orgs/repos RunnerRunner should manage. RunnerRunner uses the webhook installation ID for dynamic jobs and can fall back to the credential's default installation ID for static runners and reconciliation.
 
 ### 2. Create Environment Variable Sets
 

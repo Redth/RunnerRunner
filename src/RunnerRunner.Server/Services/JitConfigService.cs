@@ -18,6 +18,7 @@ public class JitConfigService
 {
 	private readonly ILogger<JitConfigService> _logger;
 	private readonly IHttpClientFactory _httpClientFactory;
+	private readonly GitHubAuthenticationService _gitHubAuth;
 
 	private static readonly JsonSerializerOptions JsonOptions = new()
 	{
@@ -25,10 +26,14 @@ public class JitConfigService
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
 	};
 
-	public JitConfigService(ILogger<JitConfigService> logger, IHttpClientFactory httpClientFactory)
+	public JitConfigService(
+		ILogger<JitConfigService> logger,
+		IHttpClientFactory httpClientFactory,
+		GitHubAuthenticationService gitHubAuth)
 	{
 		_logger = logger;
 		_httpClientFactory = httpClientFactory;
+		_gitHubAuth = gitHubAuth;
 	}
 
 	public async Task<JitConfigResult> GenerateGitHubJitConfig(
@@ -36,15 +41,14 @@ public class JitConfigService
 		string runnerName,
 		List<string> labels,
 		string runnerGroup = "Default",
-		string? webhookRepo = null)
+		string? webhookRepo = null,
+		string? githubInstallationId = null)
 	{
 		try
 		{
 			var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
 			using var client = _httpClientFactory.CreateClient();
-			client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", credential.GitHubToken);
-			client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
-			client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+			await _gitHubAuth.ConfigureClientAsync(client, credential, githubInstallationId);
 
 			// Build list of endpoints to try (repo-level first, then org-level)
 			var endpoints = new List<(string url, string scope)>();

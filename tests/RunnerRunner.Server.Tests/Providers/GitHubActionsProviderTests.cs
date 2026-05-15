@@ -4,19 +4,21 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Providers;
+using RunnerRunner.Server.Services;
 
 namespace RunnerRunner.Server.Tests.Providers;
 
 public class GitHubActionsProviderTests
 {
     private readonly ILogger<GitHubActionsProvider> _logger = Substitute.For<ILogger<GitHubActionsProvider>>();
+    private readonly ILogger<GitHubAuthenticationService> _authLogger = Substitute.For<ILogger<GitHubAuthenticationService>>();
 
     private GitHubActionsProvider CreateProvider(HttpResponseMessage response)
     {
         var handler = new FakeHttpHandler(response);
         var factory = Substitute.For<IHttpClientFactory>();
         factory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-        return new GitHubActionsProvider(factory, _logger);
+        return new GitHubActionsProvider(factory, new GitHubAuthenticationService(factory, _authLogger), _logger);
     }
 
     private GitHubActionsProvider CreateProvider(Func<HttpRequestMessage, HttpResponseMessage> handler)
@@ -24,7 +26,7 @@ public class GitHubActionsProviderTests
         var fakeHandler = new FakeHttpHandler(handler);
         var factory = Substitute.For<IHttpClientFactory>();
         factory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(fakeHandler));
-        return new GitHubActionsProvider(factory, _logger);
+        return new GitHubActionsProvider(factory, new GitHubAuthenticationService(factory, _authLogger), _logger);
     }
 
     [Fact]
@@ -132,6 +134,53 @@ public class GitHubActionsProviderTests
         await provider.GetRegistrationTokenAsync(cred);
 
         Assert.StartsWith("https://github.example.com/api/v3/", capturedUrl);
+    }
+
+    [Fact]
+    public async Task GetRegistrationToken_GitHubApp_UsesInstallationToken()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var privateKey = rsa.ExportPkcs8PrivateKeyPem();
+        string? tokenEndpointAuth = null;
+        string? registrationEndpointAuth = null;
+
+        var provider = CreateProvider(req =>
+        {
+            if (req.RequestUri?.AbsolutePath == "/app/installations/123/access_tokens")
+            {
+                tokenEndpointAuth = req.Headers.Authorization?.ToString();
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new
+                    {
+                        token = "installation-token",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(30)
+                    }))
+                };
+            }
+
+            registrationEndpointAuth = req.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { token = "runner-token" }))
+            };
+        });
+
+        var cred = new ProviderCredential
+        {
+            Name = "app",
+            GitHubOrg = "my-org",
+            GitHubAuthType = GitHubAuthType.GitHubApp,
+            GitHubAppId = "98765",
+            GitHubAppInstallationId = "123",
+            GitHubAppPrivateKey = privateKey
+        };
+
+        var token = await provider.GetRegistrationTokenAsync(cred);
+
+        Assert.Equal("runner-token", token);
+        Assert.StartsWith("Bearer ", tokenEndpointAuth);
+        Assert.Equal("Bearer installation-token", registrationEndpointAuth);
     }
 
     [Fact]
