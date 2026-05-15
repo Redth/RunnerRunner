@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,9 @@ public static class Extensions
 
     public static TBuilder ConfigureRunnerRunnerLogging<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
+        var useJsonConsole = ShouldUseJsonConsole(builder);
+        var includeConsoleScopes = builder.Configuration.GetValue("Logging:Console:IncludeScopes", useJsonConsole);
+
         builder.Logging.ClearProviders();
         builder.Logging.Configure(options =>
         {
@@ -63,11 +67,11 @@ public static class Extensions
                 ActivityTrackingOptions.ParentId;
         });
 
-        if (ShouldUseJsonConsole(builder))
+        if (useJsonConsole)
         {
             builder.Logging.AddJsonConsole(options =>
             {
-                options.IncludeScopes = true;
+                options.IncludeScopes = includeConsoleScopes;
                 options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
                 options.UseUtcTimestamp = true;
                 options.JsonWriterOptions = new JsonWriterOptions
@@ -80,7 +84,7 @@ public static class Extensions
         {
             builder.Logging.AddSimpleConsole(options =>
             {
-                options.IncludeScopes = true;
+                options.IncludeScopes = includeConsoleScopes;
                 options.SingleLine = true;
                 options.TimestampFormat = "HH:mm:ss ";
             });

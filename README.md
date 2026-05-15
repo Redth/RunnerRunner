@@ -527,7 +527,8 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorkerUpdates:LocalArtifactRoot` | `{StorageRoot}/local` | SSH/local-folder artifact root; place assets under version subfolders |
 | `HostWorkerUpdates:PublicBaseUrl` | Current request URL | External server URL used in HostWorker artifact download commands when not queued from an HTTP request |
 | `HostWorkerUpdates:MaxUploadBytes` | `524288000` | Maximum uploaded HostWorker artifact size |
-| `Logging:Console:FormatterName` | `json` outside Development | Console log format; set to `simple` for local text logs |
+| `Logging:Console:FormatterName` | `json` outside Development; compose bundles set `simple` | Console log format; set to `simple` for Docker/Dockhand-style text logs or `json` for stdout log shippers |
+| `Logging:Console:IncludeScopes` | `true` for JSON, `false` in compose bundles | Include activity/request scopes in console logs |
 
 ### HostWorker
 
@@ -544,7 +545,8 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorker:RestartCommand` | *(empty)* | Optional Unix command run by the self-update handoff script after files are copied |
 | `HostWorker:WindowsServiceName` | `RunnerRunnerHostWorker` | Windows service name used by the self-update handoff script |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
-| `Logging:Console:FormatterName` | `json` outside Development | Console log format; set to `simple` for local text logs |
+| `Logging:Console:FormatterName` | `json` outside Development; compose bundles set `simple` | Console log format; set to `simple` for Docker/Dockhand-style text logs or `json` for stdout log shippers |
+| `Logging:Console:IncludeScopes` | `true` for JSON, `false` in compose bundles | Include activity/request scopes in console logs |
 
 All settings can be provided via:
 - `appsettings.json`
@@ -553,7 +555,7 @@ All settings can be provided via:
 
 ### Logging and build metadata
 
-RunnerRunner logs startup metadata immediately when each app starts, including assembly version, informational version, commit SHA, build tag, environment, OS, framework, machine name, content root, and process ID. Non-development runs use one-line JSON console logs by default so Docker and log shippers can parse each event cleanly.
+RunnerRunner logs startup metadata immediately when each app starts, including assembly version, informational version, commit SHA, build tag, environment, OS, framework, machine name, content root, and process ID. Standalone non-development runs use one-line JSON console logs by default so Docker and log shippers can parse each event cleanly. The bundled compose files set `LOGGING_CONSOLE_FORMATTER_NAME=simple` and `LOGGING_CONSOLE_INCLUDE_SCOPES=false` so `docker compose logs`, Dockhand, and similar console viewers show readable text by default; set `LOGGING_CONSOLE_FORMATTER_NAME=json` when stdout JSON is preferred.
 
 Container builds accept these optional build arguments and also stamp them into OCI image labels:
 
