@@ -152,7 +152,7 @@
                 {
                     <div class="alert alert-info py-2">
                         <i class="bi bi-github me-1"></i>
-                        This rule can receive GitHub App <code>workflow_job</code> webhooks through the app-level webhook. Runner API calls use the installation ID from the webhook event, falling back to the credential's default installation ID.
+                        This rule can receive GitHub App <code>workflow_job</code> webhooks through the app-level webhook. Runner API calls use the installation ID from the webhook event, falling back to the credential's default installation target.
                     </div>
                 }
 
@@ -173,9 +173,9 @@
                     Webhook rules now select runners <strong>only</strong> through the mappings below. Use <code>*</code> as a catch-all, or patterns like <code>mac*</code> to match labels such as <code>mac</code> and <code>macOS</code>.
                 </div>
 
-                @* Allowed Orgs *@
+                @* Allowed owners/orgs *@
                 <div class="mb-3">
-                    <label class="form-label">Allowed Orgs</label>
+                    <label class="form-label">Allowed Owners / Orgs</label>
                     <div class="d-flex flex-wrap gap-1 mb-2">
                         @foreach (var org in editAllowedOrgs)
                         {
@@ -186,7 +186,7 @@
                         }
                     </div>
                     <div class="input-group input-group-sm" style="max-width: 300px;">
-                        <input class="form-control" placeholder="Add org..." @bind="newOrgInput" @onkeydown="OnOrgKeyDown" />
+                        <input class="form-control" placeholder="Add owner or org..." @bind="newOrgInput" @onkeydown="OnOrgKeyDown" />
                         <button class="btn btn-outline-primary" type="button" @onclick="AddOrg"><i class="bi bi-plus-lg"></i></button>
                     </div>
                 </div>

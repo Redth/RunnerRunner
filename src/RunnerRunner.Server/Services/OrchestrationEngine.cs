@@ -355,9 +355,10 @@ public class OrchestrationEngine : BackgroundService
         switch (cred.Provider)
         {
             case RunnerProvider.GitHubActions:
+                var target = GitHubCredentialResolver.ResolveDefaultTarget(cred);
                 if (!string.IsNullOrEmpty(cred.GitHubToken)) vars["RR_GITHUB_TOKEN"] = cred.GitHubToken;
-                if (!string.IsNullOrEmpty(cred.GitHubOrg)) vars["RR_GITHUB_ORG"] = cred.GitHubOrg;
-                if (!string.IsNullOrEmpty(cred.GitHubRepo)) vars["RR_GITHUB_REPO"] = cred.GitHubRepo;
+                if (!string.IsNullOrEmpty(target?.Owner)) vars["RR_GITHUB_ORG"] = target.Owner;
+                if (!string.IsNullOrEmpty(target?.Repository)) vars["RR_GITHUB_REPO"] = target.Repository;
                 if (!string.IsNullOrEmpty(cred.GitHubApiUrl)) vars["RR_GITHUB_API_URL"] = cred.GitHubApiUrl;
                 if (!string.IsNullOrEmpty(cred.GitHubServerUrl)) vars["RR_GITHUB_SERVER_URL"] = cred.GitHubServerUrl;
                 break;
@@ -426,19 +427,5 @@ public class OrchestrationEngine : BackgroundService
     };
 
     private static string? GetGitHubRunnerUrl(ProviderCredential credential)
-    {
-        var serverUrl = credential.GitHubServerUrl?.TrimEnd('/') ?? "https://github.com";
-        if (!string.IsNullOrEmpty(credential.GitHubRepo))
-        {
-            var trimmedRepo = credential.GitHubRepo.Trim().Trim('/');
-            if (trimmedRepo.Contains('/'))
-                return $"{serverUrl}/{trimmedRepo}";
-
-            if (!string.IsNullOrEmpty(credential.GitHubOrg))
-                return $"{serverUrl}/{credential.GitHubOrg}/{trimmedRepo}";
-        }
-        if (!string.IsNullOrEmpty(credential.GitHubOrg))
-            return $"{serverUrl}/{credential.GitHubOrg}";
-        return null;
-    }
+        => GitHubCredentialResolver.GetRunnerUrl(credential);
 }

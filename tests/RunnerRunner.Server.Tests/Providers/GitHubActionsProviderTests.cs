@@ -184,6 +184,66 @@ public class GitHubActionsProviderTests
     }
 
     [Fact]
+    public async Task GetRegistrationToken_GitHubApp_UsesDefaultInstallationTarget()
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create(2048);
+        var privateKey = rsa.ExportPkcs8PrivateKeyPem();
+        string? registrationEndpoint = null;
+        string? tokenEndpoint = null;
+
+        var provider = CreateProvider(req =>
+        {
+            if (req.RequestUri?.AbsolutePath == "/app/installations/456/access_tokens")
+            {
+                tokenEndpoint = req.RequestUri.AbsolutePath;
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new
+                    {
+                        token = "installation-token",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(30)
+                    }))
+                };
+            }
+
+            registrationEndpoint = req.RequestUri?.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { token = "runner-token" }))
+            };
+        });
+
+        var cred = new ProviderCredential
+        {
+            Name = "multi-app",
+            GitHubAuthType = GitHubAuthType.GitHubApp,
+            GitHubAppId = "98765",
+            GitHubAppPrivateKey = privateKey,
+            GitHubAppInstallations =
+            [
+                new GitHubAppInstallation
+                {
+                    Owner = "other-org",
+                    InstallationId = "123"
+                },
+                new GitHubAppInstallation
+                {
+                    Owner = "redth",
+                    Repository = "RunnerRunner",
+                    InstallationId = "456",
+                    IsDefault = true
+                }
+            ]
+        };
+
+        var token = await provider.GetRegistrationTokenAsync(cred);
+
+        Assert.Equal("runner-token", token);
+        Assert.Equal("/app/installations/456/access_tokens", tokenEndpoint);
+        Assert.Equal("/repos/redth/RunnerRunner/actions/runners/registration-token", registrationEndpoint);
+    }
+
+    [Fact]
     public async Task GetRegistrationToken_NullToken_Throws()
     {
         var provider = CreateProvider(new HttpResponseMessage(HttpStatusCode.OK)

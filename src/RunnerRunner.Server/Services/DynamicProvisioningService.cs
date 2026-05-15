@@ -143,11 +143,16 @@ public class DynamicProvisioningService : BackgroundService
                 continue;
 
             var credential = await store.Get<ProviderCredential>(rule.ProviderCredentialId);
-            if (credential == null || !GitHubAuthenticationService.HasGitHubApiCredentials(credential))
+            if (credential == null)
                 continue;
 
             foreach (var repo in ResolveReposToPoll(rule, credential))
+            {
+                if (!GitHubAuthenticationService.HasGitHubApiCredentials(credential, repository: repo))
+                    continue;
+
                 await BackfillQueuedJobsForRepoAsync(store, rule, credential, repo, existingQueuedKeys, ct);
+            }
         }
     }
 
@@ -161,7 +166,7 @@ public class DynamicProvisioningService : BackgroundService
     {
         var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
         using var client = _httpClientFactory.CreateClient();
-        await _gitHubAuth.ConfigureClientAsync(client, credential, ct: ct);
+        await _gitHubAuth.ConfigureClientAsync(client, credential, repository: repo, ct: ct);
 
         foreach (var run in await ListRelevantGitHubWorkflowRunsAsync(client, apiUrl, repo, ct))
         {
@@ -259,7 +264,7 @@ public class DynamicProvisioningService : BackgroundService
                     JobId = jobId,
                     RunId = run.RunId,
                     Repository = repo,
-                    GitHubInstallationId = credential.GitHubAppInstallationId,
+                    GitHubInstallationId = GitHubAuthenticationService.ResolveGitHubAppInstallationId(credential, repository: repo),
                     WorkflowName = run.WorkflowName,
                     Labels = labels,
                     Status = "pending",
@@ -381,6 +386,7 @@ public class DynamicProvisioningService : BackgroundService
     private static IEnumerable<string> ResolveReposToPoll(ProvisioningRule rule, ProviderCredential credential)
     {
         var repos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var targetOwners = GitHubCredentialResolver.GetTargetOwners(credential).ToList();
 
         foreach (var allowedRepo in rule.AllowedRepos.Where(r => !string.IsNullOrWhiteSpace(r)))
         {
@@ -395,18 +401,17 @@ public class DynamicProvisioningService : BackgroundService
                 foreach (var org in rule.AllowedOrgs.Where(o => !string.IsNullOrWhiteSpace(o)))
                     repos.Add($"{org}/{allowedRepo}");
             }
-            else if (!string.IsNullOrWhiteSpace(credential.GitHubOrg))
+            else if (targetOwners.Count > 0)
             {
-                repos.Add($"{credential.GitHubOrg}/{allowedRepo}");
+                foreach (var owner in targetOwners)
+                    repos.Add($"{owner}/{allowedRepo}");
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(credential.GitHubRepo))
+        foreach (var target in GitHubCredentialResolver.GetConfiguredTargets(credential))
         {
-            if (credential.GitHubRepo.Contains('/'))
-                repos.Add(credential.GitHubRepo);
-            else if (!string.IsNullOrWhiteSpace(credential.GitHubOrg))
-                repos.Add($"{credential.GitHubOrg}/{credential.GitHubRepo}");
+            if (!string.IsNullOrWhiteSpace(target.Repository))
+                repos.Add(target.Repository);
         }
 
         return repos;
@@ -998,21 +1003,7 @@ public class DynamicProvisioningService : BackgroundService
     }
 
     private static string? GetGitHubRunnerUrl(ProviderCredential credential)
-    {
-        var serverUrl = credential.GitHubServerUrl?.TrimEnd('/') ?? "https://github.com";
-        if (!string.IsNullOrEmpty(credential.GitHubRepo))
-        {
-            var trimmedRepo = credential.GitHubRepo.Trim().Trim('/');
-            if (trimmedRepo.Contains('/'))
-                return $"{serverUrl}/{trimmedRepo}";
-
-            if (!string.IsNullOrEmpty(credential.GitHubOrg))
-                return $"{serverUrl}/{credential.GitHubOrg}/{trimmedRepo}";
-        }
-        if (!string.IsNullOrEmpty(credential.GitHubOrg))
-            return $"{serverUrl}/{credential.GitHubOrg}";
-        return null;
-    }
+        => GitHubCredentialResolver.GetRunnerUrl(credential);
 
     private async Task<Dictionary<string, string>> ComposeEnvironmentVariablesAsync(
         IDocumentStore store, RunnerProfile profile, Host host, ProviderCredential? credential)
@@ -1054,9 +1045,10 @@ public class DynamicProvisioningService : BackgroundService
         switch (cred.Provider)
         {
             case RunnerProvider.GitHubActions:
+                var target = GitHubCredentialResolver.ResolveDefaultTarget(cred);
                 if (!string.IsNullOrEmpty(cred.GitHubToken)) vars["RR_GITHUB_TOKEN"] = cred.GitHubToken;
-                if (!string.IsNullOrEmpty(cred.GitHubOrg)) vars["RR_GITHUB_ORG"] = cred.GitHubOrg;
-                if (!string.IsNullOrEmpty(cred.GitHubRepo)) vars["RR_GITHUB_REPO"] = cred.GitHubRepo;
+                if (!string.IsNullOrEmpty(target?.Owner)) vars["RR_GITHUB_ORG"] = target.Owner;
+                if (!string.IsNullOrEmpty(target?.Repository)) vars["RR_GITHUB_REPO"] = target.Repository;
                 if (!string.IsNullOrEmpty(cred.GitHubApiUrl)) vars["RR_GITHUB_API_URL"] = cred.GitHubApiUrl;
                 if (!string.IsNullOrEmpty(cred.GitHubServerUrl)) vars["RR_GITHUB_SERVER_URL"] = cred.GitHubServerUrl;
                 break;

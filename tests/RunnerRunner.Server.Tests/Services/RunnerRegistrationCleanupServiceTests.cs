@@ -134,6 +134,56 @@ public class RunnerRegistrationCleanupServiceTests
     }
 
     [Fact]
+    public void BuildGitHubSweepScopes_IncludesGitHubAppInstallationTargets()
+    {
+        var credential = new ProviderCredential
+        {
+            Name = "github-app",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubAuthType = GitHubAuthType.GitHubApp,
+            GitHubAppId = "98765",
+            GitHubAppPrivateKey = "private-key",
+            GitHubAppInstallations =
+            [
+                new GitHubAppInstallation
+                {
+                    Owner = "Redth",
+                    InstallationId = "111",
+                    IsDefault = true
+                },
+                new GitHubAppInstallation
+                {
+                    Owner = "PoolMath",
+                    Repository = "PoolMath/PoolMath",
+                    InstallationId = "222"
+                }
+            ]
+        };
+
+        var scopes = RunnerRegistrationCleanupService.BuildGitHubSweepScopes(
+                [credential],
+                [
+                    new WebhookEvent
+                    {
+                        Provider = RunnerProvider.GitHubActions.ToString(),
+                        Repository = "Redth/ailoha",
+                        GitHubInstallationId = "111"
+                    },
+                    new WebhookEvent
+                    {
+                        Provider = RunnerProvider.GitHubActions.ToString(),
+                        Repository = "PoolMath/PoolMath",
+                        GitHubInstallationId = "222"
+                    }
+                ])
+            .ToList();
+
+        Assert.Contains(scopes, s => s.GitHubOrg == "Redth" && s.GitHubAppInstallationId == "111");
+        Assert.Contains(scopes, s => s.GitHubRepo == "Redth/ailoha" && s.GitHubAppInstallationId == "111");
+        Assert.Contains(scopes, s => s.GitHubRepo == "PoolMath/PoolMath" && s.GitHubAppInstallationId == "222");
+    }
+
+    [Fact]
     public void BuildGitHubProtectedRunnerNames_KeepsManagedNamesEvenWhenNotActive()
     {
         var names = RunnerRegistrationCleanupService.BuildGitHubProtectedRunnerNames([

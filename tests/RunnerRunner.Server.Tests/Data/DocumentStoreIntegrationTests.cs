@@ -149,7 +149,16 @@ public class DocumentStoreIntegrationTests
             Name = "github-main",
             Provider = RunnerProvider.GitHubActions,
             GitHubOrg = "my-org",
-            GitHubToken = "ghp_secret123"
+            GitHubToken = "ghp_secret123",
+            GitHubAppInstallations =
+            [
+                new GitHubAppInstallation
+                {
+                    Owner = "my-org",
+                    InstallationId = "123",
+                    IsDefault = true
+                }
+            ]
         };
         await store.Insert(cred);
 
@@ -157,5 +166,7 @@ public class DocumentStoreIntegrationTests
         Assert.NotNull(retrieved);
         Assert.Equal("my-org", retrieved.GitHubOrg);
         Assert.Equal("ghp_secret123", retrieved.GitHubToken);
+        Assert.Single(retrieved.GitHubAppInstallations);
+        Assert.Equal("123", retrieved.GitHubAppInstallations[0].InstallationId);
     }
 }

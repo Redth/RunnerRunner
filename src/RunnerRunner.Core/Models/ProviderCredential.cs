@@ -33,6 +33,8 @@ public class ProviderCredential
     public string? GitHubAppInstallationId { get; set; }
     [Id(20)]
     public string? GitHubAppWebhookSecret { get; set; }
+    [Id(21)]
+    public List<GitHubAppInstallation> GitHubAppInstallations { get; set; } = [];
 
     // Gitea
     [Id(8)]
@@ -60,4 +62,17 @@ public enum GitHubAuthType
 {
     PersonalAccessToken,
     GitHubApp
+}
+
+[GenerateSerializer]
+public class GitHubAppInstallation
+{
+    [Id(0)]
+    public string Owner { get; set; } = "";
+    [Id(1)]
+    public string? Repository { get; set; }
+    [Id(2)]
+    public string InstallationId { get; set; } = "";
+    [Id(3)]
+    public bool IsDefault { get; set; }
 }
