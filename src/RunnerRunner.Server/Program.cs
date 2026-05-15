@@ -7,6 +7,7 @@ using RunnerRunner.Server.Services.HostWorkers;
 using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Http.Features;
 
@@ -22,6 +23,18 @@ builder.WebHost.ConfigureKestrel(options =>
 
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
 builder.AddServiceDefaults();
+
+if (!builder.Environment.IsDevelopment())
+{
+    var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+    if (string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+        dataProtectionKeysPath = Path.Combine(builder.Environment.ContentRootPath, "data", "data-protection-keys");
+
+    Directory.CreateDirectory(dataProtectionKeysPath);
+    builder.Services.AddDataProtection()
+        .SetApplicationName("RunnerRunner.Server")
+        .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
+}
 
 // Document store (Shiny DocumentDB with PostgreSQL)
 var pgConnectionString = builder.Configuration.GetValue<string>("Database:ConnectionString")
