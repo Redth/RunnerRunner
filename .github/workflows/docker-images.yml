@@ -11,7 +11,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_PREFIX: ghcr.io/redth/runnerrunner
+  SERVER_IMAGE: ghcr.io/redth/runnerrunner-server
+  HOSTWORKER_IMAGE: ghcr.io/redth/runnerrunner-hostworker
 
 jobs:
   publish:
@@ -41,8 +42,8 @@ jobs:
           build-args: |
             INFORMATIONAL_VERSION=${{ github.sha }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/server:main
-            ${{ env.IMAGE_PREFIX }}/server:${{ github.sha }}
+            ${{ env.SERVER_IMAGE }}:main
+            ${{ env.SERVER_IMAGE }}:${{ github.sha }}
 
       - name: Build and push HostWorker image
         uses: docker/build-push-action@v6
@@ -54,5 +55,5 @@ jobs:
           build-args: |
             INFORMATIONAL_VERSION=${{ github.sha }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/hostworker:main
-            ${{ env.IMAGE_PREFIX }}/hostworker:${{ github.sha }}
+            ${{ env.HOSTWORKER_IMAGE }}:main
+            ${{ env.HOSTWORKER_IMAGE }}:${{ github.sha }}

@@ -68,7 +68,8 @@ WINDOWS_DEPLOY_DIR="${WINDOWS_DEPLOY_DIR:-C:/RunnerRunner}"
 WINDOWS_MODE="${WINDOWS_MODE:-native}"
 
 REGISTRY_URL="${REGISTRY_URL:-ghcr.io}"
-REGISTRY_REPO="${REGISTRY_REPO:-redth/runnerrunner}"
+REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-${REGISTRY_REPO:-redth}}"
+REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE%%/*}"
 DEFAULT_SSH_KEY="${SSH_IDENTITY_FILE:-${HOME}/.ssh/id_ed25519}"
 
 # --- SSH wrapper: prefer explicit/default SSH keys over password auth ---
@@ -162,8 +163,8 @@ REMOTE_SSH_PORT="${LINUX_SSH_PORT}"
 # ============================================================
 log "Phase 1: Building Docker images"
 
-SERVER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/server:latest"
-HOST_WORKER_IMAGE="${REGISTRY_URL}/${REGISTRY_REPO}/hostworker:latest"
+SERVER_IMAGE="${SERVER_IMAGE:-${REGISTRY_URL}/${REGISTRY_NAMESPACE}/runnerrunner-server:latest}"
+HOST_WORKER_IMAGE="${HOSTWORKER_IMAGE:-${REGISTRY_URL}/${REGISTRY_NAMESPACE}/runnerrunner-hostworker:latest}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
 step "Building server image (${DOCKER_PLATFORM})..."
