@@ -19,13 +19,16 @@ public class GitHubAuthenticationService
         _logger = logger;
     }
 
-    public static bool HasGitHubApiCredentials(ProviderCredential credential, string? installationId = null)
+    public static bool HasGitHubApiCredentials(
+        ProviderCredential credential,
+        string? installationId = null,
+        string? repository = null)
     {
         if (credential.GitHubAuthType == GitHubAuthType.GitHubApp)
         {
             return !string.IsNullOrWhiteSpace(credential.GitHubAppId)
                 && !string.IsNullOrWhiteSpace(credential.GitHubAppPrivateKey)
-                && !string.IsNullOrWhiteSpace(ResolveInstallationId(credential, installationId));
+                && !string.IsNullOrWhiteSpace(ResolveGitHubAppInstallationId(credential, installationId, repository));
         }
 
         return !string.IsNullOrWhiteSpace(credential.GitHubToken);
@@ -39,12 +42,13 @@ public class GitHubAuthenticationService
         string endpoint,
         ProviderCredential credential,
         string? installationId = null,
+        string? repository = null,
         CancellationToken ct = default)
     {
         var request = new HttpRequestMessage(method, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Bearer",
-            await GetAccessTokenAsync(credential, installationId, ct));
+            await GetAccessTokenAsync(credential, installationId, repository, ct));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
         return request;
@@ -54,11 +58,12 @@ public class GitHubAuthenticationService
         HttpClient client,
         ProviderCredential credential,
         string? installationId = null,
+        string? repository = null,
         CancellationToken ct = default)
     {
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
             "Bearer",
-            await GetAccessTokenAsync(credential, installationId, ct));
+            await GetAccessTokenAsync(credential, installationId, repository, ct));
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("RunnerRunner", "1.0"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
     }
@@ -66,6 +71,7 @@ public class GitHubAuthenticationService
     public async Task<string> GetAccessTokenAsync(
         ProviderCredential credential,
         string? installationId = null,
+        string? repository = null,
         CancellationToken ct = default)
     {
         if (credential.GitHubAuthType != GitHubAuthType.GitHubApp)
@@ -74,7 +80,7 @@ public class GitHubAuthenticationService
                 ?? throw new InvalidOperationException($"GitHub credential '{credential.Name}' does not have a PAT configured.");
         }
 
-        var resolvedInstallationId = ResolveInstallationId(credential, installationId)
+        var resolvedInstallationId = ResolveGitHubAppInstallationId(credential, installationId, repository)
             ?? throw new InvalidOperationException($"GitHub App credential '{credential.Name}' does not have an installation ID.");
 
         var appJwt = CreateAppJwt(credential);
@@ -132,15 +138,11 @@ public class GitHubAuthenticationService
         return $"{signingInput}.{Base64UrlEncode(signature)}";
     }
 
-    private static string? ResolveInstallationId(ProviderCredential credential, string? installationId)
-    {
-        if (!string.IsNullOrWhiteSpace(installationId))
-            return installationId.Trim();
-
-        return string.IsNullOrWhiteSpace(credential.GitHubAppInstallationId)
-            ? null
-            : credential.GitHubAppInstallationId.Trim();
-    }
+    public static string? ResolveGitHubAppInstallationId(
+        ProviderCredential credential,
+        string? installationId = null,
+        string? repository = null) =>
+        GitHubCredentialResolver.ResolveInstallationId(credential, installationId, repository);
 
     private static string NormalizePem(string pem) =>
         pem.Replace("\\n", "\n", StringComparison.Ordinal).Trim();

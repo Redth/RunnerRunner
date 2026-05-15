@@ -149,10 +149,9 @@ public class RunnerRegistrationCleanupService
             GitHubAuthType = credential.GitHubAuthType,
             GitHubAppId = credential.GitHubAppId,
             GitHubAppPrivateKey = credential.GitHubAppPrivateKey,
-            GitHubAppInstallationId = string.IsNullOrWhiteSpace(installationId)
-                ? credential.GitHubAppInstallationId
-                : installationId,
+            GitHubAppInstallationId = GitHubCredentialResolver.ResolveInstallationId(credential, installationId, repository),
             GitHubAppWebhookSecret = credential.GitHubAppWebhookSecret,
+            GitHubAppInstallations = CloneInstallations(credential.GitHubAppInstallations),
             GiteaInstanceUrl = credential.GiteaInstanceUrl,
             GiteaRunnerToken = credential.GiteaRunnerToken,
             AzDoOrgUrl = credential.AzDoOrgUrl,
@@ -212,34 +211,59 @@ public class RunnerRegistrationCleanupService
                 continue;
             }
 
-            if (!string.IsNullOrWhiteSpace(credential.GitHubRepo))
+            foreach (var target in GitHubCredentialResolver.GetConfiguredTargets(credential))
             {
-                var repoScoped = ScopeGitHubCredentialToRepository(credential, credential.GitHubRepo);
+                ProviderCredential scopedCredential;
+                string key;
+                if (!string.IsNullOrWhiteSpace(target.Repository))
+                {
+                    scopedCredential = ScopeGitHubCredentialToRepository(credential, target.Repository, target.InstallationId);
+                    key = $"repo:{scopedCredential.GitHubRepo}";
+                }
+                else if (!string.IsNullOrWhiteSpace(target.Owner))
+                {
+                    scopedCredential = ScopeGitHubCredentialToRepository(credential, null, target.InstallationId);
+                    scopedCredential.GitHubOrg = target.Owner;
+                    scopedCredential.GitHubRepo = null;
+                    key = $"org:{scopedCredential.GitHubOrg}";
+                }
+                else
+                {
+                    continue;
+                }
+
+                if (seen.Add(key) && GitHubAuthenticationService.HasGitHubApiCredentials(scopedCredential))
+                    yield return scopedCredential;
+            }
+
+            var targetOwners = GitHubCredentialResolver.GetTargetOwners(credential).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var repoScope in repositoryScopes)
+            {
+                var owner = repoScope.Repository.Split('/', 2)[0];
+                if (targetOwners.Count > 0 && !targetOwners.Contains(owner))
+                    continue;
+
+                var repoScoped = ScopeGitHubCredentialToRepository(
+                    credential,
+                    repoScope.Repository,
+                    repoScope.InstallationId);
                 var repoKey = $"repo:{repoScoped.GitHubRepo}";
                 if (seen.Add(repoKey) && GitHubAuthenticationService.HasGitHubApiCredentials(repoScoped))
                     yield return repoScoped;
             }
-
-            if (!string.IsNullOrWhiteSpace(credential.GitHubOrg))
-            {
-                var orgKey = $"org:{credential.GitHubOrg}";
-                if (seen.Add(orgKey) && GitHubAuthenticationService.HasGitHubApiCredentials(credential))
-                    yield return ScopeGitHubCredentialToRepository(credential, null);
-
-                foreach (var repoScope in repositoryScopes.Where(r =>
-                             r.Repository.StartsWith($"{credential.GitHubOrg}/", StringComparison.OrdinalIgnoreCase)))
-                {
-                    var repoScoped = ScopeGitHubCredentialToRepository(
-                        credential,
-                        repoScope.Repository,
-                        repoScope.InstallationId);
-                    var repoKey = $"repo:{repoScoped.GitHubRepo}";
-                    if (seen.Add(repoKey) && GitHubAuthenticationService.HasGitHubApiCredentials(repoScoped))
-                        yield return repoScoped;
-                }
-            }
         }
     }
+
+    private static List<GitHubAppInstallation> CloneInstallations(IEnumerable<GitHubAppInstallation>? installations)
+        => installations?
+            .Select(i => new GitHubAppInstallation
+            {
+                Owner = i.Owner,
+                Repository = i.Repository,
+                InstallationId = i.InstallationId,
+                IsDefault = i.IsDefault
+            })
+            .ToList() ?? [];
 
     private static bool CanUseEventInstallationId(ProviderCredential credential) =>
         credential.GitHubAuthType == GitHubAuthType.GitHubApp

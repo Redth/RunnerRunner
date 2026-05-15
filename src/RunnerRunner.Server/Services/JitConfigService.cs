@@ -47,8 +47,12 @@ public class JitConfigService
 		try
 		{
 			var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
+			var defaultTarget = GitHubCredentialResolver.ResolveDefaultTarget(credential);
+			var normalizedWebhookRepo = GitHubCredentialResolver.NormalizeRepository(webhookRepo, defaultTarget?.Owner);
+			var repositoryForAuth = normalizedWebhookRepo ?? defaultTarget?.Repository;
+
 			using var client = _httpClientFactory.CreateClient();
-			await _gitHubAuth.ConfigureClientAsync(client, credential, githubInstallationId);
+			await _gitHubAuth.ConfigureClientAsync(client, credential, githubInstallationId, repositoryForAuth);
 
 			// Build list of endpoints to try (repo-level first, then org-level)
 			var endpoints = new List<(string url, string scope)>();
@@ -62,7 +66,6 @@ public class JitConfigService
 			}
 
 			// 1. Use the actual repo from the webhook event (most specific, most likely to work)
-			var normalizedWebhookRepo = NormalizeRepo(webhookRepo, credential.GitHubOrg);
 			if (!string.IsNullOrEmpty(normalizedWebhookRepo))
 			{
 				var parts = normalizedWebhookRepo.Split('/', 2);
@@ -73,8 +76,9 @@ public class JitConfigService
 				}
 			}
 
-			// 2. Try credential's configured repo
-			var normalizedCredentialRepo = NormalizeRepo(credential.GitHubRepo, credential.GitHubOrg);
+			// 2. Try credential's configured/default repo
+			var normalizedCredentialRepo = defaultTarget?.Repository
+				?? GitHubCredentialResolver.NormalizeRepository(credential.GitHubRepo, credential.GitHubOrg);
 			if (!string.IsNullOrEmpty(normalizedCredentialRepo)
 				&& !string.Equals(normalizedCredentialRepo, normalizedWebhookRepo, StringComparison.OrdinalIgnoreCase))
 			{
@@ -83,16 +87,19 @@ public class JitConfigService
 					AddEndpoint($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/generate-jitconfig", $"repo:{normalizedCredentialRepo}");
 			}
 
-			// 3. Try org-level
-			if (!string.IsNullOrEmpty(credential.GitHubOrg))
+			// 3. Try org-level/default owner scope
+			var targetOwner = !string.IsNullOrEmpty(normalizedWebhookRepo)
+				? normalizedWebhookRepo.Split('/', 2)[0]
+				: defaultTarget?.Owner;
+			if (!string.IsNullOrEmpty(targetOwner))
 			{
-				AddEndpoint($"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/generate-jitconfig", $"org:{credential.GitHubOrg}");
+				AddEndpoint($"{apiUrl}/orgs/{targetOwner}/actions/runners/generate-jitconfig", $"org:{targetOwner}");
 			}
 
 			if (endpoints.Count == 0)
 				return new JitConfigResult { Success = false, Error = "No GitHub org, repo, or webhook repo available to generate JIT config." };
 
-			var resolvedRunnerGroupId = await ResolveRunnerGroupIdAsync(client, apiUrl, credential, runnerGroup);
+			var resolvedRunnerGroupId = await ResolveRunnerGroupIdAsync(client, apiUrl, targetOwner, runnerGroup);
 			var effectiveRunnerGroupId = resolvedRunnerGroupId ?? 1;
 			var requestBody = new
 			{
@@ -148,18 +155,18 @@ public class JitConfigService
 		}
 	}
 
-	private async Task<long?> ResolveRunnerGroupIdAsync(HttpClient client, string apiUrl, ProviderCredential credential, string? runnerGroup)
+	private async Task<long?> ResolveRunnerGroupIdAsync(HttpClient client, string apiUrl, string? owner, string? runnerGroup)
 	{
 		if (string.IsNullOrWhiteSpace(runnerGroup) || string.Equals(runnerGroup, "Default", StringComparison.OrdinalIgnoreCase))
 			return null;
 
-		if (string.IsNullOrWhiteSpace(credential.GitHubOrg))
+		if (string.IsNullOrWhiteSpace(owner))
 		{
-			_logger.LogWarning("Runner group '{RunnerGroup}' requested, but no GitHub org is configured; using GitHub default group", runnerGroup);
+			_logger.LogWarning("Runner group '{RunnerGroup}' requested, but no GitHub owner/org is configured; using GitHub default group", runnerGroup);
 			return null;
 		}
 
-		var endpoint = $"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runner-groups";
+		var endpoint = $"{apiUrl}/orgs/{owner}/actions/runner-groups";
 		var response = await client.GetAsync(endpoint);
 		var body = await response.Content.ReadAsStringAsync();
 
@@ -184,7 +191,7 @@ public class JitConfigService
 		}
 
 		_logger.LogWarning("GitHub runner group '{RunnerGroup}' was not found in org '{Org}'; using GitHub default group",
-			runnerGroup, credential.GitHubOrg);
+			runnerGroup, owner);
 		return null;
 	}
 
@@ -204,18 +211,6 @@ public class JitConfigService
 		{
 			return responseBody.Length > 300 ? responseBody[..300] : responseBody;
 		}
-	}
-
-	private static string? NormalizeRepo(string? repo, string? org)
-	{
-		if (string.IsNullOrWhiteSpace(repo))
-			return null;
-
-		var trimmed = repo.Trim().Trim('/');
-		if (trimmed.Contains('/'))
-			return trimmed;
-
-		return string.IsNullOrWhiteSpace(org) ? null : $"{org.Trim().Trim('/')}/{trimmed}";
 	}
 
 	public async Task<JitConfigResult> GenerateGiteaJitConfig(

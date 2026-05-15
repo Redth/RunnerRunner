@@ -99,6 +99,7 @@ public class ModelDefaultsTests
         Assert.Null(cred.GitHubToken);
         Assert.Equal(GitHubAuthType.PersonalAccessToken, cred.GitHubAuthType);
         Assert.Null(cred.GitHubAppId);
+        Assert.Empty(cred.GitHubAppInstallations);
         Assert.Null(cred.GiteaInstanceUrl);
         Assert.Null(cred.AzDoOrgUrl);
     }

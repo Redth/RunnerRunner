@@ -14,6 +14,7 @@ namespace RunnerRunner.Server.Providers;
 public class GitHubActionsProvider : IRunnerProviderPlugin
 {
     internal sealed record GitHubRunnerRegistration(long Id, string Name, string Status, bool Busy);
+    private sealed record GitHubRunnerEndpoint(string Url, string? Repository);
 
     private readonly IHttpClientFactory _httpFactory;
     private readonly GitHubAuthenticationService _gitHubAuth;
@@ -33,23 +34,15 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
 
     public async Task<string> GetRegistrationTokenAsync(ProviderCredential credential, CancellationToken ct = default)
     {
-        var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
-        var normalizedRepo = NormalizeRepo(credential.GitHubRepo, credential.GitHubOrg);
+        var runnersEndpoint = BuildRunnersEndpoint(credential);
+        var endpoint = $"{runnersEndpoint.Url}/registration-token";
 
-        string endpoint;
-        if (string.IsNullOrEmpty(normalizedRepo))
-        {
-            endpoint = $"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners/registration-token";
-            _logger.LogInformation("Requesting org-level registration token for {Org}", credential.GitHubOrg);
-        }
-        else
-        {
-            var parts = normalizedRepo.Split('/', 2);
-            endpoint = $"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners/registration-token";
-            _logger.LogInformation("Requesting repo-level registration token for {Repo}", normalizedRepo);
-        }
-
-        using var request = await _gitHubAuth.CreateRequestAsync(HttpMethod.Post, endpoint, credential, ct: ct);
+        using var request = await _gitHubAuth.CreateRequestAsync(
+            HttpMethod.Post,
+            endpoint,
+            credential,
+            repository: runnersEndpoint.Repository,
+            ct: ct);
 
         var response = await _httpFactory.CreateClient().SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
@@ -115,7 +108,12 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
     {
         var listEndpoint = BuildRunnersEndpoint(credential);
 
-        using var listRequest = await _gitHubAuth.CreateRequestAsync(HttpMethod.Get, $"{listEndpoint}?per_page=100", credential, ct: ct);
+        using var listRequest = await _gitHubAuth.CreateRequestAsync(
+            HttpMethod.Get,
+            $"{listEndpoint.Url}?per_page=100",
+            credential,
+            repository: listEndpoint.Repository,
+            ct: ct);
         var listResponse = await _httpFactory.CreateClient().SendAsync(listRequest, ct);
         listResponse.EnsureSuccessStatusCode();
 
@@ -143,34 +141,38 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
 
     private async Task DeleteRunnerAsync(ProviderCredential credential, long runnerId, CancellationToken ct)
     {
-        var deleteEndpoint = $"{BuildRunnersEndpoint(credential)}/{runnerId}";
-        using var deleteRequest = await _gitHubAuth.CreateRequestAsync(HttpMethod.Delete, deleteEndpoint, credential, ct: ct);
+        var runnersEndpoint = BuildRunnersEndpoint(credential);
+        var deleteEndpoint = $"{runnersEndpoint.Url}/{runnerId}";
+        using var deleteRequest = await _gitHubAuth.CreateRequestAsync(
+            HttpMethod.Delete,
+            deleteEndpoint,
+            credential,
+            repository: runnersEndpoint.Repository,
+            ct: ct);
         var deleteResponse = await _httpFactory.CreateClient().SendAsync(deleteRequest, ct);
         deleteResponse.EnsureSuccessStatusCode();
     }
 
-    private static string BuildRunnersEndpoint(ProviderCredential credential)
+    private GitHubRunnerEndpoint BuildRunnersEndpoint(ProviderCredential credential)
     {
         var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
-        var normalizedRepo = NormalizeRepo(credential.GitHubRepo, credential.GitHubOrg);
+        var target = GitHubCredentialResolver.ResolveDefaultTarget(credential)
+            ?? throw new InvalidOperationException($"GitHub credential '{credential.Name}' does not have a GitHub owner or repository target.");
 
-        if (string.IsNullOrEmpty(normalizedRepo))
-            return $"{apiUrl}/orgs/{credential.GitHubOrg}/actions/runners";
+        if (!string.IsNullOrWhiteSpace(target.Repository))
+        {
+            var parts = target.Repository.Split('/', 2);
+            _logger.LogInformation("Requesting repo-level runner API for {Repo}", target.Repository);
+            return new GitHubRunnerEndpoint($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners", target.Repository);
+        }
 
-        var parts = normalizedRepo.Split('/', 2);
-        return $"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners";
-    }
+        if (!string.IsNullOrWhiteSpace(target.Owner))
+        {
+            _logger.LogInformation("Requesting org-level runner API for {Org}", target.Owner);
+            return new GitHubRunnerEndpoint($"{apiUrl}/orgs/{target.Owner}/actions/runners", null);
+        }
 
-    private static string? NormalizeRepo(string? repo, string? org)
-    {
-        if (string.IsNullOrWhiteSpace(repo))
-            return null;
-
-        var trimmed = repo.Trim().Trim('/');
-        if (trimmed.Contains('/'))
-            return trimmed;
-
-        return string.IsNullOrWhiteSpace(org) ? null : $"{org.Trim().Trim('/')}/{trimmed}";
+        throw new InvalidOperationException($"GitHub credential '{credential.Name}' does not have a GitHub owner or repository target.");
     }
 
     public async Task<List<RunnerAgentVersion>> GetAvailableVersionsAsync(CancellationToken ct = default)
