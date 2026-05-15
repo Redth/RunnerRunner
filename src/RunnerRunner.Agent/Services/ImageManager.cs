@@ -68,35 +68,65 @@ public partial class ImageManager
 
         process.Start();
 
-        // Parse Docker pull progress output
-        string? line; while ((line = await process.StandardOutput.ReadLineAsync(ct)) != null)
-        {
-            
-            
+        var errorLines = new List<string>();
+        using var progressLock = new SemaphoreSlim(1, 1);
+        var lastPercent = 0.0;
+        long lastDownloaded = 0;
+        long lastTotal = 0;
 
-            // Docker outputs lines like: "Downloading  [====>  ]  12.5MB/45.2MB"
-            var progress = ParseDockerPullProgress(line);
-            if (progress.HasValue)
-            {
-                await onProgress(new ImagePullProgressEvent
-                {
-                    HostId = "",
-                    ImageType = ImageType.Docker,
-                    ImageName = fullImage,
-                    ProgressPercent = progress.Value.percent,
-                    BytesDownloaded = progress.Value.downloaded,
-                    BytesTotal = progress.Value.total,
-                    Status = line.Trim()
-                });
-            }
-        }
-
+        var stdoutTask = ReadDockerPullOutputAsync(process.StandardOutput, isError: false);
+        var stderrTask = ReadDockerPullOutputAsync(process.StandardError, isError: true);
         await process.WaitForExitAsync(ct);
+        await Task.WhenAll(stdoutTask, stderrTask);
 
         if (process.ExitCode != 0)
         {
-            var error = await process.StandardError.ReadToEndAsync(ct);
+            var error = string.Join(Environment.NewLine, errorLines).Trim();
+            if (string.IsNullOrWhiteSpace(error))
+                error = $"docker pull exited with code {process.ExitCode}.";
+
             throw new InvalidOperationException($"Docker pull failed: {error}");
+        }
+
+        async Task ReadDockerPullOutputAsync(TextReader reader, bool isError)
+        {
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) != null)
+            {
+                var status = line.Trim();
+                if (string.IsNullOrWhiteSpace(status))
+                    continue;
+
+                if (isError)
+                    errorLines.Add(status);
+
+                var progress = ParseDockerPullProgress(status);
+                await progressLock.WaitAsync(ct);
+                try
+                {
+                    if (progress.HasValue)
+                    {
+                        lastPercent = Math.Clamp(progress.Value.percent, 0, 100);
+                        lastDownloaded = progress.Value.downloaded;
+                        lastTotal = progress.Value.total;
+                    }
+
+                    await onProgress(new ImagePullProgressEvent
+                    {
+                        HostId = "",
+                        ImageType = ImageType.Docker,
+                        ImageName = fullImage,
+                        ProgressPercent = lastPercent,
+                        BytesDownloaded = lastDownloaded,
+                        BytesTotal = lastTotal,
+                        Status = status
+                    });
+                }
+                finally
+                {
+                    progressLock.Release();
+                }
+            }
         }
     }
 
@@ -176,14 +206,17 @@ public partial class ImageManager
 
     public async Task PullTartImageAsync(
         string imageName,
+        string tag,
+        string? registryUrl,
         Func<ImagePullProgressEvent, Task> onProgress,
         CancellationToken ct = default)
     {
-        _logger.LogInformation("Pulling Tart image {Image}", imageName);
+        var fullImage = ImageReference.Build(registryUrl, imageName, tag);
+        _logger.LogInformation("Pulling Tart image {Image}", fullImage);
 
         var process = new Process
         {
-            StartInfo = CreateProcessStartInfo("tart", $"pull {imageName}")
+            StartInfo = CreateProcessStartInfo("tart", $"pull {fullImage}")
         };
 
         process.Start();
@@ -203,7 +236,7 @@ public partial class ImageManager
                 {
                     HostId = "",
                     ImageType = ImageType.Tart,
-                    ImageName = imageName,
+                    ImageName = fullImage,
                     ProgressPercent = percent.Value,
                     Status = line.Trim()
                 });
@@ -213,7 +246,7 @@ public partial class ImageManager
         await process.WaitForExitAsync(ct);
 
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"Tart pull failed for {imageName}");
+            throw new InvalidOperationException($"Tart pull failed for {fullImage}");
     }
 
     public async Task DeleteTartImageAsync(string imageName, CancellationToken ct = default)

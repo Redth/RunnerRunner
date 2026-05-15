@@ -326,9 +326,11 @@ internal sealed class HostCommandProcessor : BackgroundService
 
     private async Task HandlePullImageAsync(PullImageCommand command, CancellationToken ct)
     {
+        var imageReference = ImageReference.Build(command.RegistryUrl, command.ImageName, command.Tag);
+
         try
         {
-            if (!string.IsNullOrWhiteSpace(command.RegistryUrl))
+            if (command.ImageType == ImageType.Docker && !string.IsNullOrWhiteSpace(command.RegistryUrl))
                 await _imageManager.LoginDockerRegistryAsync(command.RegistryUrl, command.Username, command.Password, ct);
 
             if (command.ImageType == ImageType.Docker)
@@ -344,6 +346,8 @@ internal sealed class HostCommandProcessor : BackgroundService
             {
                 await _imageManager.PullTartImageAsync(
                     command.ImageName,
+                    command.Tag,
+                    command.RegistryUrl,
                     evt => PublishAsync(HostWorkerMessageKinds.ImagePullProgress, WithHost(evt), ct),
                     ct);
             }
@@ -352,7 +356,7 @@ internal sealed class HostCommandProcessor : BackgroundService
             {
                 HostId = _identity.HostId,
                 ImageType = command.ImageType,
-                ImageName = command.ImageName,
+                ImageName = imageReference,
                 TaskId = command.TaskId,
                 Success = true
             }, ct);
@@ -365,7 +369,7 @@ internal sealed class HostCommandProcessor : BackgroundService
             {
                 HostId = _identity.HostId,
                 ImageType = command.ImageType,
-                ImageName = command.ImageName,
+                ImageName = imageReference,
                 TaskId = command.TaskId,
                 Success = false,
                 Error = ex.Message
