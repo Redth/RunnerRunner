@@ -42,7 +42,20 @@ public sealed class HostWorkerLogCache
     public string GetTextTail(string hostId, string streamId, int maxFrames)
         => string.Concat(GetTail(hostId, streamId, maxFrames).Select(frame => frame.Text));
 
+    public IReadOnlyList<HostWorkerLogStreamSnapshot> GetStreams()
+        => _streams
+            .Select(kvp => new HostWorkerLogStreamSnapshot(
+                kvp.Key.HostId,
+                kvp.Key.StreamId,
+                kvp.Value.GetTail(_maxFramesPerStream)))
+            .ToArray();
+
     private readonly record struct LogStreamKey(string HostId, string StreamId);
+
+    public sealed record HostWorkerLogStreamSnapshot(
+        string HostId,
+        string StreamId,
+        IReadOnlyList<HostWorkerLogFrame> Frames);
 
     private sealed class LogStreamBuffer
     {

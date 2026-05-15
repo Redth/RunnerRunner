@@ -10,6 +10,8 @@ using Orleans.Dashboard;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Logging;
+using RunnerRunner.Server.Services.Logs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -134,6 +136,9 @@ builder.Services.AddSingleton<RunnerRegistrationCleanupService>();
 builder.Services.AddSingleton<IRegistryCatalogService, RegistryCatalogService>();
 builder.Services.AddSingleton<HostWorkerConnectionRegistry>();
 builder.Services.AddSingleton<HostWorkerLogCache>();
+builder.Services.AddSingleton<ObservedLogStore>();
+builder.Services.AddSingleton<ILoggerProvider, ObservedLoggerProvider>();
+builder.Services.AddScoped<ObservedLogQueryService>();
 builder.Services.AddSingleton<HostWorkerLocalUpdateStore>();
 builder.Services.AddSingleton<HostWorkerUpdateService>();
 builder.Services.AddSingleton<HostWorkerEventProcessor>();

@@ -337,14 +337,14 @@ internal sealed class HostCommandProcessor : BackgroundService
                     command.ImageName,
                     command.Tag,
                     command.RegistryUrl,
-                    evt => PublishAsync(HostWorkerMessageKinds.ImagePullProgress, WithHost(evt), ct),
+                    evt => PublishImagePullProgressAsync(command, evt, ct),
                     ct);
             }
             else
             {
                 await _imageManager.PullTartImageAsync(
                     command.ImageName,
-                    evt => PublishAsync(HostWorkerMessageKinds.ImagePullProgress, WithHost(evt), ct),
+                    evt => PublishImagePullProgressAsync(command, evt, ct),
                     ct);
             }
 
@@ -373,11 +373,23 @@ internal sealed class HostCommandProcessor : BackgroundService
             throw;
         }
 
-        ImagePullProgressEvent WithHost(ImagePullProgressEvent evt)
+        async Task PublishImagePullProgressAsync(PullImageCommand pullCommand, ImagePullProgressEvent evt, CancellationToken token)
         {
             evt.HostId = _identity.HostId;
-            evt.TaskId = command.TaskId;
-            return evt;
+            evt.TaskId = pullCommand.TaskId;
+            var status = string.IsNullOrWhiteSpace(evt.Status)
+                ? $"Pulling {evt.ImageName} {evt.ProgressPercent:0}%"
+                : evt.Status;
+            await PublishLocalLogFrameAsync(
+                "task.progress",
+                $"task.{pullCommand.TaskId ?? ImageReference.Build(pullCommand.RegistryUrl, pullCommand.ImageName, pullCommand.Tag)}",
+                status,
+                null,
+                token,
+                category: "ImagePull",
+                level: "Information",
+                taskId: pullCommand.TaskId);
+            await PublishAsync(HostWorkerMessageKinds.ImagePullProgress, evt, token);
         }
     }
 
@@ -723,7 +735,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         }, HostWorkerProtocol.JsonOptions);
 
         await File.AppendAllTextAsync(_paths.CommandJournalPath, entry + Environment.NewLine, ct);
-        await PublishLocalLogFrameAsync("worker.command", $"command-{commandId}", entry, null, ct);
+        await PublishLocalLogFrameAsync("worker.command", $"command-{commandId}", entry, null, ct, commandId, $"HostCommand.{kind}", "Information");
     }
 
     private Task PublishStatusAsync(
@@ -766,9 +778,24 @@ internal sealed class HostCommandProcessor : BackgroundService
         string streamId,
         string text,
         string? runnerInstanceId,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? commandId = null,
+        string? category = null,
+        string? level = null,
+        string? taskId = null)
     {
-        var frame = await _logStore.AppendAsync(streamKind, streamId, text, runnerInstanceId, ct);
+        var frame = await _logStore.AppendAsync(
+            streamKind,
+            streamId,
+            text,
+            runnerInstanceId,
+            ct,
+            taskId: taskId,
+            commandId: commandId,
+            category: category,
+            level: level,
+            sourceType: runnerInstanceId == null ? "Host" : "Runner",
+            sourceName: _identity.HostName);
         await PublishAsync(HostWorkerMessageKinds.LogFrame, frame, ct);
     }
 

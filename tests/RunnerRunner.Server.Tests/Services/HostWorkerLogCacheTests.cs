@@ -36,6 +36,34 @@ public class HostWorkerLogCacheTests
         Assert.Equal("newer\n", cache.GetTextTail("host-1", "stream-1", maxFrames: 10));
     }
 
+    [Fact]
+    public void GetStreams_PreservesFrameMetadata()
+    {
+        var cache = CreateCache(maxFramesPerStream: 10);
+        cache.Ingest("host-1", new HostWorkerLogFrame
+        {
+            StreamKind = "task.progress",
+            StreamId = "task-1",
+            TaskId = "task-1",
+            Category = "ImagePull",
+            Level = "Information",
+            SourceType = "Task",
+            SourceName = "Pull image",
+            Offset = 0,
+            Text = "Downloading 50%\n",
+            Timestamp = DateTimeOffset.UnixEpoch,
+            Tags = new Dictionary<string, string> { ["image"] = "ubuntu:latest" }
+        });
+
+        var stream = Assert.Single(cache.GetStreams());
+        var frame = Assert.Single(stream.Frames);
+        Assert.Equal("host-1", stream.HostId);
+        Assert.Equal("task-1", frame.TaskId);
+        Assert.Equal("ImagePull", frame.Category);
+        Assert.Equal("Task", frame.SourceType);
+        Assert.Equal("ubuntu:latest", frame.Tags["image"]);
+    }
+
     private static HostWorkerLogCache CreateCache(int maxFramesPerStream)
     {
         var configuration = new ConfigurationBuilder()

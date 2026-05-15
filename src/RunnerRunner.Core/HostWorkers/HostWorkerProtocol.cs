@@ -93,6 +93,18 @@ public sealed class HostWorkerLogFrame
     public required string StreamId { get; init; }
     public required string StreamKind { get; init; }
     public string? RunnerInstanceId { get; init; }
+    public string? TaskId { get; init; }
+    public string? CommandId { get; init; }
+    public string? Category { get; init; }
+    public string? Level { get; init; }
+    public string? SourceType { get; init; }
+    public string? SourceName { get; init; }
+    public string? Provider { get; init; }
+    public string? Backend { get; init; }
+    public string? CorrelationId { get; init; }
+    public string? TraceId { get; init; }
+    public string? SpanId { get; init; }
+    public IReadOnlyDictionary<string, string> Tags { get; init; } = new Dictionary<string, string>();
     public long Offset { get; init; }
     public string Text { get; init; } = "";
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;

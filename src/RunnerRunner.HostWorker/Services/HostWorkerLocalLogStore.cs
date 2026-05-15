@@ -17,7 +17,19 @@ internal sealed class HostWorkerLocalLogStore
         string streamId,
         string text,
         string? runnerInstanceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? taskId = null,
+        string? commandId = null,
+        string? category = null,
+        string? level = null,
+        string? sourceType = null,
+        string? sourceName = null,
+        string? provider = null,
+        string? backend = null,
+        string? correlationId = null,
+        string? traceId = null,
+        string? spanId = null,
+        IReadOnlyDictionary<string, string>? tags = null)
     {
         var filePath = ResolveStreamPath(streamKind, streamId);
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
@@ -34,6 +46,18 @@ internal sealed class HostWorkerLocalLogStore
             StreamKind = streamKind,
             StreamId = streamId,
             RunnerInstanceId = runnerInstanceId,
+            TaskId = taskId,
+            CommandId = commandId,
+            Category = category,
+            Level = level,
+            SourceType = sourceType,
+            SourceName = sourceName,
+            Provider = provider,
+            Backend = backend,
+            CorrelationId = correlationId,
+            TraceId = traceId,
+            SpanId = spanId,
+            Tags = tags ?? new Dictionary<string, string>(),
             Offset = offset,
             Text = Encoding.UTF8.GetString(bytes),
             Timestamp = DateTimeOffset.UtcNow
