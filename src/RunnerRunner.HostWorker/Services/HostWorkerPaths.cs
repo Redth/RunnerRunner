@@ -3,10 +3,15 @@ namespace RunnerRunner.HostWorker.Services;
 internal sealed class HostWorkerPaths
 {
     public HostWorkerPaths(IConfiguration configuration)
+        : this(configuration, ResolveDefaultDataRoot)
+    {
+    }
+
+    internal HostWorkerPaths(IConfiguration configuration, Func<string> defaultDataRootFactory)
     {
         var dataRoot = configuration["HostWorker:DataRoot"];
         if (string.IsNullOrWhiteSpace(dataRoot))
-            dataRoot = ResolveDefaultDataRoot();
+            dataRoot = defaultDataRootFactory();
 
         DataRoot = dataRoot;
 
@@ -17,14 +22,22 @@ internal sealed class HostWorkerPaths
         LogRoot = logRoot;
         CommandJournalPath = Path.Combine(DataRoot, "journals", "commands.jsonl");
 
-        Directory.CreateDirectory(DataRoot);
-        Directory.CreateDirectory(LogRoot);
-        Directory.CreateDirectory(Path.GetDirectoryName(CommandJournalPath)!);
+        CreateRequiredDirectory(DataRoot, "HostWorker:DataRoot");
+        CreateRequiredDirectory(LogRoot, "HostWorker:LogRoot");
+        CreateRequiredDirectory(Path.GetDirectoryName(CommandJournalPath), nameof(CommandJournalPath));
     }
 
     public string DataRoot { get; }
     public string LogRoot { get; }
     public string CommandJournalPath { get; }
+
+    private static void CreateRequiredDirectory(string? path, string pathName)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new InvalidOperationException($"{pathName} resolved to an empty path.");
+
+        Directory.CreateDirectory(path);
+    }
 
     private static string ResolveDefaultDataRoot()
     {

@@ -9,6 +9,38 @@ public class HostWorkerPathsTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
+    public void EmptyDataRoot_UsesDefaultDataRoot(string? configuredDataRoot)
+    {
+        var defaultDataRoot = Path.Combine(Path.GetTempPath(), $"rr-hostworker-default-paths-{Guid.NewGuid():N}");
+        try
+        {
+            var values = new Dictionary<string, string?>
+            {
+                ["HostWorker:DataRoot"] = configuredDataRoot
+            };
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(values)
+                .Build();
+
+            var paths = new HostWorkerPaths(configuration, () => defaultDataRoot);
+
+            Assert.Equal(defaultDataRoot, paths.DataRoot);
+            Assert.Equal(Path.Combine(defaultDataRoot, "logs"), paths.LogRoot);
+            Assert.True(Directory.Exists(paths.DataRoot));
+            Assert.True(Directory.Exists(paths.LogRoot));
+            Assert.True(Directory.Exists(Path.GetDirectoryName(paths.CommandJournalPath)));
+        }
+        finally
+        {
+            if (Directory.Exists(defaultDataRoot))
+                Directory.Delete(defaultDataRoot, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
     public void EmptyLogRoot_UsesDataRootLogsDirectory(string? configuredLogRoot)
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), $"rr-hostworker-paths-{Guid.NewGuid():N}");
