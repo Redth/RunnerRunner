@@ -253,6 +253,8 @@ services:
       - Kestrel__Endpoints__HostWorkerGrpc__Protocols=Http2
       - OTEL_SERVICE_NAME=runnerrunner-server
       - DOTNET_ENVIRONMENT=Production
+      - Logging__Console__FormatterName=${LOGGING_CONSOLE_FORMATTER_NAME:-simple}
+      - Logging__Console__IncludeScopes=${LOGGING_CONSOLE_INCLUDE_SCOPES:-false}
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP}
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
@@ -277,6 +279,8 @@ services:
       - HostWorker__Platform=Linux
       - HostWorker__DataRoot=/var/lib/runnerrunner
       - DOTNET_ENVIRONMENT=Production
+      - Logging__Console__FormatterName=${LOGGING_CONSOLE_FORMATTER_NAME:-simple}
+      - Logging__Console__IncludeScopes=${LOGGING_CONSOLE_INCLUDE_SCOPES:-false}
     depends_on:
       server:
         condition: service_started
