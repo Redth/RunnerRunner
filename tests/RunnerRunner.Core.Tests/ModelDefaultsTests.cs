@@ -113,6 +113,23 @@ public class ModelDefaultsTests
     }
 
     [Fact]
+    public void ObservedLogEntry_DefaultsToServerInformation()
+    {
+        var before = DateTimeOffset.UtcNow;
+
+        var entry = new ObservedLogEntry();
+
+        Assert.False(string.IsNullOrEmpty(entry.Id));
+        Assert.Equal(ObservedLogSourceType.Server, entry.SourceType);
+        Assert.Equal("server", entry.SourceId);
+        Assert.Equal("Server", entry.SourceName);
+        Assert.Equal(ObservedLogStreamKind.Application, entry.StreamKind);
+        Assert.Equal(ObservedLogLevel.Information, entry.Level);
+        Assert.True(entry.Timestamp >= before);
+        Assert.Empty(entry.Tags);
+    }
+
+    [Fact]
     public void WebhookEvent_ScheduleRetry_TracksAttemptsAndNextRetry()
     {
         var now = new DateTime(2026, 4, 13, 19, 30, 0, DateTimeKind.Utc);

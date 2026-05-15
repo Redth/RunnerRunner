@@ -261,7 +261,16 @@ public sealed class LongRunningTaskInfo
 
 public enum LongRunningTaskKind
 {
-    ImagePull
+    ImagePull,
+    RunnerDeployment,
+    RunnerTeardown,
+    HostWorkerUpdate,
+    AgentDownload,
+    InitStep,
+    TartVmSetup,
+    Cleanup,
+    Reconciliation,
+    ProviderRegistration
 }
 
 public enum LongRunningTaskStatus

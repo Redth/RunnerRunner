@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using RunnerRunner.Agent.Services;
 using RunnerRunner.HostWorker;
 using RunnerRunner.HostWorker.Services;
@@ -20,6 +21,8 @@ builder.Services.Configure<HostOptions>(options =>
 builder.Services.AddSingleton(_ => HostWorkerIdentityResolver.Resolve(builder.Configuration));
 builder.Services.AddSingleton<HostWorkerPaths>();
 builder.Services.AddSingleton<HostWorkerLocalLogStore>();
+builder.Services.AddSingleton<HostWorkerLogPublisher>();
+builder.Services.AddSingleton<ILoggerProvider, HostWorkerObservedLoggerProvider>();
 builder.Services.AddSingleton<HostWorkerSelfUpdater>();
 builder.Services.AddSingleton<RunnerLifecycleManager>();
 builder.Services.AddSingleton<HealthReporter>();

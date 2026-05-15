@@ -257,7 +257,7 @@
                 </td>
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td>
-                    <a href="/logs?source=agent:@host.Name" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
+                    <a href="/logs?source=host:@host.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
                     <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleConfigure(host)" title="Configure capabilities & resources">
                         <i class="bi bi-gear"></i> Configure
                     </button>

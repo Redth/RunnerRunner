@@ -4,14 +4,13 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Services
-@using RunnerRunner.Server.Services.HostWorkers
+@using RunnerRunner.Server.Services.Logs
 @using Microsoft.AspNetCore.Components
 @inject IDocumentStore Store
 @inject NavigationManager Nav
 @inject IJSRuntime JS
-@inject IGrainFactory GrainFactory
 @inject IHostCommandDispatcher HostCommandDispatcher
-@inject HostWorkerLogCache HostWorkerLogCache
+@inject ObservedLogQueryService LogQuery
 @implements IDisposable
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
@@ -21,132 +20,190 @@
     </div>
 </SectionContent>
 
-<div class="split-pane-container d-flex" style="height: calc(100vh - 120px);">
-    @* Left sidebar *@
-    <div id="logs-sidebar" class="split-pane-sidebar d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
-        @* Server card *@
-        <div class="log-source-card @(selectedSource == "server" ? "active" : "")"
-             @onclick='() => SelectSource("server")'>
-            <div class="d-flex align-items-center">
-                <i class="bi bi-hdd-rack-fill me-2 text-primary"></i>
-                <strong>Server</strong>
-            </div>
-            <small class="text-muted">Overview &amp; status</small>
-        </div>
+<div class="logs-console d-flex">
+    <div id="logs-sidebar" class="logs-sidebar d-flex flex-column">
+        <button type="button" class="log-source-card @(selectedSourceId == "all" ? "active" : "")" @onclick='() => SelectSource("all")'>
+            <span><i class="bi bi-collection me-2 text-primary"></i><strong>All logs</strong></span>
+            <small>Server, hosts, runners, tasks</small>
+        </button>
 
-        @* Agents section *@
-        <div class="sidebar-section-header mt-2">
-            <i class="bi bi-pc-display me-1"></i> Hosts
-            <span class="badge bg-secondary ms-auto">@hosts.Count</span>
-        </div>
-        @foreach (var h in hosts)
-        {
-            var src = $"host:{h.Name}";
-            <div class="log-source-card @(selectedSource == src ? "active" : "")"
-                 @onclick="() => SelectSource(src)">
-                <div class="d-flex align-items-center">
-                    <i class="bi @GetPlatformIcon(h.Platform) me-2"></i>
-                    <span class="text-truncate">@h.Label</span>
-                    <span class="badge ms-auto @GetStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
-                </div>
-                @if (!string.IsNullOrWhiteSpace(h.DisplayName))
-                {
-                    <small class="text-muted text-truncate d-block" style="font-size: 0.7rem;">@h.Name</small>
-                }
-            </div>
-        }
-
-        @* Runners section *@
-        @if (runnerInstances.Any())
+        @foreach (var group in GroupedSources)
         {
             <div class="sidebar-section-header mt-2">
-                <i class="bi bi-lightning-charge me-1"></i> Runners
-                <span class="badge bg-secondary ms-auto">@runnerInstances.Count</span>
+                <i class="bi @GroupIcon(group.Key) me-1"></i> @GroupTitle(group.Key)
+                <span class="badge bg-secondary ms-auto">@group.Count()</span>
             </div>
-            @foreach (var inst in runnerInstances)
+            @foreach (var source in group)
             {
-                var src = $"runner:{inst.Id}";
-                <div class="log-source-card @(selectedSource == src ? "active" : "")"
-                     @onclick="() => SelectSource(src)">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-lightning-charge me-2"></i>
-                        <span class="text-truncate">@inst.RunnerName</span>
-                        <span class="badge ms-auto @GetRunnerStatusBadge(inst.Status)" style="font-size: 0.65rem;">@inst.Status</span>
-                    </div>
-                    <small class="text-muted text-truncate d-block" style="font-size: 0.7rem;">@(hostNames.GetValueOrDefault(inst.HostId, "?"))</small>
-                </div>
+                <button type="button" class="log-source-card @(selectedSourceId == source.SourceId ? "active" : "")" @onclick="() => SelectSource(source.SourceId)">
+                    <span class="d-flex align-items-center gap-2">
+                        <i class="bi @SourceIcon(source)"></i>
+                        <span class="text-truncate">@source.Name</span>
+                        @if (source.IsOnline)
+                        {
+                            <span class="source-dot online ms-auto"></span>
+                        }
+                        else
+                        {
+                            <span class="source-dot ms-auto"></span>
+                        }
+                    </span>
+                    @if (!string.IsNullOrWhiteSpace(source.Description))
+                    {
+                        <small class="text-truncate">@source.Description</small>
+                    }
+                </button>
             }
         }
     </div>
 
-    @* Resize handle *@
     <div id="logs-resize-handle" class="split-resize-handle"></div>
 
-    @* Main content *@
-    <div class="split-pane-main flex-grow-1 d-flex flex-column" style="min-width: 0;">
-        @* Toolbar *@
-        <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-            <div class="input-group" style="max-width: 250px;">
+    <div class="logs-main flex-grow-1 d-flex flex-column">
+        <div class="logs-toolbar">
+            <div class="input-group input-group-sm logs-search">
                 <span class="input-group-text"><i class="bi bi-search"></i></span>
-                <input type="text" class="form-control form-control-sm" placeholder="Search in logs..."
-                       @bind="searchQuery" @bind:event="oninput" @bind:after="DoSearch" />
+                <input type="text" class="form-control" placeholder="Search logs..." @bind="searchQuery" @bind:event="oninput" @bind:after="FetchLogs" />
             </div>
-            <div class="d-flex align-items-center gap-1">
-                <button class="btn btn-sm btn-outline-secondary" @onclick="SearchPrevious" title="Previous match" disabled="@string.IsNullOrEmpty(searchQuery)">
-                    <i class="bi bi-chevron-up"></i>
-                </button>
-                <button class="btn btn-sm btn-outline-secondary" @onclick="SearchNext" title="Next match" disabled="@string.IsNullOrEmpty(searchQuery)">
-                    <i class="bi bi-chevron-down"></i>
-                </button>
-            </div>
-            <select class="form-select form-select-sm" style="width: auto;" @bind="tailLines">
-                <option value="50">50 lines</option>
+
+            <select class="form-select form-select-sm" @bind="minimumLevel" @bind:after="FetchLogs">
+                <option value="">All levels</option>
+                @foreach (var level in LogLevels)
+                {
+                    <option value="@level">@level</option>
+                }
+            </select>
+
+            <select class="form-select form-select-sm" @bind="streamKind" @bind:after="FetchLogs">
+                <option value="">All streams</option>
+                @foreach (var kind in StreamKinds)
+                {
+                    <option value="@kind">@kind</option>
+                }
+            </select>
+
+            <input class="form-control form-control-sm logs-category" placeholder="Category" @bind="categoryFilter" @bind:event="oninput" @bind:after="FetchLogs" />
+
+            <select class="form-select form-select-sm" @bind="tailLines" @bind:after="FetchLogs">
                 <option value="100">100 lines</option>
-                <option value="200">200 lines</option>
+                <option value="250">250 lines</option>
                 <option value="500">500 lines</option>
                 <option value="1000">1000 lines</option>
+                <option value="2000">2000 lines</option>
             </select>
-            <button class="btn btn-sm btn-primary" @onclick="FetchLogs" disabled="@isLoading">
+
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ToggleFollow" title="Auto-refresh">
+                <i class="bi @(followLogs ? "bi-pause-fill" : "bi-play-fill")"></i>
+                @(followLogs ? "Pause" : "Follow")
+            </button>
+            <button type="button" class="btn btn-sm btn-primary" @onclick="FetchLogs" disabled="@isLoading">
                 <i class="bi bi-arrow-clockwise me-1"></i> Refresh
             </button>
             @if (isLoading)
             {
                 <span class="spinner-border spinner-border-sm text-primary"></span>
             }
-            <span class="ms-auto text-muted" style="font-size: 0.75rem;">
-                @if (!string.IsNullOrEmpty(lastFetchTime))
-                {
-                    <i class="bi bi-clock me-1"></i>@lastFetchTime
-                }
-            </span>
         </div>
 
-        @* Terminal container *@
-        <div class="flex-grow-1 rounded overflow-hidden border" style="min-height: 300px;">
-            <div id="rr-terminal" style="width: 100%; height: 100%;"></div>
+        <div class="logs-summary">
+            <span><i class="bi bi-funnel me-1"></i>@SelectedSourceName</span>
+            <span>@lastResultCount matched</span>
+            @if (lastResultWasTruncated)
+            {
+                <span class="text-warning">tail truncated</span>
+            }
+            @if (!string.IsNullOrEmpty(lastFetchTime))
+            {
+                <span class="ms-auto"><i class="bi bi-clock me-1"></i>@lastFetchTime</span>
+            }
         </div>
-        <div class="text-muted mt-2" style="font-size: 0.75rem;">
-            Host and runner logs are loaded on demand from HostWorker when available.
+
+        <div class="logs-terminal flex-grow-1">
+            <div id="rr-terminal"></div>
         </div>
     </div>
 </div>
 
 <style>
+    .logs-console {
+        height: calc(100vh - 120px);
+        min-height: 520px;
+    }
+    .logs-sidebar {
+        width: 320px;
+        min-width: 220px;
+        max-width: 560px;
+        overflow-y: auto;
+        padding-right: 0.25rem;
+    }
+    .logs-main {
+        min-width: 0;
+    }
+    .logs-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .logs-toolbar .form-select {
+        width: auto;
+    }
+    .logs-search {
+        max-width: 300px;
+    }
+    .logs-category {
+        width: 180px;
+    }
+    .logs-summary {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        color: var(--text-secondary);
+        font-size: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    .logs-terminal {
+        min-height: 320px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        background: #1a1b26;
+        box-shadow: var(--shadow-sm);
+    }
+    #rr-terminal {
+        width: 100%;
+        height: 100%;
+    }
+    #rr-terminal .xterm-screen {
+        padding: 0.75rem;
+    }
     .log-source-card {
-        padding: 0.5rem 0.75rem;
-        border-radius: 6px;
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        color: var(--text-primary);
+        padding: 0.55rem 0.75rem;
+        border-radius: var(--radius-md);
         cursor: pointer;
-        transition: background 0.15s;
+        transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
         border: 1px solid transparent;
         margin-bottom: 2px;
     }
     .log-source-card:hover {
-        background: var(--bg-secondary, #f0f0f0);
+        background: var(--bg-hover);
     }
     .log-source-card.active {
-        background: var(--bg-tertiary, #e8e8e8);
-        border-color: var(--bs-primary);
-        box-shadow: inset 3px 0 0 var(--bs-primary);
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .log-source-card small {
+        display: block;
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        margin-top: 0.1rem;
     }
     .sidebar-section-header {
         display: flex;
@@ -156,7 +213,18 @@
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: var(--text-muted, #6c757d);
+        color: var(--text-secondary);
+    }
+    .source-dot {
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 999px;
+        background: var(--text-tertiary);
+        flex: 0 0 auto;
+    }
+    .source-dot.online {
+        background: var(--success);
+        box-shadow: 0 0 0 3px var(--success-soft);
     }
     .split-resize-handle {
         width: 6px;
@@ -165,87 +233,95 @@
         transition: background 0.15s;
         flex-shrink: 0;
         border-radius: 3px;
-        margin: 0 2px;
+        margin: 0 4px;
     }
     .split-resize-handle:hover, .split-resize-handle:active {
-        background: var(--bs-primary);
-        opacity: 0.4;
-    }
-    /* Terminal internal padding */
-    #rr-terminal .xterm-screen {
-        padding: 0.75rem;
-    }
-    #rr-terminal {
-        background: #1a1b26;
+        background: var(--accent);
+        opacity: 0.5;
     }
 </style>
 
 @code {
     private List<Host> hosts = [];
     private List<RunnerInstance> runnerInstances = [];
-    private Dictionary<string, string> hostNames = [];
-    private string selectedSource = "server";
-    private int tailLines = 100;
-    private string logContent = "";
+    private IReadOnlyList<ObservedLogSource> sources = [];
+    private string selectedSourceId = "all";
+    private int tailLines = 250;
     private bool isLoading;
     private bool termInitialized;
+    private bool followLogs;
     private string searchQuery = "";
+    private string categoryFilter = "";
+    private string? minimumLevel;
+    private string? streamKind;
     private string lastFetchTime = "";
-    private TaskCompletionSource<string>? _hostLogsTcs;
-    private TaskCompletionSource<string>? _runnerLogsTcs;
+    private int lastResultCount;
+    private bool lastResultWasTruncated;
+    private PeriodicTimer? followTimer;
+    private CancellationTokenSource? followCts;
+    private TaskCompletionSource<string>? hostLogsTcs;
+    private TaskCompletionSource<string>? runnerLogsTcs;
+
+    private static readonly ObservedLogLevel[] LogLevels =
+    [
+        ObservedLogLevel.Trace,
+        ObservedLogLevel.Debug,
+        ObservedLogLevel.Information,
+        ObservedLogLevel.Warning,
+        ObservedLogLevel.Error,
+        ObservedLogLevel.Critical
+    ];
+
+    private static readonly ObservedLogStreamKind[] StreamKinds = Enum.GetValues<ObservedLogStreamKind>();
+
+    private IEnumerable<IGrouping<ObservedLogSourceType, ObservedLogSource>> GroupedSources =>
+        sources
+            .Where(s => s.SourceId != "all")
+            .GroupBy(s => s.SourceType)
+            .OrderBy(g => GroupOrder(g.Key));
+
+    private string SelectedSourceName =>
+        selectedSourceId == "all"
+            ? "All logs"
+            : sources.FirstOrDefault(s => s.SourceId == selectedSourceId)?.Name ?? selectedSourceId;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadSources();
         StreamSubscriptionService.OnHostLogsReceived += OnHostLogsReceived;
         StreamSubscriptionService.OnRunnerLogsReceived += OnRunnerLogsReceived;
+        await LoadSources();
 
-        // Check for query string parameter
         var uri = new Uri(Nav.Uri);
         var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-        var source = query["source"];
-        if (!string.IsNullOrEmpty(source))
-            selectedSource = source;
+        selectedSourceId = NormalizeSource(query["source"]);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-        {
-            await InitTerminal();
-            await JS.InvokeVoidAsync("rrSplitPane.init", "logs-resize-handle", "logs-sidebar", "rr-logs-sidebar-width", 180, 500);
-            await FetchLogs();
-        }
+        if (!firstRender)
+            return;
+
+        termInitialized = await JS.InvokeAsync<bool>("rrTerminal.init", "rr-terminal", new { darkMode = true });
+        await JS.InvokeVoidAsync("rrSplitPane.init", "logs-resize-handle", "logs-sidebar", "rr-logs-sidebar-width", 220, 560);
+        await FetchLogs();
     }
 
-    private async Task InitTerminal()
+    private async Task LoadSources()
     {
-        try
-        {
-            var isDark = true; // default to dark for terminal
-            termInitialized = await JS.InvokeAsync<bool>("rrTerminal.init", "rr-terminal", new { darkMode = isDark });
-        }
-        catch { termInitialized = false; }
+        hosts = (await Store.Query<Host>().ToList())
+            .OrderByDescending(h => h.AgentStatus == AgentStatus.Online)
+            .ThenBy(h => h.Label)
+            .ToList();
+        runnerInstances = (await Store.Query<RunnerInstance>().ToList())
+            .Where(CapacityPlanningService.IsRunnerRunnerManaged)
+            .OrderBy(r => r.RunnerName)
+            .ToList();
+        sources = await LogQuery.GetSourcesAsync();
     }
 
-    private async Task WriteToTerminal(string text)
+    private async Task SelectSource(string sourceId)
     {
-        if (!termInitialized) return;
-        try
-        {
-            await JS.InvokeVoidAsync("rrTerminal.clear", "rr-terminal");
-            // Write line by line for proper rendering
-            foreach (var line in text.Split('\n'))
-            {
-                await JS.InvokeVoidAsync("rrTerminal.writeln", "rr-terminal", line);
-            }
-        }
-        catch { /* JS interop may fail during disposal */ }
-    }
-
-    private async Task SelectSource(string source)
-    {
-        selectedSource = source;
+        selectedSourceId = sourceId;
         await FetchLogs();
     }
 
@@ -257,29 +333,21 @@
         try
         {
             await LoadSources();
+            var directTail = await RequestLiveTailIfNeeded();
 
-            if (selectedSource == "server")
-            {
-                logContent = await GetServerLogsAsync();
-            }
-            else if (selectedSource.StartsWith("host:"))
-            {
-                var hostName = selectedSource["host:".Length..];
-                logContent = await GetAgentLogsAsync(hostName);
-            }
-            else if (selectedSource.StartsWith("runner:"))
-            {
-                var instanceId = selectedSource["runner:".Length..];
-                logContent = await GetRunnerLogsAsync(instanceId);
-            }
-
+            var result = await LogQuery.QueryAsync(BuildQuery());
+            lastResultCount = result.TotalMatched;
+            lastResultWasTruncated = result.IsTruncated;
             lastFetchTime = DateTime.Now.ToString("HH:mm:ss");
-            await WriteToTerminal(logContent);
+
+            var text = result.Entries.Count == 0
+                ? string.IsNullOrWhiteSpace(directTail) ? BuildEmptyMessage() : directTail
+                : string.Join('\n', result.Entries.Select(FormatEntry));
+            await WriteToTerminal(text);
         }
         catch (Exception ex)
         {
-            logContent = $"Error fetching logs: {ex.Message}";
-            await WriteToTerminal(logContent);
+            await WriteToTerminal($"\x1b[31mError loading logs: {ex.Message}\x1b[0m");
         }
         finally
         {
@@ -288,299 +356,214 @@
         }
     }
 
-    private async Task DoSearch()
+    private ObservedLogQuery BuildQuery()
     {
-        if (!termInitialized || string.IsNullOrEmpty(searchQuery)) return;
-        try { await JS.InvokeAsync<bool>("rrTerminal.search", "rr-terminal", searchQuery); }
-        catch { }
-    }
-
-    private async Task SearchNext()
-    {
-        if (!termInitialized || string.IsNullOrEmpty(searchQuery)) return;
-        try { await JS.InvokeAsync<bool>("rrTerminal.search", "rr-terminal", searchQuery); }
-        catch { }
-    }
-
-    private async Task SearchPrevious()
-    {
-        if (!termInitialized || string.IsNullOrEmpty(searchQuery)) return;
-        try { await JS.InvokeAsync<bool>("rrTerminal.searchPrevious", "rr-terminal", searchQuery); }
-        catch { }
-    }
-
-    private async Task<string> GetRunnerLogsAsync(string instanceId)
-    {
-        var instance = runnerInstances.FirstOrDefault(i => i.Id == instanceId);
-        if (instance == null) return "\x1b[31mRunner instance not found.\x1b[0m";
-
-        var host = hosts.FirstOrDefault(h => h.Id == instance.HostId);
-        if (host == null) return "\x1b[31mHost not found.\x1b[0m";
-
-        if (host.AgentStatus != AgentStatus.Online)
+        var query = new ObservedLogQuery
         {
-            var cached = GetCachedRunnerLogs(host.Id, instance);
-            if (!string.IsNullOrWhiteSpace(cached))
-                return cached;
+            Tail = tailLines,
+            SearchText = string.IsNullOrWhiteSpace(searchQuery) ? null : searchQuery,
+            Category = string.IsNullOrWhiteSpace(categoryFilter) ? null : categoryFilter,
+            MinimumLevel = Enum.TryParse<ObservedLogLevel>(minimumLevel, out var level) ? level : null,
+            StreamKind = Enum.TryParse<ObservedLogStreamKind>(streamKind, out var kind) ? kind : null
+        };
 
-            var lines = new List<string>
+        var source = sources.FirstOrDefault(s => s.SourceId == selectedSourceId);
+        if (source == null || selectedSourceId == "all")
+            return query;
+
+        query.SourceId = source.SourceId;
+        query.SourceType = source.SourceType;
+        query.HostId = source.HostId;
+        query.RunnerInstanceId = source.RunnerInstanceId;
+        query.TaskId = source.TaskId;
+        return query;
+    }
+
+    private async Task<string?> RequestLiveTailIfNeeded()
+    {
+        var source = sources.FirstOrDefault(s => s.SourceId == selectedSourceId);
+        if (source?.SourceType == ObservedLogSourceType.Host && source.HostId != null)
+        {
+            var host = hosts.FirstOrDefault(h => h.Id == source.HostId);
+            if (host?.AgentStatus == AgentStatus.Online)
             {
-                $"\x1b[1;36m=== Runner: {instance.RunnerName} ===\x1b[0m",
-                $"\x1b[90mHost: {host.Label}\x1b[0m",
-                $"Status: \x1b[1m{instance.Status}\x1b[0m",
-                $"Mode: {GetModeLabel(instance)}",
-            };
-
-            if (!string.IsNullOrWhiteSpace(instance.StatusMessage))
-                lines.Add($"Detail: {instance.StatusMessage}");
-
-            lines.Add("");
-            lines.Add("\x1b[33mDirect live log streaming is unavailable because this HostWorker is offline.\x1b[0m");
-            lines.Add("\x1b[90mThe runner is tracked by the Orleans lifecycle model, but live log streaming requires an online HostWorker.\x1b[0m");
-            lines.Add("");
-            lines.AddRange(GetManualLogHints(host, instance));
-            return string.Join("\n", lines);
+                hostLogsTcs = new TaskCompletionSource<string>();
+                await HostCommandDispatcher.DispatchGetHostLogsAsync(host.Id, new GetHostLogsCommand { TailLines = tailLines });
+                var completed = await Task.WhenAny(hostLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(4)));
+                if (completed == hostLogsTcs.Task)
+                    return await hostLogsTcs.Task;
+            }
+        }
+        else if (source?.SourceType == ObservedLogSourceType.Runner && source.RunnerInstanceId != null)
+        {
+            var runner = runnerInstances.FirstOrDefault(r => r.Id == source.RunnerInstanceId);
+            var host = runner == null ? null : hosts.FirstOrDefault(h => h.Id == runner.HostId);
+            if (runner != null && host?.AgentStatus == AgentStatus.Online)
+            {
+                var handle = runner.ContainerId ?? runner.VmName ?? runner.ProcessId?.ToString() ?? runner.RunnerName;
+                runnerLogsTcs = new TaskCompletionSource<string>();
+                await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines });
+                var completed = await Task.WhenAny(runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(4)));
+                if (completed == runnerLogsTcs.Task)
+                    return await runnerLogsTcs.Task;
+            }
         }
 
-        var handle = instance.ContainerId ?? instance.RunnerName;
-        _runnerLogsTcs = new TaskCompletionSource<string>();
-        var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines };
+        return null;
+    }
 
-        await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
+    private async Task WriteToTerminal(string text)
+    {
+        if (!termInitialized)
+            return;
 
-        var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
-        if (completedTask == _runnerLogsTcs.Task)
-            return await _runnerLogsTcs.Task;
+        await JS.InvokeVoidAsync("rrTerminal.clear", "rr-terminal");
+        foreach (var line in text.Split('\n'))
+            await JS.InvokeVoidAsync("rrTerminal.writeln", "rr-terminal", line.TrimEnd('\r'));
+    }
 
-        var cachedTail = GetCachedRunnerLogs(host.Id, instance);
-        return !string.IsNullOrWhiteSpace(cachedTail)
-            ? cachedTail
-            : $"\x1b[33mTimeout waiting for logs from host.\x1b[0m";
+    private string BuildEmptyMessage()
+    {
+        var source = sources.FirstOrDefault(s => s.SourceId == selectedSourceId);
+        if (source?.SourceType == ObservedLogSourceType.Server)
+            return "\x1b[33mNo server logs captured yet.\x1b[0m\n\x1b[90mNew application logs will appear here as the server writes through ILogger.\x1b[0m";
+        if (source?.SourceType == ObservedLogSourceType.Host && !source.IsOnline)
+            return "\x1b[33mHost is offline.\x1b[0m\n\x1b[90mCached HostWorker frames will appear here when available.\x1b[0m";
+        if (source?.SourceType == ObservedLogSourceType.Runner)
+            return "\x1b[33mNo runner logs are cached yet.\x1b[0m\n\x1b[90mRefresh while the host is online to request a live tail from the HostWorker.\x1b[0m";
+        return "\x1b[90mNo logs matched the current filters.\x1b[0m";
+    }
+
+    private static string FormatEntry(ObservedLogEntry entry)
+    {
+        var color = entry.Level switch
+        {
+            ObservedLogLevel.Trace or ObservedLogLevel.Debug => "\x1b[90m",
+            ObservedLogLevel.Warning => "\x1b[33m",
+            ObservedLogLevel.Error or ObservedLogLevel.Critical => "\x1b[31m",
+            _ => "\x1b[0m"
+        };
+        var source = entry.SourceName;
+        var category = string.IsNullOrWhiteSpace(entry.Category) ? "" : $" \x1b[90m{entry.Category}\x1b[0m";
+        var message = string.IsNullOrWhiteSpace(entry.RenderedMessage) ? entry.Message : entry.RenderedMessage;
+        return $"{color}{entry.Timestamp.LocalDateTime:HH:mm:ss.fff} {entry.Level,-11}\x1b[0m \x1b[36m{source}\x1b[0m{category} {message}";
+    }
+
+    private string NormalizeSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+            return "all";
+        if (source.Equals("server", StringComparison.OrdinalIgnoreCase))
+            return "server";
+        if (source.StartsWith("agent:", StringComparison.OrdinalIgnoreCase))
+            source = "host:" + source["agent:".Length..];
+        if (source.StartsWith("host:", StringComparison.OrdinalIgnoreCase))
+        {
+            var value = source["host:".Length..];
+            var host = hosts.FirstOrDefault(h =>
+                string.Equals(h.Id, value, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(h.Name, value, StringComparison.OrdinalIgnoreCase));
+            return host == null ? "all" : $"host:{host.Id}";
+        }
+        if (source.StartsWith("runner:", StringComparison.OrdinalIgnoreCase))
+        {
+            var value = source["runner:".Length..];
+            return runnerInstances.Any(r => string.Equals(r.Id, value, StringComparison.OrdinalIgnoreCase))
+                ? $"runner:{value}"
+                : "all";
+        }
+        if (source.StartsWith("task:", StringComparison.OrdinalIgnoreCase))
+            return source;
+        return source;
+    }
+
+    private async Task ToggleFollow()
+    {
+        followLogs = !followLogs;
+        if (followLogs)
+        {
+            followCts = new CancellationTokenSource();
+            followTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+            _ = RunFollowLoopAsync(followCts.Token);
+        }
+        else
+        {
+            followCts?.Cancel();
+            followTimer?.Dispose();
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task RunFollowLoopAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (followTimer != null && await followTimer.WaitForNextTickAsync(ct))
+                await InvokeAsync(FetchLogs);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void OnHostLogsReceived(HostLogsEvent evt)
+    {
+        hostLogsTcs?.TrySetResult(evt.Logs ?? "");
     }
 
     private void OnRunnerLogsReceived(RunnerLogsEvent evt)
     {
-        _runnerLogsTcs?.TrySetResult(evt.Logs ?? "(empty)");
-        InvokeAsync(StateHasChanged);
+        runnerLogsTcs?.TrySetResult(evt.Logs ?? "");
     }
 
-    private Task<string> GetServerLogsAsync()
+    private static int GroupOrder(ObservedLogSourceType sourceType) => sourceType switch
     {
-        var lines = new List<string>();
-        lines.Add("\x1b[1;36m=== RunnerRunner Server Status ===\x1b[0m");
-        lines.Add($"\x1b[90mTimestamp: {DateTime.UtcNow:u}\x1b[0m");
-        lines.Add("");
-
-        var onlineHosts = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
-
-        lines.Add($"\x1b[1mHosts online in cluster:\x1b[0m {onlineHosts}/{hosts.Count}");
-        lines.Add($"\x1b[1mLive HostWorker log sources:\x1b[0m {onlineHosts}");
-        lines.Add("");
-
-        foreach (var host in hosts.OrderBy(h => h.Label))
-        {
-            var lastHb = host.LastHeartbeat?.ToString("HH:mm:ss") ?? "never";
-            var runners = runnerInstances.Count(i => i.HostId == host.Id);
-            var statusColor = host.AgentStatus == AgentStatus.Online ? "\x1b[32m" : "\x1b[90m";
-            var bridge = host.AgentStatus == AgentStatus.Online ? "live logs available" : "summary only";
-            lines.Add($"  {statusColor}●\x1b[0m {host.Label} \x1b[90m({host.Platform} {host.Architecture})\x1b[0m — heartbeat: {lastHb}, runners: \x1b[1m{runners}\x1b[0m, log access: {bridge}");
-        }
-
-        if (!hosts.Any())
-            lines.Add("  \x1b[33mNo hosts registered\x1b[0m");
-
-        lines.Add("");
-        lines.Add("\x1b[90mFor full server container logs:\x1b[0m");
-        lines.Add("\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs server --tail 100'\x1b[0m");
-
-        return Task.FromResult(string.Join("\n", lines));
-    }
-
-    private async Task<string> GetAgentLogsAsync(string hostName)
-    {
-        var host = hosts.FirstOrDefault(h => h.Name == hostName);
-        if (host == null) return "\x1b[31mHost not found.\x1b[0m";
-
-        var lines = new List<string>();
-        lines.Add($"\x1b[1;36m=== Host: {host.Label} ===\x1b[0m");
-        lines.Add($"\x1b[90mPlatform: {host.Platform} {host.Architecture}\x1b[0m");
-        lines.Add($"Status: {(host.AgentStatus == AgentStatus.Online ? "\x1b[32m" : "\x1b[33m")}{host.AgentStatus}\x1b[0m");
-        lines.Add($"Last heartbeat: {host.LastHeartbeat?.ToString("u") ?? "never"}");
-        if (host.Capabilities.Any())
-            lines.Add($"Capabilities: \x1b[90m{string.Join(", ", host.Capabilities)}\x1b[0m");
-        lines.Add("");
-
-        if (host.AgentStatus == AgentStatus.Online)
-        {
-            lines.Add($"\x1b[1mLive host log tail:\x1b[0m last {tailLines} lines");
-            lines.Add("\x1b[90mLoaded on demand from HostWorker.\x1b[0m");
-            lines.Add("");
-
-            var liveLogs = await RequestHostLogsAsync(host);
-            if (!string.IsNullOrWhiteSpace(liveLogs))
-                lines.Add(liveLogs);
-
-            lines.Add("");
-        }
-        else
-        {
-            lines.Add("\x1b[33mDirect live host log streaming is unavailable because this HostWorker is offline.\x1b[0m");
-            lines.Add("\x1b[90mThis host is registered with the cluster, but live log streaming requires an online HostWorker.\x1b[0m");
-            var cachedTail = HostWorkerLogCache.GetTextTail(host.Id, "worker.process", tailLines);
-            if (!string.IsNullOrWhiteSpace(cachedTail))
-            {
-                lines.Add("");
-                lines.Add($"\x1b[1mCached host log tail:\x1b[0m last {tailLines} frames retained by the server");
-                lines.Add(cachedTail);
-            }
-            lines.Add("");
-        }
-
-        var instances = (await Store.Query<RunnerInstance>().ToList())
-            .Where(i => IsManagedInstance(i) && i.HostId == host.Id)
-            .ToList();
-
-        if (instances.Count > 0)
-        {
-            lines.Add($"\x1b[1mRunner instances:\x1b[0m {instances.Count}");
-            foreach (var inst in instances.OrderByDescending(i => i.StartedAt ?? i.CreatedAt))
-            {
-                var statusIcon = inst.Status == RunnerInstanceStatus.Running ? "\x1b[32m●\x1b[0m" :
-                                 inst.Status == RunnerInstanceStatus.Failed ? "\x1b[31m●\x1b[0m" : "\x1b[90m●\x1b[0m";
-                var cid = inst.ContainerId?[..Math.Min(12, inst.ContainerId?.Length ?? 0)] ?? "—";
-                lines.Add($"  {statusIcon} {inst.RunnerName} — \x1b[1m{inst.Status}\x1b[0m (started: {inst.StartedAt?.ToString("HH:mm:ss") ?? "—"}, container: \x1b[90m{cid}\x1b[0m)");
-                if (inst.ErrorMessage != null)
-                    lines.Add($"    \x1b[31mError: {inst.ErrorMessage}\x1b[0m");
-            }
-        }
-        else
-        {
-            lines.Add("\x1b[90mNo runner instances on this host.\x1b[0m");
-        }
-
-        lines.Add("");
-        if (host.AgentStatus != AgentStatus.Online)
-            lines.AddRange(GetManualLogHints(host));
-
-        return string.Join("\n", lines);
-    }
-
-    private async Task LoadSources()
-    {
-        hosts = (await Store.Query<Host>().ToList())
-            .OrderByDescending(h => h.AgentStatus == AgentStatus.Online)
-            .ThenBy(h => h.Label)
-            .ToList();
-
-        hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
-
-        runnerInstances = (await Store.Query<RunnerInstance>().ToList())
-            .Where(i => IsManagedInstance(i) &&
-                        i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
-            .OrderBy(i => hostNames.GetValueOrDefault(i.HostId, i.HostId))
-            .ThenBy(i => i.RunnerName)
-            .ToList();
-
-        if (selectedSource.StartsWith("runner:") &&
-            !runnerInstances.Any(i => $"runner:{i.Id}" == selectedSource))
-        {
-            selectedSource = "server";
-        }
-    }
-
-    private static bool IsManagedInstance(RunnerInstance instance) =>
-        CapacityPlanningService.IsRunnerRunnerManaged(instance);
-
-    private async Task<string> RequestHostLogsAsync(Host host)
-    {
-        _hostLogsTcs = new TaskCompletionSource<string>();
-        await HostCommandDispatcher.DispatchGetHostLogsAsync(host.Id, new GetHostLogsCommand
-        {
-            TailLines = tailLines
-        });
-
-        var completedTask = await Task.WhenAny(_hostLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
-        if (completedTask == _hostLogsTcs.Task)
-            return await _hostLogsTcs.Task;
-
-        var cachedTail = HostWorkerLogCache.GetTextTail(host.Id, "worker.process", tailLines);
-        return !string.IsNullOrWhiteSpace(cachedTail)
-            ? cachedTail
-            : "\x1b[33mTimeout waiting for host logs.\x1b[0m";
-    }
-
-    private string GetCachedRunnerLogs(string hostId, RunnerInstance instance)
-    {
-        var streamId = GetRunnerLogStreamId(instance);
-        return HostWorkerLogCache.GetTextTail(hostId, streamId, tailLines);
-    }
-
-    private static string GetRunnerLogStreamId(RunnerInstance instance)
-        => $"runner.{instance.ContainerId ?? instance.RunnerName}";
-
-    private void OnHostLogsReceived(HostLogsEvent evt)
-    {
-        _hostLogsTcs?.TrySetResult(evt.Logs ?? "(empty)");
-        InvokeAsync(StateHasChanged);
-    }
-
-    private string GetModeLabel(RunnerInstance instance) =>
-        string.Equals(instance.ProvisioningMode, "dynamic", StringComparison.OrdinalIgnoreCase)
-            ? "Dynamic"
-            : "Static";
-
-    private IEnumerable<string> GetManualLogHints(Host host, RunnerInstance? instance = null)
-    {
-        var lines = new List<string> { "\x1b[90mManual log access:\x1b[0m" };
-
-        if (host.Platform == HostPlatform.Linux)
-        {
-            lines.Add($"\x1b[90m  ssh root@<linux-host> 'cd /opt/stacks/runnerrunner && docker compose logs server --tail {tailLines}'\x1b[0m");
-        }
-        else if (host.Platform == HostPlatform.MacOS)
-        {
-            lines.Add($"\x1b[90m  ssh <user>@{host.Name} 'tail -{tailLines} /tmp/runnerrunner-hostworker.log'\x1b[0m");
-        }
-        else
-        {
-            lines.Add("\x1b[90m  Check the local HostWorker service logs on the target machine.\x1b[0m");
-        }
-
-        if (instance != null)
-        {
-            lines.Add($"\x1b[90m  Runner: {instance.RunnerName} ({instance.Id})\x1b[0m");
-        }
-
-        return lines;
-    }
-
-    private string GetPlatformIcon(HostPlatform platform) => platform switch
-    {
-        HostPlatform.Linux => "bi-ubuntu",
-        HostPlatform.MacOS => "bi-apple",
-        HostPlatform.Windows => "bi-windows",
-        _ => "bi-pc-display"
+        ObservedLogSourceType.Server => 0,
+        ObservedLogSourceType.Grain => 1,
+        ObservedLogSourceType.Host => 2,
+        ObservedLogSourceType.Runner => 3,
+        ObservedLogSourceType.Task => 4,
+        _ => 9
     };
 
-    private string GetStatusBadge(AgentStatus status) => status switch
+    private static string GroupTitle(ObservedLogSourceType sourceType) => sourceType switch
     {
-        AgentStatus.Online => "bg-success",
-        AgentStatus.Connecting => "bg-warning",
-        _ => "bg-secondary"
+        ObservedLogSourceType.Server => "Server",
+        ObservedLogSourceType.Grain => "Grains",
+        ObservedLogSourceType.Host => "Hosts",
+        ObservedLogSourceType.Runner => "Runners",
+        ObservedLogSourceType.Task => "Tasks",
+        ObservedLogSourceType.Provider => "Providers",
+        ObservedLogSourceType.Command => "Commands",
+        _ => sourceType.ToString()
     };
 
-    private string GetRunnerStatusBadge(RunnerInstanceStatus status) => status switch
+    private static string GroupIcon(ObservedLogSourceType sourceType) => sourceType switch
     {
-        RunnerInstanceStatus.Running => "bg-success",
-        RunnerInstanceStatus.Starting => "bg-info",
-        RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed => "bg-danger",
-        _ => "bg-secondary"
+        ObservedLogSourceType.Server => "bi-hdd-rack-fill",
+        ObservedLogSourceType.Grain => "bi-diagram-3-fill",
+        ObservedLogSourceType.Host => "bi-pc-display",
+        ObservedLogSourceType.Runner => "bi-lightning-charge",
+        ObservedLogSourceType.Task => "bi-list-task",
+        _ => "bi-terminal"
+    };
+
+    private static string SourceIcon(ObservedLogSource source) => source.SourceType switch
+    {
+        ObservedLogSourceType.Server => "bi-hdd-rack-fill text-primary",
+        ObservedLogSourceType.Grain => "bi-diagram-3-fill text-info",
+        ObservedLogSourceType.Host => "bi-pc-display text-success",
+        ObservedLogSourceType.Runner => "bi-lightning-charge text-warning",
+        ObservedLogSourceType.Task => "bi-list-task text-primary",
+        _ => "bi-terminal"
     };
 
     public void Dispose()
     {
         StreamSubscriptionService.OnHostLogsReceived -= OnHostLogsReceived;
         StreamSubscriptionService.OnRunnerLogsReceived -= OnRunnerLogsReceived;
+        followCts?.Cancel();
+        followTimer?.Dispose();
         try { _ = JS.InvokeVoidAsync("rrTerminal.dispose", "rr-terminal"); }
         catch { }
     }

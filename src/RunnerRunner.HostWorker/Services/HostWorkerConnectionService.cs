@@ -14,6 +14,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
     private readonly HostWorkerIdentity _identity;
     private readonly HostCommandProcessor _processor;
     private readonly RunnerLifecycleManager _lifecycleManager;
+    private readonly HostWorkerLogPublisher _logPublisher;
     private readonly ILogger<HostWorkerConnectionService> _logger;
     private readonly Channel<HostWorkerMessage> _outbound = Channel.CreateBounded<HostWorkerMessage>(
         new BoundedChannelOptions(1_000)
@@ -29,14 +30,17 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         HostWorkerIdentity identity,
         HostCommandProcessor processor,
         RunnerLifecycleManager lifecycleManager,
+        HostWorkerLogPublisher logPublisher,
         ILogger<HostWorkerConnectionService> logger)
     {
         _configuration = configuration;
         _identity = identity;
         _processor = processor;
         _lifecycleManager = lifecycleManager;
+        _logPublisher = logPublisher;
         _logger = logger;
         _processor.AttachEventSink(this);
+        _logPublisher.AttachEventSink(this);
     }
 
     public ValueTask PublishAsync(HostWorkerMessage message, CancellationToken cancellationToken = default)
