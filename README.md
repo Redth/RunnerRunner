@@ -257,7 +257,7 @@ docker run -d \
 
 ### 1. Configure Provider Credentials
 
-Navigate to **Settings** in the web UI and add your CI provider credentials:
+Navigate to **Credentials** in the web UI and add your CI provider credentials. The Add Credential wizard starts with the credential type, then walks through the provider setup before collecting fields:
 
 | Provider | Required Fields |
 |---|---|

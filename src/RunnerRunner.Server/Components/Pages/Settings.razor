@@ -1,263 +1,35 @@
 @page "/settings"
 @rendermode InteractiveServer
-@using Shiny.DocumentDb
-@using RunnerRunner.Core.Models
-@inject IDocumentStore Store
-@inject IJSRuntime JS
 
 <PageTitle>Settings - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-gear-fill"></i> Settings</h1>
+        <span class="page-desc">Global application settings and links to configuration areas.</span>
     </div>
 </SectionContent>
 
-<h3 class="mt-4">Provider Credentials</h3>
-<p>Configure CI/CD provider credentials for runner registration.</p>
-
-<button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> Add Credential</button>
-
-@if (showForm)
-{
-    <div class="card mb-4">
-        <div class="card-body">
-            <h5 class="card-title">@(isEditing ? "Edit" : "Add") Provider Credential</h5>
-            <div class="row mb-3">
-                <div class="col-md-4">
-                    <label class="form-label">Name</label>
-                    <input class="form-control" @bind="editCred.Name" />
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Provider</label>
-                    <select class="form-select" @bind="editCred.Provider">
-                        @foreach (var p in Enum.GetValues<RunnerProvider>())
-                        {
-                            <option value="@p">@p</option>
-                        }
-                    </select>
-                </div>
+<div class="row g-3">
+    <div class="col-md-6 col-xl-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-key-fill me-2"></i>Provider Credentials</h5>
+                <p class="card-text">Add GitHub App, GitHub PAT, Gitea, and Azure DevOps credentials with guided setup flows.</p>
+                <a class="btn btn-outline-primary" href="credentials">
+                    <i class="bi bi-key me-1"></i> Open Credentials
+                </a>
             </div>
-
-            @if (editCred.Provider == RunnerProvider.GitHubActions)
-            {
-                <div class="row mb-3">
-                    <div class="col-md-4">
-                        <label class="form-label">GitHub Auth Type</label>
-                        <select class="form-select" @bind="editCred.GitHubAuthType">
-                            @foreach (var authType in Enum.GetValues<GitHubAuthType>())
-                            {
-                                <option value="@authType">@GetGitHubAuthTypeLabel(authType)</option>
-                            }
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">GitHub Org</label>
-                        <input class="form-control" @bind="editCred.GitHubOrg" />
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">GitHub Repo (optional)</label>
-                        <input class="form-control" @bind="editCred.GitHubRepo" />
-                    </div>
-                </div>
-
-                @if (editCred.GitHubAuthType == GitHubAuthType.PersonalAccessToken)
-                {
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label">GitHub Token (PAT)</label>
-                            <input type="password" class="form-control" @bind="editCred.GitHubToken" />
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">GitHub API URL (optional)</label>
-                            <input class="form-control" @bind="editCred.GitHubApiUrl" placeholder="https://api.github.com" />
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">GitHub Server URL (optional)</label>
-                            <input class="form-control" @bind="editCred.GitHubServerUrl" placeholder="https://github.com" />
-                        </div>
-                    </div>
-                }
-                else
-                {
-                    <div class="alert alert-info py-2">
-                        <i class="bi bi-info-circle me-1"></i>
-                        Configure the GitHub App webhook URL as <code>@GitHubWebhookUrl</code>, subscribe to <code>workflow_job</code>, and grant runner-management permissions.
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col-md-3">
-                            <label class="form-label">App ID</label>
-                            <input class="form-control" @bind="editCred.GitHubAppId" />
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Default Installation ID</label>
-                            <input class="form-control" @bind="editCred.GitHubAppInstallationId" />
-                            <div class="form-text">Required for static runners and polling. Webhooks can supply this automatically.</div>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Webhook Secret</label>
-                            <input type="password" class="form-control" @bind="editCred.GitHubAppWebhookSecret" />
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">GitHub API URL (optional)</label>
-                            <input class="form-control" @bind="editCred.GitHubApiUrl" placeholder="https://api.github.com" />
-                        </div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Private Key PEM</label>
-                        <textarea class="form-control font-monospace" rows="7" @bind="editCred.GitHubAppPrivateKey"></textarea>
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label">GitHub Server URL (optional)</label>
-                            <input class="form-control" @bind="editCred.GitHubServerUrl" placeholder="https://github.com" />
-                        </div>
-                    </div>
-                }
-            }
-            else if (editCred.Provider == RunnerProvider.GiteaActions)
-            {
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <label class="form-label">Gitea Instance URL</label>
-                        <input class="form-control" @bind="editCred.GiteaInstanceUrl" />
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">Gitea Runner Token</label>
-                        <input type="password" class="form-control" @bind="editCred.GiteaRunnerToken" />
-                    </div>
-                </div>
-            }
-            else if (editCred.Provider == RunnerProvider.AzureDevOps)
-            {
-                <div class="row mb-3">
-                    <div class="col-md-3">
-                        <label class="form-label">AzDO Org URL</label>
-                        <input class="form-control" @bind="editCred.AzDoOrgUrl" />
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label">Project Name</label>
-                        <input class="form-control" @bind="editCred.AzDoProjectName" />
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label">Pool Name</label>
-                        <input class="form-control" @bind="editCred.AzDoPoolName" />
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label">PAT</label>
-                        <input type="password" class="form-control" @bind="editCred.AzDoPat" />
-                    </div>
-                </div>
-            }
-
-            <button class="btn btn-success me-2" @onclick="SaveCredential">Save</button>
-            <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
         </div>
     </div>
-}
-
-<div class="table-responsive">
-<table class="table table-striped resizable-table">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Provider</th>
-            <th>Details</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        @foreach (var cred in credentials)
-        {
-            <tr>
-                <td>@cred.Name</td>
-                <td>@cred.Provider</td>
-                <td>@GetCredentialSummary(cred)</td>
-                <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditCredential(cred)">Edit</button>
-                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteCredential(cred)">Delete</button>
-                </td>
-            </tr>
-        }
-    </tbody>
-</table>
+    <div class="col-md-6 col-xl-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-box-seam me-2"></i>Container / OCI Registries</h5>
+                <p class="card-text">Browse images, inspect tags, and target pulls to hosts from the dedicated registries page.</p>
+                <a class="btn btn-outline-primary" href="registries">
+                    <i class="bi bi-boxes me-1"></i> Open Registries
+                </a>
+            </div>
+        </div>
+    </div>
 </div>
-
-<hr class="my-4" />
-
-<h3 class="mt-4"><i class="bi bi-box-seam me-2"></i>Container / OCI Registries</h3>
-<p>Registry management has moved to the dedicated <a href="registries">Registries</a> page, where you can browse images, inspect tags, and target pulls to hosts.</p>
-
-<a class="btn btn-outline-primary" href="registries">
-    <i class="bi bi-boxes me-1"></i> Open Registries
-</a>
-
-@code {
-    private List<ProviderCredential> credentials = [];
-    private ProviderCredential editCred = new() { Name = "" };
-    private bool showForm;
-    private bool isEditing;
-
-    protected override async Task OnInitializedAsync()
-    {
-        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
-    }
-
-    private void ShowCreateForm()
-    {
-        editCred = new ProviderCredential { Name = "" };
-        isEditing = false;
-        showForm = true;
-    }
-
-    private void EditCredential(ProviderCredential cred)
-    {
-        editCred = cred;
-        isEditing = true;
-        showForm = true;
-    }
-
-    private async Task SaveCredential()
-    {
-        editCred.UpdatedAt = DateTime.UtcNow;
-
-        if (isEditing)
-            await Store.Update(editCred);
-        else
-            await Store.Insert(editCred);
-
-        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
-        showForm = false;
-    }
-
-    private async Task ConfirmAndDeleteCredential(ProviderCredential cred)
-    {
-        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete provider credential '{cred.Name}'?");
-        if (confirmed) await DeleteCredential(cred.Id);
-    }
-
-    private async Task DeleteCredential(string id)
-    {
-        await Store.Remove<ProviderCredential>(id);
-        credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
-    }
-
-    private string GetCredentialSummary(ProviderCredential cred) => cred.Provider switch
-    {
-        RunnerProvider.GitHubActions => cred.GitHubAuthType == GitHubAuthType.GitHubApp
-            ? $"GitHub App {cred.GitHubAppId ?? "?"} · {cred.GitHubOrg}/{cred.GitHubRepo ?? "*"}"
-            : $"PAT · {cred.GitHubOrg}/{cred.GitHubRepo ?? "*"}",
-        RunnerProvider.GiteaActions => cred.GiteaInstanceUrl ?? "",
-        RunnerProvider.AzureDevOps => $"{cred.AzDoOrgUrl} / {cred.AzDoProjectName}",
-        _ => ""
-    };
-
-    private string GitHubWebhookUrl => $"{Navigation.BaseUri.TrimEnd('/')}/api/webhooks/github";
-
-    [Inject] private NavigationManager Navigation { get; set; } = default!;
-
-    private static string GetGitHubAuthTypeLabel(GitHubAuthType authType) => authType switch
-    {
-        GitHubAuthType.GitHubApp => "GitHub App",
-        _ => "Personal Access Token"
-    };
-}

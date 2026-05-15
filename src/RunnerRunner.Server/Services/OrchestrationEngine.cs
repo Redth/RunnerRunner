@@ -417,7 +417,15 @@ public class OrchestrationEngine : BackgroundService
         return providers.FirstOrDefault(p => p.Provider == provider);
     }
 
-    private static string? GetRunnerUrl(ProviderCredential credential)
+    private static string? GetRunnerUrl(ProviderCredential credential) => credential.Provider switch
+    {
+        RunnerProvider.GitHubActions => GetGitHubRunnerUrl(credential),
+        RunnerProvider.GiteaActions => credential.GiteaInstanceUrl?.TrimEnd('/'),
+        RunnerProvider.AzureDevOps => credential.AzDoOrgUrl?.TrimEnd('/'),
+        _ => null
+    };
+
+    private static string? GetGitHubRunnerUrl(ProviderCredential credential)
     {
         var serverUrl = credential.GitHubServerUrl?.TrimEnd('/') ?? "https://github.com";
         if (!string.IsNullOrEmpty(credential.GitHubRepo))
