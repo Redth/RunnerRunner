@@ -13,9 +13,10 @@ env:
   DOTNET_VERSION: "10.0.x"
   SERVER_IMAGE: ghcr.io/redth/runnerrunner-server
   HOSTWORKER_IMAGE: ghcr.io/redth/runnerrunner-hostworker
+  HOSTWORKER_WINDOWS_IMAGE: ghcr.io/redth/runnerrunner-hostworker-windows
 
 jobs:
-  release:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +28,17 @@ jobs:
 
       - name: Test
         run: dotnet test RunnerRunner.slnx --configuration Release
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [test, windows-hostworker-image]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - uses: docker/setup-qemu-action@v3
 
@@ -138,6 +150,10 @@ jobs:
                   "hostworker": [
                       f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
                       f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_SHA']}"
+                  ],
+                  "hostworkerWindows": [
+                      f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
+                      f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_SHA']}"
                   ]
               },
               "assets": assets
@@ -158,3 +174,51 @@ jobs:
               --title "${GITHUB_REF_NAME}" \
               --notes "HostWorker RunnerRunner release artifacts for Linux, macOS, and Windows."
           fi
+
+  windows-hostworker-image:
+    runs-on: windows-2022
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Log in to GHCR
+        shell: pwsh
+        run: |
+          "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish Windows HostWorker
+        shell: pwsh
+        run: |
+          $publishDir = "artifacts\windows-hostworker-container"
+          dotnet publish src\RunnerRunner.HostWorker\RunnerRunner.HostWorker.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained `
+            -o $publishDir `
+            /p:InformationalVersion=${{ github.ref_name }} `
+            /p:SourceRevisionId=${{ github.sha }} `
+            /p:RunnerRunnerCommitSha=${{ github.sha }} `
+            /p:RunnerRunnerBuildTag=${{ github.ref_name }} `
+            --nologo
+
+      - name: Build and push Windows HostWorker image
+        shell: pwsh
+        run: |
+          $publishDir = "artifacts\windows-hostworker-container"
+          docker build `
+            -f src\RunnerRunner.HostWorker\Dockerfile.windows `
+            --build-arg INFORMATIONAL_VERSION=${{ github.ref_name }} `
+            --build-arg SOURCE_REVISION_ID=${{ github.sha }} `
+            --build-arg BUILD_TAG=${{ github.ref_name }} `
+            -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.ref_name }}" `
+            -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}" `
+            -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:latest" `
+            $publishDir
+          docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.ref_name }}"
+          docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}"
+          docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:latest"

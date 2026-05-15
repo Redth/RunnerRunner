@@ -11,8 +11,10 @@ permissions:
   packages: write
 
 env:
+  DOTNET_VERSION: "10.0.x"
   SERVER_IMAGE: ghcr.io/redth/runnerrunner-server
   HOSTWORKER_IMAGE: ghcr.io/redth/runnerrunner-hostworker
+  HOSTWORKER_WINDOWS_IMAGE: ghcr.io/redth/runnerrunner-hostworker-windows
 
 jobs:
   publish:
@@ -61,3 +63,48 @@ jobs:
           tags: |
             ${{ env.HOSTWORKER_IMAGE }}:main
             ${{ env.HOSTWORKER_IMAGE }}:${{ github.sha }}
+
+  publish-windows-hostworker:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Log in to GHCR
+        shell: pwsh
+        run: |
+          "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish Windows HostWorker
+        shell: pwsh
+        run: |
+          $publishDir = "artifacts\windows-hostworker-container"
+          dotnet publish src\RunnerRunner.HostWorker\RunnerRunner.HostWorker.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained `
+            -o $publishDir `
+            /p:InformationalVersion=${{ github.sha }} `
+            /p:SourceRevisionId=${{ github.sha }} `
+            /p:RunnerRunnerCommitSha=${{ github.sha }} `
+            /p:RunnerRunnerBuildTag=main `
+            --nologo
+
+      - name: Build and push Windows HostWorker image
+        shell: pwsh
+        run: |
+          $publishDir = "artifacts\windows-hostworker-container"
+          docker build `
+            -f src\RunnerRunner.HostWorker\Dockerfile.windows `
+            --build-arg INFORMATIONAL_VERSION=${{ github.sha }} `
+            --build-arg SOURCE_REVISION_ID=${{ github.sha }} `
+            --build-arg BUILD_TAG=main `
+            -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:main" `
+            -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}" `
+            $publishDir
+          docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:main"
+          docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}"
