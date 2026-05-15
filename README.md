@@ -506,6 +506,7 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorkerUpdates:LocalArtifactRoot` | `{StorageRoot}/local` | SSH/local-folder artifact root; place assets under version subfolders |
 | `HostWorkerUpdates:PublicBaseUrl` | Current request URL | External server URL used in HostWorker artifact download commands when not queued from an HTTP request |
 | `HostWorkerUpdates:MaxUploadBytes` | `524288000` | Maximum uploaded HostWorker artifact size |
+| `Logging:Console:FormatterName` | `json` outside Development | Console log format; set to `simple` for local text logs |
 
 ### HostWorker
 
@@ -522,11 +523,24 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorker:RestartCommand` | *(empty)* | Optional Unix command run by the self-update handoff script after files are copied |
 | `HostWorker:WindowsServiceName` | `RunnerRunnerHostWorker` | Windows service name used by the self-update handoff script |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
+| `Logging:Console:FormatterName` | `json` outside Development | Console log format; set to `simple` for local text logs |
 
 All settings can be provided via:
 - `appsettings.json`
 - Environment variables (e.g. `HostWorker__HostName`)
 - Command-line args (e.g. `--HostWorker:HostName=mac-mini-01`)
+
+### Logging and build metadata
+
+RunnerRunner logs startup metadata immediately when each app starts, including assembly version, informational version, commit SHA, build tag, environment, OS, framework, machine name, content root, and process ID. Non-development runs use one-line JSON console logs by default so Docker and log shippers can parse each event cleanly.
+
+Container builds accept these optional build arguments and also stamp them into OCI image labels:
+
+| Build arg | Description |
+|---|---|
+| `INFORMATIONAL_VERSION` | Version shown in startup logs and HostWorker version reporting |
+| `SOURCE_REVISION_ID` | Git commit SHA shown in startup logs and image labels |
+| `BUILD_TAG` | Git tag or channel name shown in startup logs and image labels |
 
 ## Development
 

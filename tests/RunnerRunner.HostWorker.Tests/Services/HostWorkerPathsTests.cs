@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using RunnerRunner.HostWorker.Services;
 
 namespace RunnerRunner.HostWorker.Tests.Services;
@@ -64,6 +65,40 @@ public class HostWorkerPathsTests
         }
         finally
         {
+            if (Directory.Exists(dataRoot))
+                Directory.Delete(dataRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HostApplicationBuilder_LoadsDataRootFromEnvironmentVariables()
+    {
+        const string dataRootVariableName = "HostWorker__DataRoot";
+        const string logRootVariableName = "HostWorker__LogRoot";
+
+        var previousDataRoot = Environment.GetEnvironmentVariable(dataRootVariableName);
+        var previousLogRoot = Environment.GetEnvironmentVariable(logRootVariableName);
+        var dataRoot = Path.Combine(Path.GetTempPath(), $"rr-hostworker-env-paths-{Guid.NewGuid():N}");
+
+        try
+        {
+            Environment.SetEnvironmentVariable(dataRootVariableName, dataRoot);
+            Environment.SetEnvironmentVariable(logRootVariableName, null);
+
+            var builder = Host.CreateApplicationBuilder([]);
+            var paths = new HostWorkerPaths(
+                builder.Configuration,
+                () => throw new InvalidOperationException("HostWorker__DataRoot should come from environment variables."));
+
+            Assert.Equal(dataRoot, paths.DataRoot);
+            Assert.Equal(Path.Combine(dataRoot, "logs"), paths.LogRoot);
+            Assert.True(Directory.Exists(paths.DataRoot));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(dataRootVariableName, previousDataRoot);
+            Environment.SetEnvironmentVariable(logRootVariableName, previousLogRoot);
+
             if (Directory.Exists(dataRoot))
                 Directory.Delete(dataRoot, recursive: true);
         }

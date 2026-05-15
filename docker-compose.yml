@@ -21,6 +21,10 @@ services:
     build:
       context: .
       dockerfile: src/RunnerRunner.Server/Dockerfile
+      args:
+        INFORMATIONAL_VERSION: ${RUNNERRUNNER_VERSION:-dev}
+        SOURCE_REVISION_ID: ${RUNNERRUNNER_COMMIT_SHA:-unknown}
+        BUILD_TAG: ${RUNNERRUNNER_VERSION:-dev}
     container_name: runnerrunner-server
     ports:
       - "${LINUX_BIND_IP:-0.0.0.0}:4779:4779"
@@ -37,6 +41,8 @@ services:
       - Kestrel__Endpoints__HostWorkerGrpc__Url=http://+:4780
       - Kestrel__Endpoints__HostWorkerGrpc__Protocols=Http2
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP:-}
+      - DOTNET_ENVIRONMENT=Production
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     labels:
       - "npm.proxy.domain=r2.jjagd.net"
       - "npm.proxy.port=4779"
@@ -50,6 +56,10 @@ services:
     build:
       context: .
       dockerfile: src/RunnerRunner.HostWorker/Dockerfile
+      args:
+        INFORMATIONAL_VERSION: ${RUNNERRUNNER_VERSION:-dev}
+        SOURCE_REVISION_ID: ${RUNNERRUNNER_COMMIT_SHA:-unknown}
+        BUILD_TAG: ${RUNNERRUNNER_VERSION:-dev}
     container_name: runnerrunner-host-worker
     environment:
       - HostWorker__ServerUrl=http://server:4780
@@ -59,6 +69,7 @@ services:
       - HostWorker__Platform=Linux
       - HostWorker__DataRoot=/var/lib/runnerrunner
       - DOTNET_ENVIRONMENT=Production
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - hostworker-data:/var/lib/runnerrunner

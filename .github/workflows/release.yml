@@ -44,6 +44,8 @@ jobs:
           push: true
           build-args: |
             INFORMATIONAL_VERSION=${{ github.ref_name }}
+            SOURCE_REVISION_ID=${{ github.sha }}
+            BUILD_TAG=${{ github.ref_name }}
           tags: |
             ${{ env.SERVER_IMAGE }}:${{ github.ref_name }}
             ${{ env.SERVER_IMAGE }}:${{ github.sha }}
@@ -58,6 +60,8 @@ jobs:
           push: true
           build-args: |
             INFORMATIONAL_VERSION=${{ github.ref_name }}
+            SOURCE_REVISION_ID=${{ github.sha }}
+            BUILD_TAG=${{ github.ref_name }}
           tags: |
             ${{ env.HOSTWORKER_IMAGE }}:${{ github.ref_name }}
             ${{ env.HOSTWORKER_IMAGE }}:${{ github.sha }}
@@ -78,6 +82,9 @@ jobs:
               -o "${out}" \
               /p:Version="${version}" \
               /p:InformationalVersion="${GITHUB_REF_NAME}" \
+              /p:SourceRevisionId="${GITHUB_SHA}" \
+              /p:RunnerRunnerCommitSha="${GITHUB_SHA}" \
+              /p:RunnerRunnerBuildTag="${GITHUB_REF_NAME}" \
               --nologo
 
             if [[ "${rid}" == win-* ]]; then

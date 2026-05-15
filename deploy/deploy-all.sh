@@ -166,14 +166,22 @@ log "Phase 1: Building Docker images"
 SERVER_IMAGE="${SERVER_IMAGE:-${REGISTRY_URL}/${REGISTRY_NAMESPACE}/runnerrunner-server:latest}"
 HOST_WORKER_IMAGE="${HOSTWORKER_IMAGE:-${REGISTRY_URL}/${REGISTRY_NAMESPACE}/runnerrunner-hostworker:latest}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
+BUILD_COMMIT_SHA="$(git -C "${PROJECT_ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+BUILD_TAG="$(git -C "${PROJECT_ROOT}" describe --tags --exact-match 2>/dev/null || git -C "${PROJECT_ROOT}" describe --tags --always --dirty 2>/dev/null || echo dev)"
 
 step "Building server image (${DOCKER_PLATFORM})..."
 docker build --platform "${DOCKER_PLATFORM}" -t "${SERVER_IMAGE}" \
+    --build-arg "INFORMATIONAL_VERSION=${BUILD_TAG}" \
+    --build-arg "SOURCE_REVISION_ID=${BUILD_COMMIT_SHA}" \
+    --build-arg "BUILD_TAG=${BUILD_TAG}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.Server/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
 step "Building host-worker image (${DOCKER_PLATFORM})..."
 docker build --platform "${DOCKER_PLATFORM}" -t "${HOST_WORKER_IMAGE}" \
+    --build-arg "INFORMATIONAL_VERSION=${BUILD_TAG}" \
+    --build-arg "SOURCE_REVISION_ID=${BUILD_COMMIT_SHA}" \
+    --build-arg "BUILD_TAG=${BUILD_TAG}" \
     -f "${PROJECT_ROOT}/src/RunnerRunner.HostWorker/Dockerfile" \
     "${PROJECT_ROOT}" --quiet
 
