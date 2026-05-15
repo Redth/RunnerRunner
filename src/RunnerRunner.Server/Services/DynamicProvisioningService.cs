@@ -897,7 +897,8 @@ public class DynamicProvisioningService : BackgroundService
         return credential.Provider switch
         {
             RunnerProvider.GitHubActions => GetGitHubRunnerUrl(credential),
-            RunnerProvider.GiteaActions => credential.GiteaInstanceUrl,
+            RunnerProvider.GiteaActions => credential.GiteaInstanceUrl?.TrimEnd('/'),
+            RunnerProvider.AzureDevOps => credential.AzDoOrgUrl?.TrimEnd('/'),
             _ => null
         };
     }
