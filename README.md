@@ -132,7 +132,7 @@ Or compose a standalone Linux worker on a separate host:
 ```yaml
 services:
   host-worker:
-    image: ghcr.io/redth/runnerrunner/hostworker:latest
+    image: ghcr.io/redth/runnerrunner-hostworker:latest
     container_name: runnerrunner-host-worker
     restart: unless-stopped
     environment:
@@ -184,7 +184,7 @@ docker run -d \
   -e DOTNET_ENVIRONMENT='Production' \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v runnerrunner-hostworker-data:/var/lib/runnerrunner \
-  ghcr.io/redth/runnerrunner/hostworker:latest
+  ghcr.io/redth/runnerrunner-hostworker:latest
 ```
 
 ### Windows
@@ -230,7 +230,7 @@ docker run -d \
   -e DOTNET_ENVIRONMENT='Production' \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v runnerrunner-hostworker-data:/var/lib/runnerrunner \
-  ghcr.io/redth/runnerrunner/hostworker:latest
+  ghcr.io/redth/runnerrunner-hostworker:latest
 ```
 
 ## Getting Started
@@ -370,8 +370,8 @@ RunnerRunner publishes multi-architecture `linux/amd64` and `linux/arm64` images
 
 | Image | Use |
 |---|---|
-| `ghcr.io/redth/runnerrunner/server:<tag>` | Server, web UI, API, and Orleans silo |
-| `ghcr.io/redth/runnerrunner/hostworker:<tag>` | Self-contained Linux HostWorker for Docker-backed runner hosts |
+| `ghcr.io/redth/runnerrunner-server:<tag>` | Server, web UI, API, and Orleans silo |
+| `ghcr.io/redth/runnerrunner-hostworker:<tag>` | Self-contained Linux HostWorker for Docker-backed runner hosts |
 
 Tagged releases publish `<tag>`, `<git-sha>`, and `latest`. The `main` branch image workflow publishes `main` and `<git-sha>` for early adopters and lab installs.
 
