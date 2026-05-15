@@ -5,6 +5,8 @@ using RunnerRunner.HostWorker.Services;
 
 var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder(args);
 
+builder.AddServiceDefaults();
+
 builder.Services.AddWindowsService(options =>
 {
     options.ServiceName = "RunnerRunner HostWorker";
@@ -30,4 +32,5 @@ builder.Services.AddSingleton<IHostWorkerEventSink>(sp => sp.GetRequiredService<
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HostWorkerConnectionService>());
 
 var host = builder.Build();
+host.LogRunnerRunnerStartup();
 host.Run();

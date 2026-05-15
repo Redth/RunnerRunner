@@ -165,6 +165,7 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 var app = builder.Build();
+app.LogRunnerRunnerStartup();
 
 // Ensure Orleans ADO.NET backing tables exist before the silo starts.
 if (!app.Environment.IsDevelopment())

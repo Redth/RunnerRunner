@@ -3,12 +3,16 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.ServiceDiscovery;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using System.Reflection;
+using RunnerRunner.ServiceDefaults;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 
 namespace Microsoft.Extensions.Hosting;
 
@@ -22,6 +26,8 @@ public static class Extensions
 
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
+        builder.ConfigureRunnerRunnerLogging();
+
         builder.ConfigureOpenTelemetry();
 
         builder.AddDefaultHealthChecks();
@@ -46,8 +52,74 @@ public static class Extensions
         return builder;
     }
 
+    public static TBuilder ConfigureRunnerRunnerLogging<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+    {
+        builder.Logging.ClearProviders();
+        builder.Logging.Configure(options =>
+        {
+            options.ActivityTrackingOptions =
+                ActivityTrackingOptions.TraceId |
+                ActivityTrackingOptions.SpanId |
+                ActivityTrackingOptions.ParentId;
+        });
+
+        if (ShouldUseJsonConsole(builder))
+        {
+            builder.Logging.AddJsonConsole(options =>
+            {
+                options.IncludeScopes = true;
+                options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
+                options.UseUtcTimestamp = true;
+                options.JsonWriterOptions = new JsonWriterOptions
+                {
+                    Indented = false
+                };
+            });
+        }
+        else
+        {
+            builder.Logging.AddSimpleConsole(options =>
+            {
+                options.IncludeScopes = true;
+                options.SingleLine = true;
+                options.TimestampFormat = "HH:mm:ss ";
+            });
+        }
+
+        return builder;
+    }
+
+    public static IHost LogRunnerRunnerStartup(this IHost host)
+    {
+        var environment = host.Services.GetRequiredService<IHostEnvironment>();
+        var logger = host.Services
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("RunnerRunner.Startup");
+        var buildInfo = RunnerRunnerBuildInfo.FromEntryAssembly();
+
+        logger.LogInformation(
+            "Starting {ApplicationName}. Version: {Version}; InformationalVersion: {InformationalVersion}; CommitSha: {CommitSha}; BuildTag: {BuildTag}; Configuration: {Configuration}; Environment: {EnvironmentName}; ContentRoot: {ContentRoot}; MachineName: {MachineName}; OS: {OSDescription}; Framework: {FrameworkDescription}; Containerized: {Containerized}; ProcessId: {ProcessId}",
+            buildInfo.ApplicationName,
+            buildInfo.AssemblyVersion,
+            buildInfo.InformationalVersion,
+            buildInfo.CommitSha,
+            buildInfo.BuildTag,
+            buildInfo.Configuration,
+            environment.EnvironmentName,
+            environment.ContentRootPath,
+            Environment.MachineName,
+            RuntimeInformation.OSDescription,
+            RuntimeInformation.FrameworkDescription,
+            IsRunningInContainer(),
+            Environment.ProcessId);
+
+        return host;
+    }
+
     public static TBuilder ConfigureOpenTelemetry<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
+        var buildInfo = RunnerRunnerBuildInfo.FromEntryAssembly();
+
         builder.Logging.AddOpenTelemetry(logging =>
         {
             logging.IncludeFormattedMessage = true;
@@ -60,8 +132,8 @@ public static class Extensions
                 resource
                     .AddService(
                         serviceName: builder.Environment.ApplicationName,
-                        serviceVersion: Assembly.GetEntryAssembly()?.GetName().Version?.ToString())
-                    .AddAttributes(GetRunnerRunnerResourceAttributes(builder));
+                        serviceVersion: buildInfo.InformationalVersion)
+                    .AddAttributes(GetRunnerRunnerResourceAttributes(builder, buildInfo));
             })
             .WithMetrics(metrics =>
             {
@@ -88,11 +160,27 @@ public static class Extensions
         return builder;
     }
 
-    private static IEnumerable<KeyValuePair<string, object>> GetRunnerRunnerResourceAttributes<TBuilder>(TBuilder builder)
+    private static bool ShouldUseJsonConsole<TBuilder>(TBuilder builder)
+        where TBuilder : IHostApplicationBuilder
+    {
+        var formatterName = builder.Configuration["Logging:Console:FormatterName"];
+        if (!string.IsNullOrWhiteSpace(formatterName))
+            return string.Equals(formatterName, ConsoleFormatterNames.Json, StringComparison.OrdinalIgnoreCase);
+
+        return !builder.Environment.IsDevelopment();
+    }
+
+    private static IEnumerable<KeyValuePair<string, object>> GetRunnerRunnerResourceAttributes<TBuilder>(
+        TBuilder builder,
+        RunnerRunnerBuildInfo buildInfo)
         where TBuilder : IHostApplicationBuilder
     {
         yield return new("deployment.environment", builder.Environment.EnvironmentName);
         yield return new("service.instance.id", Environment.MachineName);
+        yield return new("runnerrunner.version.informational", buildInfo.InformationalVersion);
+        yield return new("runnerrunner.build.configuration", buildInfo.Configuration);
+        yield return new("runnerrunner.git.sha", buildInfo.CommitSha);
+        yield return new("runnerrunner.git.tag", buildInfo.BuildTag);
 
         var hostId = builder.Configuration["HostWorker:HostId"];
         if (!string.IsNullOrWhiteSpace(hostId))
@@ -105,6 +193,14 @@ public static class Extensions
         var platform = builder.Configuration["HostWorker:Platform"];
         if (!string.IsNullOrWhiteSpace(platform))
             yield return new("runnerrunner.host.platform", platform);
+    }
+
+    private static bool IsRunningInContainer()
+    {
+        return string.Equals(
+            Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static TBuilder AddOpenTelemetryExporters<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder

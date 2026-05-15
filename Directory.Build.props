@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <RunnerRunnerCommitSha Condition="'$(RunnerRunnerCommitSha)' == '' and '$(SourceRevisionId)' != ''">$(SourceRevisionId)</RunnerRunnerCommitSha>
+    <RunnerRunnerCommitSha Condition="'$(RunnerRunnerCommitSha)' == ''">unknown</RunnerRunnerCommitSha>
+    <RunnerRunnerBuildTag Condition="'$(RunnerRunnerBuildTag)' == ''">unknown</RunnerRunnerBuildTag>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RunnerRunnerCommitSha</_Parameter1>
+      <_Parameter2>$(RunnerRunnerCommitSha)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RunnerRunnerBuildTag</_Parameter1>
+      <_Parameter2>$(RunnerRunnerBuildTag)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

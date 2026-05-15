@@ -1,4 +1,4 @@
-using System.Reflection;
+using RunnerRunner.ServiceDefaults;
 
 namespace RunnerRunner.HostWorker.Services;
 
@@ -8,12 +8,7 @@ internal static class HostWorkerVersion
     {
         get
         {
-            var assembly = typeof(HostWorkerVersion).Assembly;
-            var informational = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (!string.IsNullOrWhiteSpace(informational))
-                return informational;
-
-            return assembly.GetName().Version?.ToString() ?? "0.0.0";
+            return RunnerRunnerBuildInfo.FromAssembly(typeof(HostWorkerVersion).Assembly).InformationalVersion;
         }
     }
 }

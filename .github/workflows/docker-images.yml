@@ -41,6 +41,8 @@ jobs:
           push: true
           build-args: |
             INFORMATIONAL_VERSION=${{ github.sha }}
+            SOURCE_REVISION_ID=${{ github.sha }}
+            BUILD_TAG=main
           tags: |
             ${{ env.SERVER_IMAGE }}:main
             ${{ env.SERVER_IMAGE }}:${{ github.sha }}
@@ -54,6 +56,8 @@ jobs:
           push: true
           build-args: |
             INFORMATIONAL_VERSION=${{ github.sha }}
+            SOURCE_REVISION_ID=${{ github.sha }}
+            BUILD_TAG=main
           tags: |
             ${{ env.HOSTWORKER_IMAGE }}:main
             ${{ env.HOSTWORKER_IMAGE }}:${{ github.sha }}
