@@ -494,6 +494,7 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 |---|---|---|
 | `Database:ConnectionString` | `Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner` | PostgreSQL connection string for DocumentDB and Orleans |
 | `ConnectionStrings:DefaultConnection` | *(empty)* | Alternate PostgreSQL connection string source |
+| `DataProtection:KeysPath` | `{ContentRoot}/data/data-protection-keys` | Persistent ASP.NET Core data-protection key ring for antiforgery and Blazor server state in production |
 | `Kestrel:Endpoints:Web:Url` | `http://+:4779` | Web UI and API listen URL |
 | `Kestrel:Endpoints:HostWorkerGrpc:Url` | `http://+:4780` | HostWorker gRPC listen URL |
 | `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised by the server Orleans silo in production |
