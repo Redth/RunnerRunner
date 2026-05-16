@@ -18,6 +18,9 @@ public class Host
     public string? AgentVersion { get; set; }
     public string? OsVersion { get; set; }
     public string? Architecture { get; set; }
+    public bool IsContainerized { get; set; }
+    public string? ContainerId { get; set; }
+    public string? ContainerImage { get; set; }
     public List<string> Capabilities { get; set; } = [];
     public Dictionary<string, string> EnvironmentOverrides { get; set; } = new();
     public string? EnrollmentToken { get; set; }

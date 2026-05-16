@@ -59,4 +59,32 @@ public class HostWorkerUpdateSelectorTests
         Assert.False(selected);
         Assert.Contains("checksum", reason);
     }
+
+    [Fact]
+    public void TrySelectContainerImage_SelectsMatchingVersionTag()
+    {
+        var release = new HostWorkerReleaseInfo("abc123", null, DateTimeOffset.UnixEpoch, [])
+        {
+            Images = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["hostworker"] =
+                [
+                    "ghcr.io/redth/runnerrunner-hostworker:main",
+                    "ghcr.io/redth/runnerrunner-hostworker:abc123"
+                ]
+            }
+        };
+        var host = new Host
+        {
+            Name = "linux",
+            Platform = HostPlatform.Linux,
+            IsContainerized = true
+        };
+
+        var selected = HostWorkerUpdateSelector.TrySelectContainerImage(host, release, out var image, out var reason);
+
+        Assert.True(selected);
+        Assert.Null(reason);
+        Assert.Equal("ghcr.io/redth/runnerrunner-hostworker:abc123", image);
+    }
 }

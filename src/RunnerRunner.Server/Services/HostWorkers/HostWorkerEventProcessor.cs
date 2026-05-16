@@ -191,6 +191,9 @@ public sealed class HostWorkerEventProcessor
         host.OsVersion = agentInfo.OsVersion;
         host.Architecture = agentInfo.Architecture;
         host.AgentVersion = agentInfo.AgentVersion;
+        host.IsContainerized = agentInfo.Runtime?.IsContainer ?? false;
+        host.ContainerId = agentInfo.Runtime?.ContainerId;
+        host.ContainerImage = agentInfo.Runtime?.ContainerImage;
         host.Capabilities = agentInfo.Capabilities;
         host.IsApproved = true;
         host.EnrolledAt ??= DateTime.UtcNow;

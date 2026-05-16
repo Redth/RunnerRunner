@@ -97,6 +97,46 @@ public class HostWorkerEventProcessorTests
     }
 
     [Fact]
+    public async Task WorkerConnectedAsync_StoresContainerRuntimeInfo()
+    {
+        var token = HostEnrollmentToken.Create();
+        var store = TestDocumentStore.Create();
+        await store.Insert(new Host
+        {
+            Name = "pending-host",
+            EnrollmentTokenHash = HostEnrollmentToken.Hash(token),
+            EnrollmentTokenCreatedAt = DateTime.UtcNow
+        });
+        var processor = CreateProcessor(store);
+
+        var hostId = await processor.WorkerConnectedAsync(
+            new AgentInfo
+            {
+                AgentId = "worker-1",
+                Name = "linux-docker",
+                Platform = HostPlatform.Linux,
+                Architecture = "x64",
+                Runtime = new HostWorkerRuntimeInfo
+                {
+                    IsContainer = true,
+                    ContainerId = "abcdef123456",
+                    ContainerImage = "ghcr.io/redth/runnerrunner-hostworker:main"
+                }
+            },
+            "peer",
+            new Dictionary<string, string>(),
+            token,
+            CancellationToken.None);
+
+        var host = await store.Get<Host>(hostId);
+
+        Assert.NotNull(host);
+        Assert.True(host.IsContainerized);
+        Assert.Equal("abcdef123456", host.ContainerId);
+        Assert.Equal("ghcr.io/redth/runnerrunner-hostworker:main", host.ContainerImage);
+    }
+
+    [Fact]
     public async Task WorkerConnectedAsync_RejectsWrongTokenForKnownHost()
     {
         var token = HostEnrollmentToken.Create();

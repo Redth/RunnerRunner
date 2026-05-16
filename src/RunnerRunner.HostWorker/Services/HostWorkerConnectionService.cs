@@ -164,7 +164,8 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
                 Platform = _identity.Platform,
                 Architecture = _identity.Architecture,
                 AgentVersion = HostWorkerVersion.Current,
-                Capabilities = capabilities.ToList()
+                Capabilities = capabilities.ToList(),
+                Runtime = HostWorkerRuntimeDetector.Detect(_configuration)
             },
             EnrollmentToken = _configuration["HostWorker:EnrollmentToken"],
             Labels = new Dictionary<string, string>

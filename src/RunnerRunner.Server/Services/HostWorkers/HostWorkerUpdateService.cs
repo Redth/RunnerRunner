@@ -1,3 +1,6 @@
+using System.IO.Compression;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RunnerRunner.Core.Hub;
@@ -44,7 +47,7 @@ public sealed class HostWorkerUpdateService
     public async Task<HostWorkerReleaseInfo?> GetReleaseAsync(string? version, bool forceRefresh = false, CancellationToken ct = default)
     {
         if (!IsLatestRelease(version))
-            return await FetchReleaseAsync(version, ct);
+            return await ResolveGitHubSourceAsync(new HostWorkerUpdateSelection(HostWorkerUpdateSourceKind.Release, version), forceRefresh, ct);
 
         if (!forceRefresh && _cachedRelease != null && _cacheExpiresAt > DateTimeOffset.UtcNow)
             return _cachedRelease;
@@ -55,7 +58,7 @@ public sealed class HostWorkerUpdateService
             if (!forceRefresh && _cachedRelease != null && _cacheExpiresAt > DateTimeOffset.UtcNow)
                 return _cachedRelease;
 
-            _cachedRelease = await FetchReleaseAsync(null, ct);
+            _cachedRelease = await FetchGitHubReleaseAsync(null, allowNotFound: false, ct);
             var cacheMinutes = Math.Clamp(_configuration.GetValue("HostWorkerUpdates:CacheMinutes", 30), 1, 24 * 60);
             _cacheExpiresAt = DateTimeOffset.UtcNow.AddMinutes(cacheMinutes);
             return _cachedRelease;
@@ -79,13 +82,27 @@ public sealed class HostWorkerUpdateService
         if (release == null)
             return HostWorkerUpdateAvailability.Unavailable($"Unable to read HostWorker updates from {selection.Source.ToDisplayName()}.");
 
-        if (!HostWorkerUpdateSelector.TrySelectAsset(host, release, out var asset, out var reason))
-            return HostWorkerUpdateAvailability.Unavailable(reason);
+        if (HostWorkerUpdateSelector.IsContainerized(host))
+        {
+            if (!HostWorkerUpdateSelector.TrySelectContainerImage(host, release, out var containerImage, out var reason))
+                return HostWorkerUpdateAvailability.Unavailable(reason);
+
+            var containerUpdateAvailable = selection.Source == HostWorkerUpdateSourceKind.Release
+                ? HostWorkerUpdateSelector.IsUpdateAvailable(host.AgentVersion, release.Version)
+                : true;
+            return new HostWorkerUpdateAvailability(release, null, containerImage, containerUpdateAvailable, null);
+        }
+
+        if (!HostWorkerUpdateSelector.TrySelectAsset(host, release, out var asset, out var assetReason))
+            return HostWorkerUpdateAvailability.Unavailable(assetReason);
+
+        if (string.IsNullOrWhiteSpace(asset!.DownloadUrl))
+            return HostWorkerUpdateAvailability.Unavailable("HostWorkerUpdates:PublicBaseUrl or a request base URL is required to queue this HostWorker update artifact.");
 
         var updateAvailable = selection.Source == HostWorkerUpdateSourceKind.Release
             ? HostWorkerUpdateSelector.IsUpdateAvailable(host.AgentVersion, release.Version)
             : true;
-        return new HostWorkerUpdateAvailability(release, asset, updateAvailable, null);
+        return new HostWorkerUpdateAvailability(release, asset, null, updateAvailable, null);
     }
 
     public async Task RefreshHostUpdateStateAsync(Host host, bool forceRefresh = false, CancellationToken ct = default)
@@ -143,14 +160,14 @@ public sealed class HostWorkerUpdateService
         }
 
         var availability = await GetAvailabilityAsync(host, selection, forceRefresh: true, ct);
-        if (!availability.IsAvailable || availability.Release == null || availability.Asset == null)
+        if (!availability.IsAvailable || availability.Release == null)
             throw new InvalidOperationException(availability.UnavailableReason ?? "No HostWorker update asset is available for this host.");
 
-        if (selection.Source != HostWorkerUpdateSourceKind.Release &&
-            string.IsNullOrWhiteSpace(availability.Asset.DownloadUrl))
-        {
-            throw new InvalidOperationException("HostWorkerUpdates:PublicBaseUrl or a request base URL is required to queue local HostWorker update artifacts.");
-        }
+        if (availability.Asset != null && string.IsNullOrWhiteSpace(availability.Asset.DownloadUrl))
+            throw new InvalidOperationException("HostWorkerUpdates:PublicBaseUrl or a request base URL is required to queue this HostWorker update artifact.");
+
+        if (availability.Asset == null && string.IsNullOrWhiteSpace(availability.ContainerImage))
+            throw new InvalidOperationException("No HostWorker update asset or container image is available for this host.");
 
         if (!selection.Force && !selection.AllowNonUpgrade && !availability.UpdateAvailable)
             throw new InvalidOperationException($"HostWorker '{host.Label}' is already current.");
@@ -164,9 +181,10 @@ public sealed class HostWorkerUpdateService
         await _dispatcher.DispatchApplyHostWorkerUpdateAsync(host.Id, new HostWorkerUpdateCommand
         {
             TargetVersion = availability.Release.Version,
-            AssetName = availability.Asset.Name,
-            AssetUrl = availability.Asset.DownloadUrl,
-            Sha256 = availability.Asset.Sha256,
+            AssetName = availability.Asset?.Name ?? "",
+            AssetUrl = availability.Asset?.DownloadUrl ?? "",
+            Sha256 = availability.Asset?.Sha256 ?? "",
+            ContainerImage = availability.ContainerImage,
             Force = selection.Force
         });
     }
@@ -190,7 +208,7 @@ public sealed class HostWorkerUpdateService
         CancellationToken ct)
     {
         if (selection.Source == HostWorkerUpdateSourceKind.Release)
-            return await GetReleaseAsync(selection.Version, forceRefresh, ct);
+            return await ResolveGitHubSourceAsync(selection, forceRefresh, ct);
 
         var version = _localUpdateStore.GetVersion(selection.Source, selection.Version);
         if (version == null)
@@ -207,16 +225,71 @@ public sealed class HostWorkerUpdateService
         return new HostWorkerReleaseInfo(version.Version, null, version.CreatedAt, assets);
     }
 
-    private async Task<HostWorkerReleaseInfo?> FetchReleaseAsync(string? version, CancellationToken ct)
+    public async Task ExtractGitHubActionsArtifactAssetAsync(
+        long runId,
+        string artifactName,
+        string assetName,
+        string outputPath,
+        CancellationToken ct = default)
+    {
+        if (!string.Equals(artifactName, GetAssetsArtifactName(), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Unsupported GitHub Actions artifact '{artifactName}'.");
+
+        if (!HostWorkerUpdateSelector.IsHostWorkerAssetName(assetName))
+            throw new InvalidOperationException($"Unsupported HostWorker update artifact '{assetName}'.");
+
+        var artifacts = await FetchActionsArtifactsAsync(runId, ct);
+        var artifact = artifacts.FirstOrDefault(x =>
+            !x.Expired &&
+            string.Equals(x.Name, artifactName, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(x.ArchiveDownloadUrl));
+        if (artifact == null)
+            throw new FileNotFoundException($"GitHub Actions artifact '{artifactName}' was not found for run {runId}.");
+
+        var archivePath = Path.Combine(Path.GetTempPath(), $"runnerrunner-github-artifact-{Guid.NewGuid():N}.zip");
+        try
+        {
+            await DownloadArtifactArchiveToFileAsync(artifact.ArchiveDownloadUrl, archivePath, ct);
+            using var archive = ZipFile.OpenRead(archivePath);
+            var entry = archive.Entries.FirstOrDefault(x =>
+                string.Equals(Path.GetFileName(x.FullName), assetName, StringComparison.OrdinalIgnoreCase));
+            if (entry == null)
+                throw new FileNotFoundException($"GitHub Actions artifact '{artifactName}' does not contain '{assetName}'.");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            entry.ExtractToFile(outputPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(archivePath))
+                File.Delete(archivePath);
+        }
+    }
+
+    private async Task<HostWorkerReleaseInfo?> ResolveGitHubSourceAsync(
+        HostWorkerUpdateSelection selection,
+        bool forceRefresh,
+        CancellationToken ct)
+    {
+        if (IsLatestRelease(selection.Version))
+            return await GetReleaseAsync(selection.Version, forceRefresh, ct);
+
+        var release = await FetchGitHubReleaseAsync(selection.Version, allowNotFound: true, ct);
+        return release ?? await FetchGitHubRefArtifactsAsync(selection, ct);
+    }
+
+    private async Task<HostWorkerReleaseInfo?> FetchGitHubReleaseAsync(string? version, bool allowNotFound, CancellationToken ct)
     {
         var repository = _configuration["HostWorkerUpdates:Repository"] ?? "Redth/RunnerRunner";
         var requestUrl = IsLatestRelease(version)
             ? $"https://api.github.com/repos/{repository}/releases/latest"
             : $"https://api.github.com/repos/{repository}/releases/tags/{Uri.EscapeDataString(version!.Trim())}";
         var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
-        using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-        request.Headers.UserAgent.ParseAdd("RunnerRunner");
+        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
         using var response = await client.SendAsync(request, ct);
+        if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -238,22 +311,204 @@ public sealed class HostWorkerUpdateService
                 manifest.Assets.FirstOrDefault(a => string.Equals(a.Name, asset.Name, StringComparison.OrdinalIgnoreCase))?.Sha256 ?? ""))
             .ToArray();
 
-        return new HostWorkerReleaseInfo(release.TagName, release.HtmlUrl, release.PublishedAt, assets);
+        return new HostWorkerReleaseInfo(release.TagName, release.HtmlUrl, release.PublishedAt, assets)
+        {
+            Images = NormalizeImages(manifest.Images)
+        };
+    }
+
+    private async Task<HostWorkerReleaseInfo?> FetchGitHubRefArtifactsAsync(
+        HostWorkerUpdateSelection selection,
+        CancellationToken ct)
+    {
+        var reference = selection.Version?.Trim();
+        if (string.IsNullOrWhiteSpace(reference))
+            return null;
+
+        var repository = _configuration["HostWorkerUpdates:Repository"] ?? "Redth/RunnerRunner";
+        var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
+        var commit = await FetchCommitAsync(client, repository, reference, ct);
+        if (commit == null || string.IsNullOrWhiteSpace(commit.Sha))
+            return null;
+
+        var runs = await FetchWorkflowRunsAsync(client, repository, commit.Sha, ct);
+        foreach (var run in runs
+                     .Where(x => string.Equals(x.Conclusion, "success", StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt ?? DateTimeOffset.MinValue))
+        {
+            var artifacts = await FetchActionsArtifactsAsync(run.Id, ct);
+            var manifestArtifact = artifacts.FirstOrDefault(x =>
+                !x.Expired &&
+                string.Equals(x.Name, GetManifestArtifactName(), StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(x.ArchiveDownloadUrl));
+            var assetsArtifact = artifacts.FirstOrDefault(x =>
+                !x.Expired &&
+                string.Equals(x.Name, GetAssetsArtifactName(), StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(x.ArchiveDownloadUrl));
+
+            if (manifestArtifact == null || assetsArtifact == null)
+                continue;
+
+            var manifest = await FetchManifestFromArtifactAsync(manifestArtifact.ArchiveDownloadUrl, ct);
+            var publicBaseUrl = selection.PublicBaseUrl ?? _configuration["HostWorkerUpdates:PublicBaseUrl"];
+            var assets = manifest.Assets
+                .Where(asset => HostWorkerUpdateSelector.IsHostWorkerAssetName(asset.Name))
+                .Select(asset => new HostWorkerReleaseAsset(
+                    asset.Name,
+                    string.IsNullOrWhiteSpace(publicBaseUrl)
+                        ? ""
+                        : BuildGitHubArtifactDownloadUrl(run.Id, assetsArtifact.Name, asset, publicBaseUrl),
+                    asset.Sha256))
+                .ToArray();
+
+            if (assets.Length == 0 && manifest.Images.Count == 0)
+                continue;
+
+            var version = string.IsNullOrWhiteSpace(manifest.GitSha) ? commit.Sha : manifest.GitSha;
+            return new HostWorkerReleaseInfo(
+                version,
+                run.HtmlUrl ?? commit.HtmlUrl,
+                run.UpdatedAt ?? run.CreatedAt,
+                assets)
+            {
+                Images = NormalizeImages(manifest.Images)
+            };
+        }
+
+        return null;
     }
 
     private static bool IsLatestRelease(string? version)
         => string.IsNullOrWhiteSpace(version)
            || string.Equals(version.Trim(), "latest", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<ReleaseManifest> FetchManifestAsync(HttpClient client, string url, CancellationToken ct)
+    private async Task<ReleaseManifest> FetchManifestAsync(HttpClient client, string url, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.UserAgent.ParseAdd("RunnerRunner");
+        using var request = CreateGitHubRequest(HttpMethod.Get, url);
         using var response = await client.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         return await JsonSerializer.DeserializeAsync<ReleaseManifest>(stream, JsonOptions, ct)
                ?? new ReleaseManifest();
+    }
+
+    private async Task<GitHubCommitResponse?> FetchCommitAsync(
+        HttpClient client,
+        string repository,
+        string reference,
+        CancellationToken ct)
+    {
+        var requestUrl = $"https://api.github.com/repos/{repository}/commits/{Uri.EscapeDataString(reference)}";
+        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var response = await client.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<GitHubCommitResponse>(stream, JsonOptions, ct);
+    }
+
+    private async Task<IReadOnlyList<GitHubWorkflowRunResponse>> FetchWorkflowRunsAsync(
+        HttpClient client,
+        string repository,
+        string sha,
+        CancellationToken ct)
+    {
+        var requestUrl = $"https://api.github.com/repos/{repository}/actions/runs?head_sha={Uri.EscapeDataString(sha)}&status=success&per_page=20";
+        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var response = await client.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        var runs = await JsonSerializer.DeserializeAsync<GitHubWorkflowRunsResponse>(stream, JsonOptions, ct);
+        return runs?.WorkflowRuns ?? [];
+    }
+
+    private async Task<IReadOnlyList<GitHubActionsArtifactResponse>> FetchActionsArtifactsAsync(long runId, CancellationToken ct)
+    {
+        var repository = _configuration["HostWorkerUpdates:Repository"] ?? "Redth/RunnerRunner";
+        var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
+        var requestUrl = $"https://api.github.com/repos/{repository}/actions/runs/{runId}/artifacts?per_page=100";
+        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var response = await client.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        var artifacts = await JsonSerializer.DeserializeAsync<GitHubActionsArtifactsResponse>(stream, JsonOptions, ct);
+        return artifacts?.Artifacts ?? [];
+    }
+
+    private async Task<ReleaseManifest> FetchManifestFromArtifactAsync(string archiveDownloadUrl, CancellationToken ct)
+    {
+        var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
+        await using var stream = await DownloadArtifactArchiveAsync(client, archiveDownloadUrl, ct);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+        var entry = archive.GetEntry("release-manifest.json") ??
+                    archive.Entries.FirstOrDefault(x => string.Equals(Path.GetFileName(x.FullName), "release-manifest.json", StringComparison.OrdinalIgnoreCase));
+        if (entry == null)
+            return new ReleaseManifest();
+
+        await using var manifestStream = entry.Open();
+        return await JsonSerializer.DeserializeAsync<ReleaseManifest>(manifestStream, JsonOptions, ct)
+               ?? new ReleaseManifest();
+    }
+
+    private async Task<MemoryStream> DownloadArtifactArchiveAsync(HttpClient client, string url, CancellationToken ct)
+    {
+        using var request = CreateGitHubRequest(HttpMethod.Get, url);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+        var memory = new MemoryStream();
+        await response.Content.CopyToAsync(memory, ct);
+        memory.Position = 0;
+        return memory;
+    }
+
+    private async Task DownloadArtifactArchiveToFileAsync(string url, string outputPath, CancellationToken ct)
+    {
+        var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
+        using var request = CreateGitHubRequest(HttpMethod.Get, url);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+        await using var input = await response.Content.ReadAsStreamAsync(ct);
+        await using var output = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        await input.CopyToAsync(output, ct);
+    }
+
+    private static string BuildGitHubArtifactDownloadUrl(
+        long runId,
+        string artifactName,
+        ReleaseManifestAsset asset,
+        string publicBaseUrl)
+    {
+        var baseUri = publicBaseUrl.EndsWith("/", StringComparison.Ordinal) ? publicBaseUrl : publicBaseUrl + "/";
+        var relative = $"api/hostworker-updates/github-artifacts/{runId}/{Uri.EscapeDataString(artifactName)}/{Uri.EscapeDataString(asset.Name)}?sha256={Uri.EscapeDataString(asset.Sha256)}";
+        return new Uri(new Uri(baseUri), relative).ToString();
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>> NormalizeImages(Dictionary<string, List<string>> images)
+    {
+        var normalized = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in images)
+            normalized[key] = value.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        return normalized;
+    }
+
+    private string GetManifestArtifactName()
+        => _configuration["HostWorkerUpdates:ManifestArtifactName"] ?? "runnerrunner-hostworker-manifest";
+
+    private string GetAssetsArtifactName()
+        => _configuration["HostWorkerUpdates:AssetsArtifactName"] ?? "runnerrunner-hostworker-assets";
+
+    private HttpRequestMessage CreateGitHubRequest(HttpMethod method, string url)
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.UserAgent.ParseAdd("RunnerRunner");
+        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        var token = _configuration["HostWorkerUpdates:GitHubToken"];
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
+        return request;
     }
 
     private sealed class GitHubReleaseResponse
@@ -280,8 +535,62 @@ public sealed class HostWorkerUpdateService
         public string BrowserDownloadUrl { get; set; } = "";
     }
 
+    private sealed class GitHubCommitResponse
+    {
+        [JsonPropertyName("sha")]
+        public string Sha { get; set; } = "";
+
+        [JsonPropertyName("html_url")]
+        public string? HtmlUrl { get; set; }
+    }
+
+    private sealed class GitHubWorkflowRunsResponse
+    {
+        [JsonPropertyName("workflow_runs")]
+        public List<GitHubWorkflowRunResponse> WorkflowRuns { get; set; } = [];
+    }
+
+    private sealed class GitHubWorkflowRunResponse
+    {
+        [JsonPropertyName("id")]
+        public long Id { get; set; }
+
+        [JsonPropertyName("html_url")]
+        public string? HtmlUrl { get; set; }
+
+        [JsonPropertyName("conclusion")]
+        public string? Conclusion { get; set; }
+
+        [JsonPropertyName("created_at")]
+        public DateTimeOffset? CreatedAt { get; set; }
+
+        [JsonPropertyName("updated_at")]
+        public DateTimeOffset? UpdatedAt { get; set; }
+    }
+
+    private sealed class GitHubActionsArtifactsResponse
+    {
+        [JsonPropertyName("artifacts")]
+        public List<GitHubActionsArtifactResponse> Artifacts { get; set; } = [];
+    }
+
+    private sealed class GitHubActionsArtifactResponse
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = "";
+
+        [JsonPropertyName("archive_download_url")]
+        public string ArchiveDownloadUrl { get; set; } = "";
+
+        [JsonPropertyName("expired")]
+        public bool Expired { get; set; }
+    }
+
     private sealed class ReleaseManifest
     {
+        public string? Version { get; set; }
+        public string? GitSha { get; set; }
+        public Dictionary<string, List<string>> Images { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public List<ReleaseManifestAsset> Assets { get; set; } = [];
     }
 
@@ -296,7 +605,11 @@ public sealed record HostWorkerReleaseInfo(
     string Version,
     string? ReleaseUrl,
     DateTimeOffset? PublishedAt,
-    IReadOnlyList<HostWorkerReleaseAsset> Assets);
+    IReadOnlyList<HostWorkerReleaseAsset> Assets)
+{
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Images { get; init; }
+        = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+}
 
 public sealed record HostWorkerReleaseAsset(string Name, string DownloadUrl, string Sha256);
 
@@ -314,13 +627,16 @@ public sealed record HostWorkerUpdateSelection(
 public sealed record HostWorkerUpdateAvailability(
     HostWorkerReleaseInfo? Release,
     HostWorkerReleaseAsset? Asset,
+    string? ContainerImage,
     bool UpdateAvailable,
     string? UnavailableReason)
 {
-    public bool IsAvailable => Release != null && Asset != null && string.IsNullOrWhiteSpace(UnavailableReason);
+    public bool IsAvailable => Release != null
+                               && (Asset != null || !string.IsNullOrWhiteSpace(ContainerImage))
+                               && string.IsNullOrWhiteSpace(UnavailableReason);
 
     public static HostWorkerUpdateAvailability Unavailable(string? reason)
-        => new(null, null, false, reason ?? "No compatible update is available.");
+        => new(null, null, null, false, reason ?? "No compatible update is available.");
 }
 
 public static class HostWorkerUpdateSelector
@@ -357,6 +673,42 @@ public static class HostWorkerUpdateSelector
 
         unavailableReason = null;
         return true;
+    }
+
+    public static bool TrySelectContainerImage(
+        Host host,
+        HostWorkerReleaseInfo release,
+        out string? image,
+        out string? unavailableReason)
+    {
+        var imageKey = host.Platform == HostPlatform.Windows ? "hostworkerWindows" : "hostworker";
+        if (!release.Images.TryGetValue(imageKey, out var images) || images.Count == 0)
+        {
+            image = null;
+            unavailableReason = $"Release {release.Version} does not include a {imageKey} container image.";
+            return false;
+        }
+
+        image = images.FirstOrDefault(x => x.EndsWith(":" + release.Version, StringComparison.OrdinalIgnoreCase))
+                ?? images[0];
+        unavailableReason = null;
+        return true;
+    }
+
+    public static bool IsContainerized(Host host)
+        => host.IsContainerized || host.Capabilities.Any(x => string.Equals(x, "container", StringComparison.OrdinalIgnoreCase));
+
+    public static bool IsHostWorkerAssetName(string assetName)
+    {
+        var fileName = Path.GetFileName(assetName);
+        if (!string.Equals(fileName, assetName, StringComparison.Ordinal))
+            return false;
+
+        return fileName is "runnerrunner-hostworker-linux-x64.tar.gz"
+            or "runnerrunner-hostworker-linux-arm64.tar.gz"
+            or "runnerrunner-hostworker-osx-x64.tar.gz"
+            or "runnerrunner-hostworker-osx-arm64.tar.gz"
+            or "runnerrunner-hostworker-win-x64.zip";
     }
 
     public static bool IsUpdateAvailable(string? currentVersion, string latestVersion)

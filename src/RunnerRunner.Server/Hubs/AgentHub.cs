@@ -97,6 +97,9 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             host.OsVersion = agentInfo.OsVersion;
             host.Architecture = agentInfo.Architecture;
             host.AgentVersion = agentInfo.AgentVersion;
+            host.IsContainerized = agentInfo.Runtime?.IsContainer ?? false;
+            host.ContainerId = agentInfo.Runtime?.ContainerId;
+            host.ContainerImage = agentInfo.Runtime?.ContainerImage;
             host.Capabilities = agentInfo.Capabilities;
             host.LastHeartbeat = DateTime.UtcNow;
             host.IsApproved = true;
@@ -113,6 +116,9 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
                 OsVersion = agentInfo.OsVersion,
                 Architecture = agentInfo.Architecture,
                 AgentVersion = agentInfo.AgentVersion,
+                IsContainerized = agentInfo.Runtime?.IsContainer ?? false,
+                ContainerId = agentInfo.Runtime?.ContainerId,
+                ContainerImage = agentInfo.Runtime?.ContainerImage,
                 Capabilities = agentInfo.Capabilities,
                 LastHeartbeat = DateTime.UtcNow,
                 IsApproved = true
