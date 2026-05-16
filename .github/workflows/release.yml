@@ -32,6 +32,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: [test, windows-hostworker-image]
+    if: ${{ always() && needs.test.result == 'success' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -125,10 +126,12 @@ jobs:
 
       - name: Generate checksums and manifest
         shell: bash
+        env:
+          WINDOWS_HOSTWORKER_IMAGE_AVAILABLE: ${{ needs.windows-hostworker-image.result == 'success' }}
         run: |
           set -euo pipefail
           cd artifacts/release
-          sha256sum * > SHA256SUMS
+          sha256sum -- * > SHA256SUMS
           python - <<'PY'
           import hashlib, json, os
           assets = []
@@ -139,23 +142,25 @@ jobs:
                   with open(name, "rb") as f:
                       digest = hashlib.sha256(f.read()).hexdigest()
                   assets.append({"name": name, "sha256": digest})
+          images = {
+              "server": [
+                  f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
+                  f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_SHA']}"
+              ],
+              "hostworker": [
+                  f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
+                  f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_SHA']}"
+              ]
+          }
+          if os.environ.get("WINDOWS_HOSTWORKER_IMAGE_AVAILABLE", "").lower() == "true":
+              images["hostworkerWindows"] = [
+                  f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
+                  f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_SHA']}"
+              ]
           manifest = {
               "version": os.environ["GITHUB_REF_NAME"],
               "gitSha": os.environ["GITHUB_SHA"],
-              "images": {
-                  "server": [
-                      f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
-                      f"{os.environ['SERVER_IMAGE']}:{os.environ['GITHUB_SHA']}"
-                  ],
-                  "hostworker": [
-                      f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
-                      f"{os.environ['HOSTWORKER_IMAGE']}:{os.environ['GITHUB_SHA']}"
-                  ],
-                  "hostworkerWindows": [
-                      f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_REF_NAME']}",
-                      f"{os.environ['HOSTWORKER_WINDOWS_IMAGE']}:{os.environ['GITHUB_SHA']}"
-                  ]
-              },
+              "images": images,
               "assets": assets
           }
           with open("release-manifest.json", "w", encoding="utf-8") as f:
@@ -185,6 +190,35 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Ensure Docker daemon is running
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if ($null -eq $service) {
+            throw "Docker service is not installed on this runner."
+          }
+
+          if ($service.Status -ne "Running") {
+            Start-Service docker
+          }
+
+          $ready = $false
+          $deadline = (Get-Date).AddMinutes(2)
+          do {
+            docker version
+            if ($LASTEXITCODE -eq 0) {
+              $ready = $true
+              break
+            }
+
+            Start-Sleep -Seconds 5
+          } while ((Get-Date) -lt $deadline)
+
+          if (-not $ready) {
+            throw "Docker daemon did not become ready."
+          }
 
       - name: Log in to GHCR
         shell: pwsh

@@ -152,6 +152,35 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Ensure Docker daemon is running
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if ($null -eq $service) {
+            throw "Docker service is not installed on this runner."
+          }
+
+          if ($service.Status -ne "Running") {
+            Start-Service docker
+          }
+
+          $ready = $false
+          $deadline = (Get-Date).AddMinutes(2)
+          do {
+            docker version
+            if ($LASTEXITCODE -eq 0) {
+              $ready = $true
+              break
+            }
+
+            Start-Sleep -Seconds 5
+          } while ((Get-Date) -lt $deadline)
+
+          if (-not $ready) {
+            throw "Docker daemon did not become ready."
+          }
+
       - name: Log in to GHCR
         shell: pwsh
         run: |
