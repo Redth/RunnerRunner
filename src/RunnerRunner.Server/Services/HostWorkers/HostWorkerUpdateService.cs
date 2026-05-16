@@ -17,6 +17,7 @@ public sealed class HostWorkerUpdateService
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
+    private readonly GitHubAuthenticationService _gitHubAuth;
     private readonly IDocumentStore _store;
     private readonly IHostCommandDispatcher _dispatcher;
     private readonly HostWorkerLocalUpdateStore _localUpdateStore;
@@ -28,6 +29,7 @@ public sealed class HostWorkerUpdateService
     public HostWorkerUpdateService(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
+        GitHubAuthenticationService gitHubAuth,
         IDocumentStore store,
         IHostCommandDispatcher dispatcher,
         HostWorkerLocalUpdateStore localUpdateStore,
@@ -35,6 +37,7 @@ public sealed class HostWorkerUpdateService
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
+        _gitHubAuth = gitHubAuth;
         _store = store;
         _dispatcher = dispatcher;
         _localUpdateStore = localUpdateStore;
@@ -280,12 +283,12 @@ public sealed class HostWorkerUpdateService
 
     private async Task<HostWorkerReleaseInfo?> FetchGitHubReleaseAsync(string? version, bool allowNotFound, CancellationToken ct)
     {
-        var repository = _configuration["HostWorkerUpdates:Repository"] ?? "Redth/RunnerRunner";
+        var repository = GetUpdateRepository();
         var requestUrl = IsLatestRelease(version)
             ? $"https://api.github.com/repos/{repository}/releases/latest"
             : $"https://api.github.com/repos/{repository}/releases/tags/{Uri.EscapeDataString(version!.Trim())}";
         var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
-        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, requestUrl, repository, ct);
         using var response = await client.SendAsync(request, ct);
         if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
             return null;
@@ -302,7 +305,7 @@ public sealed class HostWorkerUpdateService
         if (manifestAsset == null || string.IsNullOrWhiteSpace(manifestAsset.BrowserDownloadUrl))
             return null;
 
-        var manifest = await FetchManifestAsync(client, manifestAsset.BrowserDownloadUrl, ct);
+        var manifest = await FetchManifestAsync(client, manifestAsset.BrowserDownloadUrl, repository, ct);
         var assets = release.Assets
             .Where(asset => !string.IsNullOrWhiteSpace(asset.BrowserDownloadUrl))
             .Select(asset => new HostWorkerReleaseAsset(
@@ -325,7 +328,7 @@ public sealed class HostWorkerUpdateService
         if (string.IsNullOrWhiteSpace(reference))
             return null;
 
-        var repository = _configuration["HostWorkerUpdates:Repository"] ?? "Redth/RunnerRunner";
+        var repository = GetUpdateRepository();
         var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
         var commit = await FetchCommitAsync(client, repository, reference, ct);
         if (commit == null || string.IsNullOrWhiteSpace(commit.Sha))
@@ -336,7 +339,7 @@ public sealed class HostWorkerUpdateService
                      .Where(x => string.Equals(x.Conclusion, "success", StringComparison.OrdinalIgnoreCase))
                      .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt ?? DateTimeOffset.MinValue))
         {
-            var artifacts = await FetchActionsArtifactsAsync(run.Id, ct);
+            var artifacts = await FetchActionsArtifactsAsync(run.Id, repository, ct);
             var manifestArtifact = artifacts.FirstOrDefault(x =>
                 !x.Expired &&
                 string.Equals(x.Name, GetManifestArtifactName(), StringComparison.OrdinalIgnoreCase) &&
@@ -349,7 +352,7 @@ public sealed class HostWorkerUpdateService
             if (manifestArtifact == null || assetsArtifact == null)
                 continue;
 
-            var manifest = await FetchManifestFromArtifactAsync(manifestArtifact.ArchiveDownloadUrl, ct);
+            var manifest = await FetchManifestFromArtifactAsync(manifestArtifact.ArchiveDownloadUrl, repository, ct);
             var publicBaseUrl = selection.PublicBaseUrl ?? _configuration["HostWorkerUpdates:PublicBaseUrl"];
             var assets = manifest.Assets
                 .Where(asset => HostWorkerUpdateSelector.IsHostWorkerAssetName(asset.Name))
@@ -382,9 +385,9 @@ public sealed class HostWorkerUpdateService
         => string.IsNullOrWhiteSpace(version)
            || string.Equals(version.Trim(), "latest", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<ReleaseManifest> FetchManifestAsync(HttpClient client, string url, CancellationToken ct)
+    private async Task<ReleaseManifest> FetchManifestAsync(HttpClient client, string url, string repository, CancellationToken ct)
     {
-        using var request = CreateGitHubRequest(HttpMethod.Get, url);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, url, repository, ct);
         using var response = await client.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -399,7 +402,7 @@ public sealed class HostWorkerUpdateService
         CancellationToken ct)
     {
         var requestUrl = $"https://api.github.com/repos/{repository}/commits/{Uri.EscapeDataString(reference)}";
-        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, requestUrl, repository, ct);
         using var response = await client.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
@@ -416,7 +419,7 @@ public sealed class HostWorkerUpdateService
         CancellationToken ct)
     {
         var requestUrl = $"https://api.github.com/repos/{repository}/actions/runs?head_sha={Uri.EscapeDataString(sha)}&status=success&per_page=20";
-        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, requestUrl, repository, ct);
         using var response = await client.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -424,12 +427,11 @@ public sealed class HostWorkerUpdateService
         return runs?.WorkflowRuns ?? [];
     }
 
-    private async Task<IReadOnlyList<GitHubActionsArtifactResponse>> FetchActionsArtifactsAsync(long runId, CancellationToken ct)
+    private async Task<IReadOnlyList<GitHubActionsArtifactResponse>> FetchActionsArtifactsAsync(long runId, string repository, CancellationToken ct)
     {
-        var repository = _configuration["HostWorkerUpdates:Repository"] ?? "Redth/RunnerRunner";
         var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
         var requestUrl = $"https://api.github.com/repos/{repository}/actions/runs/{runId}/artifacts?per_page=100";
-        using var request = CreateGitHubRequest(HttpMethod.Get, requestUrl);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, requestUrl, repository, ct);
         using var response = await client.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -437,10 +439,10 @@ public sealed class HostWorkerUpdateService
         return artifacts?.Artifacts ?? [];
     }
 
-    private async Task<ReleaseManifest> FetchManifestFromArtifactAsync(string archiveDownloadUrl, CancellationToken ct)
+    private async Task<ReleaseManifest> FetchManifestFromArtifactAsync(string archiveDownloadUrl, string repository, CancellationToken ct)
     {
         var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
-        await using var stream = await DownloadArtifactArchiveAsync(client, archiveDownloadUrl, ct);
+        await using var stream = await DownloadArtifactArchiveAsync(client, archiveDownloadUrl, repository, ct);
         using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
         var entry = archive.GetEntry("release-manifest.json") ??
                     archive.Entries.FirstOrDefault(x => string.Equals(Path.GetFileName(x.FullName), "release-manifest.json", StringComparison.OrdinalIgnoreCase));
@@ -452,9 +454,9 @@ public sealed class HostWorkerUpdateService
                ?? new ReleaseManifest();
     }
 
-    private async Task<MemoryStream> DownloadArtifactArchiveAsync(HttpClient client, string url, CancellationToken ct)
+    private async Task<MemoryStream> DownloadArtifactArchiveAsync(HttpClient client, string url, string repository, CancellationToken ct)
     {
-        using var request = CreateGitHubRequest(HttpMethod.Get, url);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, url, repository, ct);
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         var memory = new MemoryStream();
@@ -465,8 +467,9 @@ public sealed class HostWorkerUpdateService
 
     private async Task DownloadArtifactArchiveToFileAsync(string url, string outputPath, CancellationToken ct)
     {
+        var repository = GetUpdateRepository();
         var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
-        using var request = CreateGitHubRequest(HttpMethod.Get, url);
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, url, repository, ct);
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         await using var input = await response.Content.ReadAsStreamAsync(ct);
@@ -500,15 +503,97 @@ public sealed class HostWorkerUpdateService
     private string GetAssetsArtifactName()
         => _configuration["HostWorkerUpdates:AssetsArtifactName"] ?? "runnerrunner-hostworker-assets";
 
-    private HttpRequestMessage CreateGitHubRequest(HttpMethod method, string url)
+    private async Task<HttpRequestMessage> CreateGitHubRequestAsync(
+        HttpMethod method,
+        string url,
+        string repository,
+        CancellationToken ct)
     {
         var request = new HttpRequestMessage(method, url);
         request.Headers.UserAgent.ParseAdd("RunnerRunner");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
-        var token = _configuration["HostWorkerUpdates:GitHubToken"];
+        var token = await ResolveGitHubTokenAsync(repository, ct);
         if (!string.IsNullOrWhiteSpace(token))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
         return request;
+    }
+
+    private string GetUpdateRepository()
+    {
+        var repository = _configuration["HostWorkerUpdates:Repository"]?.Trim().Trim('/');
+        return string.IsNullOrWhiteSpace(repository) ? "Redth/RunnerRunner" : repository;
+    }
+
+    private async Task<string?> ResolveGitHubTokenAsync(string repository, CancellationToken ct)
+    {
+        var configuredToken = _configuration["HostWorkerUpdates:GitHubToken"];
+        if (!string.IsNullOrWhiteSpace(configuredToken))
+            return configuredToken.Trim();
+
+        var credential = await ResolveGitHubUpdateCredentialAsync(repository, ct);
+        if (credential == null)
+            return null;
+
+        _logger.LogDebug(
+            "Using GitHub credential {CredentialName} for HostWorker update repository {Repository}",
+            credential.Name,
+            repository);
+
+        return await _gitHubAuth.GetAccessTokenAsync(credential, repository: repository, ct: ct);
+    }
+
+    private async Task<ProviderCredential?> ResolveGitHubUpdateCredentialAsync(string repository, CancellationToken ct)
+    {
+        var configuredCredentialId = _configuration["HostWorkerUpdates:ProviderCredentialId"];
+        if (!string.IsNullOrWhiteSpace(configuredCredentialId))
+        {
+            var credential = await _store.Get<ProviderCredential>(configuredCredentialId.Trim());
+            if (credential == null)
+                throw new InvalidOperationException($"HostWorkerUpdates:ProviderCredentialId '{configuredCredentialId}' was not found.");
+
+            if (credential.Provider != RunnerProvider.GitHubActions)
+                throw new InvalidOperationException($"HostWorkerUpdates:ProviderCredentialId '{configuredCredentialId}' is not a GitHub Actions credential.");
+
+            if (!GitHubAuthenticationService.HasGitHubApiCredentials(credential, repository: repository))
+                throw new InvalidOperationException($"GitHub credential '{credential.Name}' cannot access HostWorker update repository '{repository}'.");
+
+            return credential;
+        }
+
+        var credentials = (await _store.Query<ProviderCredential>().ToList())
+            .Where(credential => credential.Provider == RunnerProvider.GitHubActions)
+            .ToList();
+
+        return credentials.FirstOrDefault(credential =>
+                   CredentialTargetsRepository(credential, repository)
+                   && GitHubAuthenticationService.HasGitHubApiCredentials(credential, repository: repository))
+               ?? credentials.FirstOrDefault(credential =>
+                   credential.GitHubAuthType == GitHubAuthType.PersonalAccessToken
+                   && string.IsNullOrWhiteSpace(credential.GitHubOrg)
+                   && string.IsNullOrWhiteSpace(credential.GitHubRepo)
+                   && !string.IsNullOrWhiteSpace(credential.GitHubToken)
+                   && GitHubAuthenticationService.HasGitHubApiCredentials(credential, repository: repository));
+    }
+
+    private static bool CredentialTargetsRepository(ProviderCredential credential, string repository)
+    {
+        var normalizedRepository = GitHubCredentialResolver.NormalizeRepository(repository);
+        if (string.IsNullOrWhiteSpace(normalizedRepository))
+            return false;
+
+        if (GitHubCredentialResolver.ResolveTargetForRepository(credential, normalizedRepository) != null)
+            return true;
+
+        var target = GitHubCredentialResolver.ResolveDefaultTarget(credential);
+        if (target == null)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(target.Repository))
+            return string.Equals(target.Repository, normalizedRepository, StringComparison.OrdinalIgnoreCase);
+
+        var owner = normalizedRepository.Split('/', 2)[0];
+        return !string.IsNullOrWhiteSpace(target.Owner)
+               && string.Equals(target.Owner, owner, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class GitHubReleaseResponse

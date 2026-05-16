@@ -521,7 +521,8 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `Orleans:AdvertisedIPAddress` | *(empty)* | External IP advertised by the server Orleans silo in production |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | Optional OTLP endpoint for logs, metrics, and traces |
 | `HostWorkerUpdates:Repository` | `Redth/RunnerRunner` | GitHub repository used for HostWorker update checks |
-| `HostWorkerUpdates:GitHubToken` | *(empty)* | Optional GitHub token used for private repositories, higher API limits, and workflow artifact downloads |
+| `HostWorkerUpdates:GitHubToken` | *(empty)* | Optional GitHub token used for private repositories, higher API limits, and workflow artifact downloads; overrides stored credentials |
+| `HostWorkerUpdates:ProviderCredentialId` | *(empty)* | Optional GitHub Actions credential ID to use for update checks; otherwise the server uses a matching stored GitHub App/PAT credential when available |
 | `HostWorkerUpdates:CacheMinutes` | `30` | How long the latest GitHub release check is cached |
 | `HostWorkerUpdates:ManifestArtifactName` | `runnerrunner-hostworker-manifest` | GitHub Actions artifact containing `release-manifest.json` for branch/commit update refs |
 | `HostWorkerUpdates:AssetsArtifactName` | `runnerrunner-hostworker-assets` | GitHub Actions artifact containing native HostWorker archives for branch/commit update refs |
