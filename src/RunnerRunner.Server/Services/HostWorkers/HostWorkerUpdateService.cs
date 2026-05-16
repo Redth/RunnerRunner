@@ -241,7 +241,8 @@ public sealed class HostWorkerUpdateService
         if (!HostWorkerUpdateSelector.IsHostWorkerAssetName(assetName))
             throw new InvalidOperationException($"Unsupported HostWorker update artifact '{assetName}'.");
 
-        var artifacts = await FetchActionsArtifactsAsync(runId, ct);
+        var repository = GetUpdateRepository();
+        var artifacts = await FetchActionsArtifactsAsync(runId, repository, ct);
         var artifact = artifacts.FirstOrDefault(x =>
             !x.Expired &&
             string.Equals(x.Name, artifactName, StringComparison.OrdinalIgnoreCase) &&
