@@ -27,6 +27,7 @@ builder.Services.AddSingleton<HostWorkerSelfUpdater>();
 builder.Services.AddSingleton<RunnerLifecycleManager>();
 builder.Services.AddSingleton<HealthReporter>();
 builder.Services.AddSingleton<ImageManager>();
+builder.Services.AddSingleton<HostResourceUsageCollector>();
 
 builder.Services.AddSingleton<HostCommandProcessor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HostCommandProcessor>());

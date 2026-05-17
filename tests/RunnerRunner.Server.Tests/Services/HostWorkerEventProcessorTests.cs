@@ -52,6 +52,35 @@ public class HostWorkerEventProcessorTests
         Assert.Empty(cache.GetTail("canonical-host", "command-1", maxFrames: 10));
     }
 
+    [Fact]
+    public async Task HandleMessageAsync_StoresObservedTartUsageFromHeartbeat()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new Host
+        {
+            Id = "canonical-host",
+            Name = "mac-mini",
+            Platform = HostPlatform.MacOS
+        });
+        var processor = CreateProcessor(store);
+        var message = HostWorkerProtocol.CreateMessage(
+            "worker-host",
+            HostWorkerMessageKinds.Heartbeat,
+            new HeartbeatEvent
+            {
+                AgentId = "worker-host",
+                RunningInstanceCount = 0,
+                ResourceUsage = new HostResourceUsage { RunningTartVmCount = 2 }
+            });
+
+        await processor.HandleMessageAsync("canonical-host", message, CancellationToken.None);
+
+        var host = await store.Get<Host>("canonical-host");
+        Assert.NotNull(host);
+        Assert.Equal(2, host.ObservedRunningTartVMs);
+        Assert.NotNull(host.ObservedResourceUsageAt);
+    }
+
     private static HostWorkerEventProcessor CreateProcessor(HostWorkerLogCache cache)
         => new(
             Substitute.For<IDocumentStore>(),

@@ -64,7 +64,7 @@ public class ServerHostRegistrationService : BackgroundService
             // Heartbeat loop
             while (!stoppingToken.IsCancellationRequested)
             {
-                try { await hostGrain.RecordHeartbeat("local-silo", 0); }
+                try { await hostGrain.RecordHeartbeat("local-silo", 0, null); }
                 catch { }
                 await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             }

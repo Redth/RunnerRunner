@@ -143,26 +143,18 @@ public class TartBackend : IRunnerBackend
         var result = new List<DiscoveredRunner>();
         try
         {
-            var listResult = await RunCommandAsync("tart", "list --format json", ct);
-            if (listResult.ExitCode != 0 || string.IsNullOrWhiteSpace(listResult.Output))
-                return result;
-
-            using var doc = JsonDocument.Parse(listResult.Output);
-            foreach (var element in doc.RootElement.EnumerateArray())
+            foreach (var vm in await ListVmsAsync(ct))
             {
-                var name = element.GetProperty("Name").GetString() ?? "";
-                if (!name.StartsWith("rr-"))
+                if (!vm.Name.StartsWith("rr-", StringComparison.OrdinalIgnoreCase))
                     continue;
-
-                var state = element.GetProperty("State").GetString() ?? "";
 
                 result.Add(new DiscoveredRunner
                 {
-                    VmName = name,
-                    RunnerName = name.StartsWith("rr-") ? name[3..] : name,
+                    VmName = vm.Name,
+                    RunnerName = vm.Name.StartsWith("rr-", StringComparison.OrdinalIgnoreCase) ? vm.Name[3..] : vm.Name,
                     Backend = ExecutionBackend.Tart,
-                    IsRunning = string.Equals(state, "running", StringComparison.OrdinalIgnoreCase),
-                    Status = state
+                    IsRunning = vm.IsRunning,
+                    Status = vm.State
                 });
             }
         }
@@ -172,6 +164,52 @@ public class TartBackend : IRunnerBackend
         }
 
         return result;
+    }
+
+    public async Task<int> CountRunningVmsAsync(CancellationToken ct = default)
+    {
+        var vms = await ListVmsAsync(ct);
+        return vms.Count(vm => vm.IsRunning);
+    }
+
+    internal static List<TartVmInfo> ParseListOutput(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+            return [];
+
+        using var doc = JsonDocument.Parse(output);
+        var vms = new List<TartVmInfo>();
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            var name = GetStringProperty(element, "Name") ?? "";
+            var state = GetStringProperty(element, "State") ?? "";
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            vms.Add(new TartVmInfo(name, state));
+        }
+
+        return vms;
+    }
+
+    private async Task<List<TartVmInfo>> ListVmsAsync(CancellationToken ct)
+    {
+        var listResult = await RunCommandAsync("tart", "list --format json", ct);
+        if (listResult.ExitCode != 0)
+            throw new InvalidOperationException($"tart list --format json failed: {listResult.Output}");
+
+        return ParseListOutput(listResult.Output);
+    }
+
+    private static string? GetStringProperty(JsonElement element, string propertyName)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                return property.Value.GetString();
+        }
+
+        return null;
     }
 
     private async Task<string?> WaitForVmIp(string vmName, CancellationToken ct)
@@ -493,12 +531,34 @@ public class TartBackend : IRunnerBackend
         }
 
         var process = Process.Start(psi)!;
-        var output = await process.StandardOutput.ReadToEndAsync(ct);
-        var stderr = await process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        string output;
+        string stderr;
+        try
+        {
+            output = await process.StandardOutput.ReadToEndAsync(ct);
+            stderr = await process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillCanceledProcess(process);
+            throw;
+        }
 
         var combinedOutput = string.IsNullOrEmpty(stderr) ? output : $"{output}\n{stderr}";
         return (process.ExitCode, combinedOutput.Trim());
+    }
+
+    private static void TryKillCanceledProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
     private static string? ResolveToolPath(string command, params string[] preferredPaths)
@@ -519,4 +579,9 @@ public class TartBackend : IRunnerBackend
 
         return null;
     }
+}
+
+internal sealed record TartVmInfo(string Name, string State)
+{
+    public bool IsRunning => string.Equals(State, "running", StringComparison.OrdinalIgnoreCase);
 }

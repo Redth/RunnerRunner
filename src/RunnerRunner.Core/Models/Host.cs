@@ -65,6 +65,13 @@ public class Host
     public int MaxTartVMs { get; set; } = 3;
     public int MaxNativeProcesses { get; set; } = 5;
 
+    /// <summary>
+    /// Total running Tart VMs observed on the host, including VMs not started by RunnerRunner.
+    /// Used to reserve Tart capacity consumed by native jobs or other local workloads.
+    /// </summary>
+    public int? ObservedRunningTartVMs { get; set; }
+    public DateTime? ObservedResourceUsageAt { get; set; }
+
     /// <summary>Host group ID for logical grouping.</summary>
     public string? GroupId { get; set; }
 

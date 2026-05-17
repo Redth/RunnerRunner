@@ -266,7 +266,8 @@ public class OrchestrationEngine : BackgroundService
             WorkDirectory = host?.WorkDirectory,
             InitSteps = initSteps,
             RegistryUsername = registryCred?.Username,
-            RegistryPassword = registryCred?.Password
+            RegistryPassword = registryCred?.Password,
+            BackendCapacityLimit = host == null ? null : CapacityPlanningService.GetBackendLimit(host, profile.ExecutionBackend)
         };
 
         await runnerGrain.MarkStarting("Sending deploy command to host");

@@ -113,6 +113,39 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void AnalyzeHostSelection_BlocksWhenObservedTartCapacityIsReached()
+    {
+        var host = new Host
+        {
+            Name = "mac-mini",
+            Platform = HostPlatform.MacOS,
+            MaxTartVMs = 2,
+            ObservedRunningTartVMs = 2,
+            ObservedResourceUsageAt = DateTime.UtcNow
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "macos-tart",
+            RequiredHostPlatform = HostPlatform.MacOS,
+            ExecutionBackend = ExecutionBackend.Tart,
+            MaxParallelPerHost = 2
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            []);
+
+        Assert.True(analysis.CapacityBlocked);
+        Assert.Equal(CapacityBlockerKind.Host, analysis.BlockedBy);
+        Assert.Single(analysis.Candidates);
+        Assert.Equal(2, analysis.Candidates[0].BackendCapacity.Used);
+        Assert.Equal(0, analysis.Candidates[0].BackendCapacity.Remaining);
+    }
+
+    [Fact]
     public void AnalyzeHostSelection_RespectsTargetHostAndHostCapacity()
     {
         var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 5 };

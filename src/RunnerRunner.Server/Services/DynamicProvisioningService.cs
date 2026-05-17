@@ -805,8 +805,15 @@ public class DynamicProvisioningService : BackgroundService
                 WorkDirectory = hostSelection.Host.WorkDirectory,
                 InitSteps = initSteps,
                 RegistryUsername = registryCred?.Username,
-                RegistryPassword = registryCred?.Password
+                RegistryPassword = registryCred?.Password,
+                BackendCapacityLimit = CapacityPlanningService.GetBackendLimit(hostSelection.Host, profile.ExecutionBackend)
             };
+
+            currentEvent.MarkResolved("provisioned", now, instanceId);
+            currentEvent.LastAttemptAt = now;
+            currentEvent.MatchedProfileId = profile.Id;
+            currentEvent.MatchedProfileName = profile.Name;
+            await store.Update(currentEvent);
 
             try
             {
@@ -824,12 +831,6 @@ public class DynamicProvisioningService : BackgroundService
                     now);
                 return QueueProcessingOutcome.Blocked;
             }
-
-            currentEvent.MarkResolved("provisioned", now, instanceId);
-            currentEvent.LastAttemptAt = now;
-            currentEvent.MatchedProfileId = profile.Id;
-            currentEvent.MatchedProfileName = profile.Name;
-            await store.Update(currentEvent);
 
             _logger.LogInformation(
                 "Dynamic runner {RunnerName} dispatched to {HostName} for job {JobId} with labels [{Labels}] (event {EventId}){OverrideDetail}",

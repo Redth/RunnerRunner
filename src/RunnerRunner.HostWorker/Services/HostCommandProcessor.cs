@@ -18,6 +18,7 @@ internal sealed class HostCommandProcessor : BackgroundService
     private readonly HostWorkerPaths _paths;
     private readonly HostWorkerLocalLogStore _logStore;
     private readonly HostWorkerSelfUpdater _selfUpdater;
+    private readonly HostResourceUsageCollector _resourceUsageCollector;
     private readonly ILogger<HostCommandProcessor> _logger;
     private readonly IRunnerBackend _dockerBackend;
     private readonly IRunnerBackend _tartBackend;
@@ -40,6 +41,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         HostWorkerPaths paths,
         HostWorkerLocalLogStore logStore,
         HostWorkerSelfUpdater selfUpdater,
+        HostResourceUsageCollector resourceUsageCollector,
         ILogger<HostCommandProcessor> logger,
         ILoggerFactory loggerFactory)
     {
@@ -50,6 +52,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         _paths = paths;
         _logStore = logStore;
         _selfUpdater = selfUpdater;
+        _resourceUsageCollector = resourceUsageCollector;
         _logger = logger;
         _dockerBackend = new DockerBackend(loggerFactory.CreateLogger<DockerBackend>());
         _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>());
@@ -179,6 +182,12 @@ internal sealed class HostCommandProcessor : BackgroundService
             return;
         }
 
+        if (command.Backend == ExecutionBackend.Tart
+            && await IsTartCapacityFullAsync(command, ct))
+        {
+            return;
+        }
+
         await PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
         {
             InstanceId = command.InstanceId,
@@ -211,6 +220,38 @@ internal sealed class HostCommandProcessor : BackgroundService
             }, ct);
             throw;
         }
+    }
+
+    private async Task<bool> IsTartCapacityFullAsync(DeployRunnerCommand command, CancellationToken ct)
+    {
+        var usage = await _resourceUsageCollector.CollectAsync("tart deploy preflight", ct);
+        if (usage == null)
+            return false;
+
+        await PublishAsync(HostWorkerMessageKinds.Heartbeat, new HeartbeatEvent
+        {
+            AgentId = _identity.HostId,
+            RunningInstanceCount = _lifecycleManager.RunningInstances.Count,
+            ResourceUsage = usage
+        }, ct);
+
+        if (command.BackendCapacityLimit is not int limit)
+            return false;
+
+        var runningTartVmCount = usage.RunningTartVmCount ?? 0;
+        if (runningTartVmCount < Math.Max(0, limit))
+            return false;
+
+        var message = $"Tart capacity is full on host {_identity.HostName}: {runningTartVmCount}/{Math.Max(0, limit)} VM(s) are already running.";
+        _logger.LogInformation("Rejecting Tart runner {RunnerName}: {Message}", command.RunnerName, message);
+        await PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
+        {
+            InstanceId = command.InstanceId,
+            Reason = "failed",
+            ErrorMessage = message
+        }, ct);
+
+        return true;
     }
 
     private async Task HandleStopRunnerAsync(StopRunnerCommand command, CancellationToken ct)

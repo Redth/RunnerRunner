@@ -15,7 +15,7 @@ public interface IHostGrain : IGrainWithStringKey
     Task UpdateLabels(Dictionary<string, string> labels);
     Task SetResourceLimits(int maxDocker, int maxTart, int maxNative);
     Task SetGroupId(string? groupId);
-    Task RecordHeartbeat(string connectionId, int runningCount);
+    Task RecordHeartbeat(string connectionId, int runningCount, HostResourceUsage? resourceUsage);
     Task MarkOffline();
     Task<bool> CanAcceptRunner(ExecutionBackend backend);
     Task IncrementRunningCount(ExecutionBackend backend);

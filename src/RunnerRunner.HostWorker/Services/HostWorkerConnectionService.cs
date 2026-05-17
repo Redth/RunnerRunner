@@ -16,6 +16,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
     private readonly RunnerLifecycleManager _lifecycleManager;
     private readonly HostWorkerLogPublisher _logPublisher;
     private readonly ILogger<HostWorkerConnectionService> _logger;
+    private readonly HostResourceUsageCollector _resourceUsageCollector;
     private readonly Channel<HostWorkerMessage> _outbound = Channel.CreateBounded<HostWorkerMessage>(
         new BoundedChannelOptions(1_000)
         {
@@ -31,7 +32,8 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         HostCommandProcessor processor,
         RunnerLifecycleManager lifecycleManager,
         HostWorkerLogPublisher logPublisher,
-        ILogger<HostWorkerConnectionService> logger)
+        ILogger<HostWorkerConnectionService> logger,
+        HostResourceUsageCollector resourceUsageCollector)
     {
         _configuration = configuration;
         _identity = identity;
@@ -39,6 +41,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         _lifecycleManager = lifecycleManager;
         _logPublisher = logPublisher;
         _logger = logger;
+        _resourceUsageCollector = resourceUsageCollector;
         _processor.AttachEventSink(this);
         _logPublisher.AttachEventSink(this);
     }
@@ -140,13 +143,15 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
         while (await timer.WaitForNextTickAsync(ct))
         {
+            var resourceUsage = await _resourceUsageCollector.CollectAsync("heartbeat", ct);
             await PublishAsync(HostWorkerProtocol.CreateMessage(
                 _identity.HostId,
                 HostWorkerMessageKinds.Heartbeat,
                 new HeartbeatEvent
                 {
                     AgentId = _identity.HostId,
-                    RunningInstanceCount = _lifecycleManager.RunningInstances.Count
+                    RunningInstanceCount = _lifecycleManager.RunningInstances.Count,
+                    ResourceUsage = resourceUsage
                 },
                 sequence: Interlocked.Increment(ref _sequence)), ct);
         }
