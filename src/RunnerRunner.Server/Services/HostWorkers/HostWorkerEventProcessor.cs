@@ -47,7 +47,7 @@ public sealed class HostWorkerEventProcessor
         if (labels.Count > 0)
             await hostGrain.UpdateLabels(new Dictionary<string, string>(labels));
 
-        await hostGrain.RecordHeartbeat(connectionId, agentInfo.CurrentRunners.Count);
+        await hostGrain.RecordHeartbeat(connectionId, agentInfo.CurrentRunners.Count, null);
 
         var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(0);
         await scheduler.RegisterHost(hostId);
@@ -256,20 +256,31 @@ public sealed class HostWorkerEventProcessor
         var host = await _store.Get<Host>(hostId);
         if (host != null)
         {
-            host.LastHeartbeat = DateTime.UtcNow;
+            var now = DateTime.UtcNow;
+            host.LastHeartbeat = now;
             host.AgentStatus = AgentStatus.Online;
-            host.UpdatedAt = DateTime.UtcNow;
+            host.UpdatedAt = now;
+            ApplyResourceUsage(host, evt.ResourceUsage, now);
             await _store.Update(host);
         }
 
         try
         {
             var hostGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
-            await hostGrain.RecordHeartbeat(hostId, evt.RunningInstanceCount);
+            await hostGrain.RecordHeartbeat(hostId, evt.RunningInstanceCount, evt.ResourceUsage);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to sync HostWorker heartbeat for {HostId}", hostId);
+        }
+    }
+
+    private static void ApplyResourceUsage(Host host, HostResourceUsage? resourceUsage, DateTime observedAt)
+    {
+        if (resourceUsage?.RunningTartVmCount is int runningTartVmCount)
+        {
+            host.ObservedRunningTartVMs = Math.Max(0, runningTartVmCount);
+            host.ObservedResourceUsageAt = observedAt;
         }
     }
 

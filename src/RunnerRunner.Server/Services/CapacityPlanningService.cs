@@ -660,15 +660,21 @@ public sealed class CapacityPlanningService
             profilesById.TryGetValue(i.ProfileId, out var instanceProfile)
             && instanceProfile.ExecutionBackend == backend);
 
-        var limit = backend switch
+        if (backend == ExecutionBackend.Tart && host.ObservedRunningTartVMs is int observedRunningTartVMs)
+            used = Math.Max(used, observedRunningTartVMs);
+
+        var limit = GetBackendLimit(host, backend);
+
+        return new CapacityCounter(used, limit);
+    }
+
+    public static int GetBackendLimit(Host host, ExecutionBackend backend) =>
+        backend switch
         {
             ExecutionBackend.Docker => host.MaxDockerContainers,
             ExecutionBackend.Tart => host.MaxTartVMs,
             _ => host.MaxNativeProcesses
         };
-
-        return new CapacityCounter(used, limit);
-    }
 
     private static ProfileHostUsage GetProfileUsage(
         Host host,

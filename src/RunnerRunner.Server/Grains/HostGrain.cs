@@ -84,11 +84,12 @@ public class HostGrain : Grain, IHostGrain
         await _state.WriteStateAsync();
     }
 
-    public async Task RecordHeartbeat(string connectionId, int runningCount)
+    public async Task RecordHeartbeat(string connectionId, int runningCount, HostResourceUsage? resourceUsage)
     {
         _state.State.ConnectionId = connectionId;
         _state.State.LastHeartbeat = DateTime.UtcNow;
         _state.State.Status = AgentStatus.Online;
+        ApplyResourceUsage(resourceUsage);
         await _state.WriteStateAsync();
 
         StartHeartbeatTimer();
@@ -112,7 +113,7 @@ public class HostGrain : Grain, IHostGrain
         var canAccept = backend switch
         {
             ExecutionBackend.Docker => _state.State.RunningDockerContainers < _state.State.MaxDockerContainers,
-            ExecutionBackend.Tart => _state.State.RunningTartVMs < _state.State.MaxTartVMs,
+            ExecutionBackend.Tart => GetEffectiveRunningTartVMs() < _state.State.MaxTartVMs,
             ExecutionBackend.Native => _state.State.RunningNativeProcesses < _state.State.MaxNativeProcesses,
             _ => false
         };
@@ -261,10 +262,24 @@ public class HostGrain : Grain, IHostGrain
         host.MaxDockerContainers = _state.State.MaxDockerContainers;
         host.MaxTartVMs = _state.State.MaxTartVMs;
         host.MaxNativeProcesses = _state.State.MaxNativeProcesses;
+        host.ObservedRunningTartVMs = _state.State.ObservedRunningTartVMs;
+        host.ObservedResourceUsageAt = _state.State.ObservedResourceUsageAt;
         host.GroupId = _state.State.GroupId;
         host.IsApproved = true;
         host.UpdatedAt = DateTime.UtcNow;
     }
+
+    private void ApplyResourceUsage(HostResourceUsage? resourceUsage)
+    {
+        if (resourceUsage?.RunningTartVmCount is int runningTartVmCount)
+        {
+            _state.State.ObservedRunningTartVMs = Math.Max(0, runningTartVmCount);
+            _state.State.ObservedResourceUsageAt = DateTime.UtcNow;
+        }
+    }
+
+    private int GetEffectiveRunningTartVMs()
+        => Math.Max(_state.State.RunningTartVMs, _state.State.ObservedRunningTartVMs ?? 0);
 
     private static void CopyUserManagedFields(Core.Models.Host source, Core.Models.Host target)
     {

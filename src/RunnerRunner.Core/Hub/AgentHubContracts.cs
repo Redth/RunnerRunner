@@ -104,6 +104,14 @@ public class DeployRunnerCommand
     /// <summary>Resolved registry password/token for pulling the Docker image.</summary>
     [Id(20)]
     public string? RegistryPassword { get; set; }
+
+    /// <summary>
+    /// Capacity limit for the selected backend on the target host at dispatch time.
+    /// HostWorkers use this for a final local preflight before starting backends
+    /// whose usage can change outside RunnerRunner.
+    /// </summary>
+    [Id(21)]
+    public int? BackendCapacityLimit { get; set; }
 }
 
 [GenerateSerializer]
@@ -301,6 +309,8 @@ public class HeartbeatEvent
     public double DiskUsagePercent { get; set; }
     [Id(4)]
     public int RunningInstanceCount { get; set; }
+    [Id(5)]
+    public HostResourceUsage? ResourceUsage { get; set; }
 }
 
 // --- Image Management Commands (Server → Agent) ---

@@ -31,6 +31,10 @@ public class HostGrainState
 
     // Cached host environment
     [Id(17)] public Dictionary<string, string> ReportedEnvironment { get; set; } = new();
+
+    // Host-observed usage that may include resources not started by RunnerRunner.
+    [Id(18)] public int? ObservedRunningTartVMs { get; set; }
+    [Id(19)] public DateTime? ObservedResourceUsageAt { get; set; }
 }
 
 [GenerateSerializer]

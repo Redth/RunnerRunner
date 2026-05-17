@@ -295,7 +295,9 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             var hosts = (await _store.Query<Host>().ToList()).Where(h => h.Name == agent.AgentInfo.Name).ToList();
             foreach (var host in hosts)
             {
-                host.LastHeartbeat = DateTime.UtcNow;
+                var now = DateTime.UtcNow;
+                host.LastHeartbeat = now;
+                ApplyResourceUsage(host, evt.ResourceUsage, now);
                 await _store.Update(host);
             }
         }
@@ -304,11 +306,20 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
         try
         {
             var hostGrain = _grainFactory.GetGrain<IHostGrain>(evt.AgentId);
-            await hostGrain.RecordHeartbeat(Context.ConnectionId, evt.RunningInstanceCount);
+            await hostGrain.RecordHeartbeat(Context.ConnectionId, evt.RunningInstanceCount, evt.ResourceUsage);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to sync Heartbeat with Orleans grains for {AgentId}", evt.AgentId);
+        }
+    }
+
+    private static void ApplyResourceUsage(Host host, HostResourceUsage? resourceUsage, DateTime observedAt)
+    {
+        if (resourceUsage?.RunningTartVmCount is int runningTartVmCount)
+        {
+            host.ObservedRunningTartVMs = Math.Max(0, runningTartVmCount);
+            host.ObservedResourceUsageAt = observedAt;
         }
     }
 
