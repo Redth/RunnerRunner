@@ -35,6 +35,9 @@ ARG INFORMATIONAL_VERSION=0.0.0
 ARG SOURCE_REVISION_ID=unknown
 ARG BUILD_TAG=unknown
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.title="RunnerRunner Server" \
       org.opencontainers.image.version="${INFORMATIONAL_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_REVISION_ID}" \

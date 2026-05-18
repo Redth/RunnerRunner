@@ -35,21 +35,31 @@ public class OrchestrationEngine : BackgroundService
     {
         _logger.LogInformation("Orchestration engine started");
 
-        // Wait a bit for HostWorkers to register on startup.
-        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                await ReconcileAsync(stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Reconciliation loop error");
-            }
+            // Wait a bit for HostWorkers to register on startup.
+            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
 
-            await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await ReconcileAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Reconciliation loop error");
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
     }
 

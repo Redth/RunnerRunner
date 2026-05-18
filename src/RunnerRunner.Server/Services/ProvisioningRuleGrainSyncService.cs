@@ -41,18 +41,39 @@ public sealed class ProvisioningRuleGrainSyncService
 
 public sealed class ProvisioningRuleGrainStartupSyncService : IHostedService
 {
+    private static readonly TimeSpan DefaultRetryDelay = TimeSpan.FromSeconds(5);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ProvisioningRuleGrainStartupSyncService> _logger;
+    private readonly TimeSpan _retryDelay;
+    private CancellationTokenSource? _stoppingCts;
+    private Task? _syncTask;
 
     public ProvisioningRuleGrainStartupSyncService(
         IServiceProvider serviceProvider,
         ILogger<ProvisioningRuleGrainStartupSyncService> logger)
+        : this(serviceProvider, logger, DefaultRetryDelay)
+    {
+    }
+
+    public ProvisioningRuleGrainStartupSyncService(
+        IServiceProvider serviceProvider,
+        ILogger<ProvisioningRuleGrainStartupSyncService> logger,
+        TimeSpan retryDelay)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _retryDelay = retryDelay;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _stoppingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _syncTask = RunStartupSyncUntilSuccessfulAsync(_stoppingCts.Token);
+        return Task.CompletedTask;
+    }
+
+    public async Task<int> SynchronizeOnceAsync(CancellationToken cancellationToken)
     {
         using var scope = _serviceProvider.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
@@ -65,10 +86,71 @@ public sealed class ProvisioningRuleGrainStartupSyncService : IHostedService
             await sync.ConfigureRuleAsync(rule);
         }
 
-        _logger.LogInformation("Synchronized {Count} provisioning rules to Orleans grains at startup", rules.Count);
+        return rules.Count;
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        if (_stoppingCts == null || _syncTask == null)
+            return;
+
+        await _stoppingCts.CancelAsync();
+
+        try
+        {
+            await _syncTask.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _stoppingCts.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _stoppingCts.Dispose();
+            _stoppingCts = null;
+            _syncTask = null;
+        }
+    }
+
+    private async Task RunStartupSyncUntilSuccessfulAsync(CancellationToken cancellationToken)
+    {
+        var attempt = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            attempt++;
+
+            try
+            {
+                var ruleCount = await SynchronizeOnceAsync(cancellationToken);
+                _logger.LogInformation(
+                    "Synchronized {Count} provisioning rules to Orleans grains at startup on attempt {Attempt}",
+                    ruleCount,
+                    attempt);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Provisioning rule grain startup sync attempt {Attempt} failed; retrying in {RetryDelay}",
+                    attempt,
+                    _retryDelay);
+            }
+
+            try
+            {
+                await Task.Delay(_retryDelay, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+    }
 }
 
 internal static class ProvisioningRuleGrainConfigMapper

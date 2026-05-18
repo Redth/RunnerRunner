@@ -23,22 +23,32 @@ public class VersionCheckService : BackgroundService
     {
         _logger.LogInformation("Version check service started");
 
-        // Initial check after a short delay
-        await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                await CheckVersionsAsync(stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Version check failed");
-            }
+            // Initial check after a short delay
+            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
 
-            // Check every 6 hours
-            await Task.Delay(TimeSpan.FromHours(6), stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await CheckVersionsAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Version check failed");
+                }
+
+                // Check every 6 hours
+                await Task.Delay(TimeSpan.FromHours(6), stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
     }
 
