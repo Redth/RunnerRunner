@@ -368,15 +368,15 @@ Capacity views on rules, profiles, hosts, runners, and events use the same `Capa
 
 ## Release and deployment model
 
-RunnerRunner's public deployment path is release-artifact driven. GitHub Releases publish the Linux compose bundle, native HostWorker assets, checksums, and `release-manifest.json`; server installs update through `runnerrunner-server update`; native HostWorkers update through the Hosts page after the server checks the release catalog.
+RunnerRunner's public deployment path is release-artifact driven. GitHub Releases publish the Linux compose bundle, native HostWorker assets, checksums, and `release-manifest.json`; server installs update through `runnerrunner-server update [ref]` for release tags, branches, or commit SHAs; native HostWorkers update through the Hosts page after the server checks the update catalog.
 
 The SSH-based scripts in `deploy/` remain useful for development and lab debugging because they can push local builds to remote machines. They are not the consumer-facing install or update mechanism and should not be treated as the primary production deployment model.
 
 ## HostWorker updates
 
-The server treats GitHub Releases as the update catalog. It reads the latest release, uses `release-manifest.json` for asset checksums, selects the correct HostWorker asset by platform/runtime identifier, and exposes update availability on the Hosts page.
+The server treats GitHub refs as the update catalog. Release tags use GitHub Release assets first; branches and commits resolve to the matching successful workflow artifacts. The server reads `release-manifest.json` for asset checksums, selects the correct HostWorker asset by platform/runtime identifier, and exposes update availability on the Hosts page.
 
-When an operator clicks **Update**, the server sends `ApplyHostWorkerUpdate` to the connected worker. The worker downloads the asset directly from GitHub, verifies SHA256, extracts it to a staging directory, then hands off restart/copy work to launchd, Windows Service recovery, systemd/container restart policies, or an optional configured restart command. Containerized HostWorkers do not self-update; they are updated by the compose image update path.
+When an operator clicks **Update**, the server sends `ApplyHostWorkerUpdate` to the connected worker. The worker downloads the asset directly from GitHub, verifies SHA256, extracts it to a staging directory, then hands off restart/copy work to launchd, Windows Service recovery, systemd/container restart policies, or an optional configured restart command. Containerized HostWorkers pull the manifest-selected image and start a replacement container before stopping the old one.
 
 ## Logs and observability
 

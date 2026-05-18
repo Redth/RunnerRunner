@@ -9,7 +9,6 @@ using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging;
 using RunnerRunner.Server.Services.Logs;
 
@@ -51,12 +50,6 @@ builder.Services.AddGrpc();
 // HTTP client for provider APIs
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
-builder.Services.Configure<FormOptions>(options =>
-{
-    options.MultipartBodyLengthLimit = builder.Configuration.GetValue(
-        "HostWorkerUpdates:MaxUploadBytes",
-        500L * 1024L * 1024L);
-});
 
 // Orleans silo (co-hosted with Blazor server)
 builder.UseOrleans(silo =>

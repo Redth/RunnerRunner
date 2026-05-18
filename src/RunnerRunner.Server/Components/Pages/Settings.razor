@@ -1,5 +1,8 @@
 @page "/settings"
 @rendermode InteractiveServer
+@using RunnerRunner.ServiceDefaults
+@using RunnerRunner.Server.Services.HostWorkers
+@inject HostWorkerUpdateService HostWorkerUpdateService
 
 <PageTitle>Settings - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -32,4 +35,107 @@
             </div>
         </div>
     </div>
+    <div class="col-md-12 col-xl-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-arrow-repeat me-2"></i>Server Version & Update</h5>
+                <dl class="row small mb-3">
+                    <dt class="col-5">Version</dt>
+                    <dd class="col-7"><code>@serverBuildInfo.InformationalVersion</code></dd>
+                    <dt class="col-5">Commit</dt>
+                    <dd class="col-7"><code>@serverBuildInfo.CommitSha</code></dd>
+                    <dt class="col-5">Build tag</dt>
+                    <dd class="col-7"><code>@serverBuildInfo.BuildTag</code></dd>
+                    <dt class="col-5">Assembly</dt>
+                    <dd class="col-7"><code>@serverBuildInfo.AssemblyVersion</code></dd>
+                </dl>
+
+                <label class="form-label form-label-sm mb-1">Target GitHub ref</label>
+                <div class="input-group input-group-sm mb-2">
+                    <input class="form-control" @bind="serverUpdateRef" placeholder="latest, tag, branch, or commit" />
+                    <button class="btn btn-outline-secondary" @onclick="CheckServerUpdate" disabled="@checkingServerUpdate">
+                        @(checkingServerUpdate ? "Checking..." : "Check")
+                    </button>
+                </div>
+                <div class="small text-muted mb-2">
+                    Server self-update accepts the same release tag, branch, or commit refs as HostWorker updates.
+                </div>
+                <div class="small mb-2">
+                    <span class="text-muted">Command:</span>
+                    <code>@ServerUpdateCommand</code>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(serverUpdateError))
+                {
+                    <div class="alert alert-warning py-2 small mb-0">@serverUpdateError</div>
+                }
+                else if (serverUpdateTarget != null)
+                {
+                    <div class="small">
+                        <span class="badge @GetServerUpdateBadge(serverUpdateTarget.UpdateAvailable)">
+                            @(serverUpdateTarget.UpdateAvailable ? "Update available" : "Current")
+                        </span>
+                        <span class="ms-1">Resolved <code>@serverUpdateTarget.Version</code></span>
+                    </div>
+                    <div class="small text-muted mt-1">Image: <code>@serverUpdateTarget.Image</code></div>
+                }
+            </div>
+        </div>
+    </div>
 </div>
+
+@code {
+    private readonly RunnerRunnerBuildInfo serverBuildInfo = RunnerRunnerBuildInfo.FromEntryAssembly();
+    private string serverUpdateRef = "latest";
+    private bool checkingServerUpdate;
+    private string? serverUpdateError;
+    private ServerUpdateTarget? serverUpdateTarget;
+
+    private string ServerUpdateCommand
+        => $"sudo runnerrunner-server update {QuoteShellArgument(string.IsNullOrWhiteSpace(serverUpdateRef) ? "latest" : serverUpdateRef.Trim())}";
+
+    private async Task CheckServerUpdate()
+    {
+        checkingServerUpdate = true;
+        serverUpdateError = null;
+        serverUpdateTarget = null;
+        try
+        {
+            var release = await HostWorkerUpdateService.GetReleaseAsync(
+                string.IsNullOrWhiteSpace(serverUpdateRef) ? "latest" : serverUpdateRef.Trim(),
+                forceRefresh: true);
+            if (release == null)
+            {
+                serverUpdateError = "Unable to resolve a server update for that ref.";
+                return;
+            }
+
+            if (!HostWorkerUpdateSelector.TrySelectImage("server", release, out var image, out var reason))
+            {
+                serverUpdateError = reason;
+                return;
+            }
+
+            serverUpdateTarget = new ServerUpdateTarget(
+                release.Version,
+                image!,
+                HostWorkerUpdateSelector.IsUpdateAvailable(serverBuildInfo.InformationalVersion, release.Version));
+        }
+        catch (Exception ex)
+        {
+            serverUpdateError = $"Unable to check server update: {ex.Message}";
+        }
+        finally
+        {
+            checkingServerUpdate = false;
+        }
+    }
+
+    private static string QuoteShellArgument(string value)
+        => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+
+    private static string GetServerUpdateBadge(bool updateAvailable)
+        => updateAvailable ? "bg-warning text-dark" : "bg-success";
+
+    private sealed record ServerUpdateTarget(string Version, string Image, bool UpdateAvailable);
+}
