@@ -157,7 +157,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         }
     }
 
-    private HostWorkerMessage CreateHello()
+    internal HostWorkerMessage CreateHello()
     {
         var capabilities = DetectCapabilities();
         var hello = new HostWorkerHello

@@ -5,10 +5,11 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Services.HostWorkers;
-using RunnerRunner.Server.Tests.Providers;
+using RunnerRunner.Server.Tests.TestSupport;
 
 namespace RunnerRunner.Server.Tests.Services;
 
@@ -106,7 +107,7 @@ public class HostWorkerUpdateServiceTests
             throw new InvalidOperationException($"Unexpected request {request.RequestUri}");
         });
 
-        var outputPath = Path.Combine(Path.GetTempPath(), $"rr-hostworker-asset-{Guid.NewGuid():N}.tar.gz");
+        var outputPath = Path.Combine(fixture.Root, "rr-hostworker-asset.tar.gz");
         try
         {
             await fixture.Service.ExtractGitHubActionsArtifactAssetAsync(
@@ -125,11 +126,82 @@ public class HostWorkerUpdateServiceTests
         }
     }
 
+    [Fact]
+    public async Task QueueUpdateAsync_DispatchesSelectedAssetUpdateCommand()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Id = "github-cred",
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubOrg = "Redth",
+            GitHubToken = "stored-token"
+        });
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = "1.0.0"
+        });
+
+        using var fixture = CreateService(store, request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath.EndsWith("/repos/Redth/RunnerRunner/releases/latest", StringComparison.Ordinal))
+            {
+                return JsonResponse("""
+                    {
+                      "tag_name": "v2.0.0",
+                      "html_url": "https://github.com/Redth/RunnerRunner/releases/tag/v2.0.0",
+                      "published_at": "2026-05-16T00:00:00Z",
+                      "assets": [
+                        { "name": "release-manifest.json", "browser_download_url": "https://downloads.example.test/release-manifest.json" },
+                        { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "browser_download_url": "https://downloads.example.test/runnerrunner-hostworker-linux-x64.tar.gz" }
+                      ]
+                    }
+                    """);
+            }
+
+            if (uri.AbsoluteUri == "https://downloads.example.test/release-manifest.json")
+            {
+                return JsonResponse("""
+                    {
+                      "assets": [
+                        { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "sha256": "asset-sha" }
+                      ],
+                      "images": {}
+                    }
+                    """);
+            }
+
+            throw new InvalidOperationException($"Unexpected request {request.RequestUri}");
+        });
+
+        await fixture.Service.QueueUpdateAsync("host-1", HostWorkerUpdateSelection.LatestRelease(force: true));
+
+        var dispatched = Assert.Single(fixture.Dispatcher.Commands);
+        Assert.Equal("host-1", dispatched.HostId);
+        Assert.Equal(HostCommandKind.ApplyHostWorkerUpdate, dispatched.Kind);
+        var command = Assert.IsType<HostWorkerUpdateCommand>(dispatched.Command);
+        Assert.Equal("v2.0.0", command.TargetVersion);
+        Assert.Equal("runnerrunner-hostworker-linux-x64.tar.gz", command.AssetName);
+        Assert.Equal("https://downloads.example.test/runnerrunner-hostworker-linux-x64.tar.gz", command.AssetUrl);
+        Assert.Equal("asset-sha", command.Sha256);
+        Assert.True(command.Force);
+    }
+
     private static ServiceFixture CreateService(
         Shiny.DocumentDb.IDocumentStore store,
         Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
-        var root = Path.Combine(Path.GetTempPath(), $"rr-hostworker-updates-{Guid.NewGuid():N}");
+        var root = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "TestResults",
+            $"rr-hostworker-updates-{Guid.NewGuid():N}");
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -138,8 +210,8 @@ public class HostWorkerUpdateServiceTests
                 ["HostWorkerUpdates:StorageRoot"] = root
             })
             .Build();
-        var httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(new FakeHttpHandler(handler)));
+        var httpFactory = new FakeProviderHttpApi(handler);
+        var dispatcher = new RecordingHostCommandDispatcher();
 
         var environment = Substitute.For<IWebHostEnvironment>();
         environment.ContentRootPath.Returns(root);
@@ -149,14 +221,14 @@ public class HostWorkerUpdateServiceTests
             configuration,
             new GitHubAuthenticationService(httpFactory, NullLogger<GitHubAuthenticationService>.Instance),
             store,
-            Substitute.For<IHostCommandDispatcher>(),
+            dispatcher,
             new HostWorkerLocalUpdateStore(
                 configuration,
                 environment,
                 NullLogger<HostWorkerLocalUpdateStore>.Instance),
             NullLogger<HostWorkerUpdateService>.Instance);
 
-        return new ServiceFixture(root, service);
+        return new ServiceFixture(root, service, dispatcher, httpFactory);
     }
 
     private static HttpResponseMessage JsonResponse(string json) =>
@@ -183,17 +255,27 @@ public class HostWorkerUpdateServiceTests
 
     private sealed class ServiceFixture : IDisposable
     {
-        public ServiceFixture(string root, HostWorkerUpdateService service)
+        private readonly FakeProviderHttpApi _httpFactory;
+
+        public ServiceFixture(
+            string root,
+            HostWorkerUpdateService service,
+            RecordingHostCommandDispatcher dispatcher,
+            FakeProviderHttpApi httpFactory)
         {
             Root = root;
             Service = service;
+            Dispatcher = dispatcher;
+            _httpFactory = httpFactory;
         }
 
-        private string Root { get; }
+        public string Root { get; }
         public HostWorkerUpdateService Service { get; }
+        public RecordingHostCommandDispatcher Dispatcher { get; }
 
         public void Dispose()
         {
+            _httpFactory.Dispose();
             if (Directory.Exists(Root))
                 Directory.Delete(Root, recursive: true);
         }

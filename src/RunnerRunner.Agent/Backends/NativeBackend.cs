@@ -730,7 +730,7 @@ public class NativeBackend : IRunnerBackend
     /// Expands ${TOKEN} references in a path string.
     /// Available tokens: BASE_PATH, RUNNER_NAME, INSTANCE_ID, PROVIDER, VERSION, HOME
     /// </summary>
-    private static string ExpandTokens(string input, Dictionary<string, string> tokens)
+    internal static string ExpandTokens(string input, Dictionary<string, string> tokens)
     {
         var result = input;
         foreach (var kv in tokens)

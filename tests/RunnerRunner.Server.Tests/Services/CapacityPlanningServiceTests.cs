@@ -310,4 +310,306 @@ public class CapacityPlanningServiceTests
         Assert.Equal(CapacityBlockerKind.ProvisioningRule, result.BlockedBy);
         Assert.Contains("1/1", result.Summary, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void HasEarlierQueuedWorkAhead_BlocksNewerEventInSameCapacityLaneAcrossRules()
+    {
+        var profileA = CreateProfile("linux-a", HostPlatform.Linux, ExecutionBackend.Docker);
+        var profileB = CreateProfile("linux-b", HostPlatform.Linux, ExecutionBackend.Docker);
+        var ruleA = CreateWebhookRule("rule-a", profileA.Id, ["ubuntu"]);
+        var ruleB = CreateWebhookRule("rule-b", profileB.Id, ["linux"]);
+        var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
+        var earlier = CreateQueuedEvent("evt-a", ruleA.Id, "job-a", now, ["ubuntu"], profileA.Id);
+        var current = CreateQueuedEvent("evt-b", ruleB.Id, "job-b", now.AddSeconds(1), ["linux"], profileB.Id);
+
+        var result = CapacityPlanningService.HasEarlierQueuedWorkAhead(
+            current,
+            ruleB,
+            profileB,
+            [earlier, current],
+            new Dictionary<string, ProvisioningRule> { [ruleA.Id] = ruleA, [ruleB.Id] = ruleB },
+            new Dictionary<string, RunnerProfile> { [profileA.Id] = profileA, [profileB.Id] = profileB });
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void HasEarlierQueuedWorkAhead_IgnoresEarlierEventInDifferentCapacityLane()
+    {
+        var dockerProfile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
+        var tartProfile = CreateProfile("mac-tart", HostPlatform.MacOS, ExecutionBackend.Tart);
+        var dockerRule = CreateWebhookRule("rule-docker", dockerProfile.Id, ["ubuntu"]);
+        var tartRule = CreateWebhookRule("rule-tart", tartProfile.Id, ["macos"]);
+        var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
+        var earlier = CreateQueuedEvent("evt-a", dockerRule.Id, "job-a", now, ["ubuntu"], dockerProfile.Id);
+        var current = CreateQueuedEvent("evt-b", tartRule.Id, "job-b", now.AddSeconds(1), ["macos"], tartProfile.Id);
+
+        var result = CapacityPlanningService.HasEarlierQueuedWorkAhead(
+            current,
+            tartRule,
+            tartProfile,
+            [earlier, current],
+            new Dictionary<string, ProvisioningRule> { [dockerRule.Id] = dockerRule, [tartRule.Id] = tartRule },
+            new Dictionary<string, RunnerProfile> { [dockerProfile.Id] = dockerProfile, [tartProfile.Id] = tartProfile });
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void ExplainEvent_ShowsFifoWhenOlderSameLaneEventIsStillQueued()
+    {
+        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 10 };
+        var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
+        var rule = CreateWebhookRule("rule-1", profile.Id, ["ubuntu"]);
+        var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
+        var earlier = CreateQueuedEvent("evt-a", rule.Id, "job-a", now, ["ubuntu"], profile.Id);
+        var current = CreateQueuedEvent("evt-b", rule.Id, "job-b", now.AddSeconds(1), ["ubuntu"], profile.Id);
+
+        var result = CapacityPlanningService.ExplainEvent(
+            current,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            new Dictionary<string, ProvisioningRule> { [rule.Id] = rule },
+            [],
+            [earlier, current]);
+
+        Assert.Equal(CapacityBlockerKind.Fifo, result.BlockedBy);
+        Assert.Contains("older queued work", result.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_SelectsLeastLoadedReadyHost()
+    {
+        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 3 };
+        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 3 };
+        var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker, maxParallelPerHost: 3);
+        var activeOnHostA = new RunnerInstance
+        {
+            RunnerName = "active-a",
+            HostId = hostA.Id,
+            ProfileId = profile.Id,
+            Status = RunnerInstanceStatus.Running,
+            ManagedByRunnerRunner = true
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [hostA, hostB],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [activeOnHostA]);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(hostB.Id, analysis.SelectedHost!.Id);
+    }
+
+    [Fact]
+    public void EvaluateRuleCapacity_StaticRuleCountsOnlyHostsMatchingRuleFilters()
+    {
+        var targetHost = new Host { Name = "target", Platform = HostPlatform.Linux, GroupId = "pool-a", MaxDockerContainers = 2 };
+        var otherHost = new Host { Name = "other", Platform = HostPlatform.Linux, GroupId = "pool-b", MaxDockerContainers = 2 };
+        var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
+        var rule = new ProvisioningRule
+        {
+            Name = "static-pool-a",
+            Type = ProvisioningType.Static,
+            ProfileId = profile.Id,
+            TargetGroupId = "pool-a",
+            DesiredCount = 2
+        };
+        var matchingInstance = CreateActiveInstance(targetHost.Id, profile.Id, "matching");
+        var nonMatchingInstance = CreateActiveInstance(otherHost.Id, profile.Id, "other-pool");
+
+        var result = CapacityPlanningService.EvaluateRuleCapacity(
+            rule,
+            [targetHost, otherHost],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [matchingInstance, nonMatchingInstance],
+            []);
+
+        Assert.Equal(2, result.ConfiguredLimit);
+        Assert.Equal(1, result.ActiveCount);
+        Assert.Equal(1, result.RemainingSlots);
+        Assert.Single(result.MappedProfiles);
+        Assert.Equal(1, result.MappedProfiles[0].MatchingHosts);
+    }
+
+    [Theory]
+    [InlineData(ExecutionBackend.Docker, HostPlatform.Linux)]
+    [InlineData(ExecutionBackend.Tart, HostPlatform.MacOS)]
+    [InlineData(ExecutionBackend.Native, HostPlatform.Linux)]
+    public void AnalyzeHostSelection_BlocksWhenBackendCapacityIsExhausted(
+        ExecutionBackend backend,
+        HostPlatform platform)
+    {
+        var host = CreateHostWithBackendLimit("capacity-host", platform, backend, limit: 1);
+        var profile = CreateProfile($"{backend}-profile", platform, backend, maxParallelPerHost: 3);
+        var activeInstance = CreateActiveInstance(host.Id, profile.Id, "active");
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [activeInstance]);
+
+        Assert.True(analysis.CapacityBlocked);
+        Assert.Equal(CapacityBlockerKind.Host, analysis.BlockedBy);
+        var candidate = Assert.Single(analysis.Candidates);
+        Assert.Equal(1, candidate.BackendCapacity.Used);
+        Assert.Equal(1, candidate.BackendCapacity.Limit);
+        Assert.Equal(0, candidate.BackendCapacity.Remaining);
+        Assert.Contains(backend.ToString(), candidate.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExplainEvent_ShowsStoredConfigurationErrorForPendingConfig()
+    {
+        var evt = new WebhookEvent
+        {
+            Id = "evt-config",
+            Action = "queued",
+            Status = "pending_config",
+            Error = "Credential 'cred-missing' is missing and will be retried automatically"
+        };
+
+        var result = CapacityPlanningService.ExplainEvent(
+            evt,
+            [],
+            new Dictionary<string, RunnerProfile>(),
+            new Dictionary<string, ProvisioningRule>(),
+            [],
+            [evt]);
+
+        Assert.Equal(CapacityBlockerKind.Configuration, result.BlockedBy);
+        Assert.Equal(evt.Error, result.Summary);
+    }
+
+    [Fact]
+    public void ExplainEvent_ShowsMissingRuleWhenRepositoryNoLongerMatches()
+    {
+        var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
+        var rule = CreateWebhookRule("rule-other", profile.Id, ["ubuntu"]);
+        rule.AllowedRepos = ["other/repo"];
+        var evt = CreateQueuedEvent("evt-1", rule.Id, "job-1", new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc), ["ubuntu"], profile.Id);
+
+        var result = CapacityPlanningService.ExplainEvent(
+            evt,
+            [],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            new Dictionary<string, ProvisioningRule> { [rule.Id] = rule },
+            [],
+            [evt]);
+
+        Assert.Equal(CapacityBlockerKind.Matching, result.BlockedBy);
+        Assert.Contains("No provisioning rule", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("org/repo", result.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExplainEvent_ShowsMissingLabelMappingWhenProfileCannotBeResolved()
+    {
+        var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
+        var rule = CreateWebhookRule("rule-1", profile.Id, ["windows"]);
+        var evt = CreateQueuedEvent("evt-1", rule.Id, "job-1", new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc), ["ubuntu"], profile.Id);
+
+        var result = CapacityPlanningService.ExplainEvent(
+            evt,
+            [],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            new Dictionary<string, ProvisioningRule> { [rule.Id] = rule },
+            [],
+            [evt]);
+
+        Assert.Equal(CapacityBlockerKind.Matching, result.BlockedBy);
+        Assert.Contains("No current label mapping", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ubuntu", result.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static RunnerProfile CreateProfile(
+        string name,
+        HostPlatform platform,
+        ExecutionBackend backend,
+        int maxParallelPerHost = 1)
+        => new()
+        {
+            Name = name,
+            RequiredHostPlatform = platform,
+            ExecutionBackend = backend,
+            MaxParallelPerHost = maxParallelPerHost
+        };
+
+    private static ProvisioningRule CreateWebhookRule(string id, string profileId, List<string> labels)
+        => new()
+        {
+            Id = id,
+            Name = id,
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 10,
+            LabelMappings =
+            [
+                new LabelProfileMapping
+                {
+                    ProfileId = profileId,
+                    RequiredLabels = labels
+                }
+            ]
+        };
+
+    private static WebhookEvent CreateQueuedEvent(
+        string id,
+        string ruleId,
+        string jobId,
+        DateTime receivedAt,
+        List<string> labels,
+        string profileId)
+        => new()
+        {
+            Id = id,
+            BindingId = ruleId,
+            Provider = RunnerProvider.GitHubActions.ToString(),
+            Action = "queued",
+            JobId = jobId,
+            Repository = "org/repo",
+            Labels = labels,
+            Status = "pending_capacity",
+            ReceivedAt = receivedAt,
+            MatchedProfileId = profileId
+        };
+
+    private static RunnerInstance CreateActiveInstance(string hostId, string profileId, string name)
+        => new()
+        {
+            RunnerName = name,
+            HostId = hostId,
+            ProfileId = profileId,
+            Status = RunnerInstanceStatus.Running,
+            ManagedByRunnerRunner = true
+        };
+
+    private static Host CreateHostWithBackendLimit(
+        string name,
+        HostPlatform platform,
+        ExecutionBackend backend,
+        int limit)
+    {
+        var host = new Host { Name = name, Platform = platform };
+
+        switch (backend)
+        {
+            case ExecutionBackend.Docker:
+                host.MaxDockerContainers = limit;
+                break;
+            case ExecutionBackend.Tart:
+                host.MaxTartVMs = limit;
+                break;
+            default:
+                host.MaxNativeProcesses = limit;
+                break;
+        }
+
+        return host;
+    }
 }

@@ -347,7 +347,7 @@ public partial class ImageManager
         return command;
     }
 
-    private static long ParseDockerSize(string size)
+    internal static long ParseDockerSize(string size)
     {
         // Parse "45.2MB", "1.2GB", "500kB"
         var match = SizeRegex().Match(size);
@@ -376,7 +376,7 @@ public partial class ImageManager
         };
     }
 
-    private static (double percent, long downloaded, long total)? ParseDockerPullProgress(string line)
+    internal static (double percent, long downloaded, long total)? ParseDockerPullProgress(string line)
     {
         // Match lines like: "50.2MB/120.5MB" or percentage patterns
         var match = ProgressRegex().Match(line);
@@ -389,7 +389,7 @@ public partial class ImageManager
         return null;
     }
 
-    private static double? ParseTartProgress(string line)
+    internal static double? ParseTartProgress(string line)
     {
         // Tart outputs percentage like "  45%" or "Downloading: 45.2%"
         var match = PercentRegex().Match(line);

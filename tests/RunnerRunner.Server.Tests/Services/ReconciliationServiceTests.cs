@@ -1,6 +1,7 @@
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Services;
+using RunnerRunner.Server.Tests.TestSupport;
 
 namespace RunnerRunner.Server.Tests.Services;
 
@@ -68,33 +69,41 @@ public class ReconciliationServiceTests
     [Fact]
     public void TryPrepareDynamicWebhookRetry_RequeuesProvisionedQueuedEvent()
     {
-        var instance = new RunnerInstance
-        {
-            Id = "inst-3",
-            HostId = "host-1",
-            ProfileId = "profile-1",
-            RunnerName = "MAUI-Linux-jit-f28ae31b",
-            ProvisioningMode = "dynamic"
-        };
-
-        var now = DateTime.UtcNow;
-        var linkedEvent = new WebhookEvent
-        {
-            Id = "evt-3",
-            Action = "queued",
-            Status = "provisioned",
-            InstanceId = instance.Id,
-            ReceivedAt = now.AddMinutes(-1)
-        };
+        var clock = new TestClock();
+        var scenario = new RunnerScenarioBuilder(clock)
+            .WithIds("dynamic-retry")
+            .WithDynamicWebhook(jobId: "job-3")
+            .Build();
 
         var changed = ReconciliationService.TryPrepareDynamicWebhookRetry(
-            instance,
-            linkedEvent,
-            now,
+            scenario.Instance,
+            scenario.WebhookEvent,
+            clock.UtcNow,
             "Runner exited on the host before the queued job started");
 
         Assert.True(changed);
-        Assert.Equal("pending", linkedEvent.Status);
-        Assert.Null(linkedEvent.InstanceId);
+        Assert.Equal("pending", scenario.WebhookEvent.Status);
+        Assert.Null(scenario.WebhookEvent.InstanceId);
+    }
+
+    [Fact]
+    public void TryPrepareDynamicWebhookRetry_IgnoresStaticRunnerEvenWithLinkedQueuedEvent()
+    {
+        var clock = new TestClock();
+        var scenario = new RunnerScenarioBuilder(clock)
+            .WithIds("static-retry")
+            .WithDynamicWebhook(jobId: "job-static")
+            .Build();
+        scenario.Instance.ProvisioningMode = "static";
+
+        var changed = ReconciliationService.TryPrepareDynamicWebhookRetry(
+            scenario.Instance,
+            scenario.WebhookEvent,
+            clock.UtcNow,
+            "Static runner should not recycle webhook work");
+
+        Assert.False(changed);
+        Assert.Equal("provisioned", scenario.WebhookEvent.Status);
+        Assert.Equal(scenario.Instance.Id, scenario.WebhookEvent.InstanceId);
     }
 }

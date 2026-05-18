@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: "10.0.x"
+
+jobs:
+  full-suite:
+    name: Full tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore RunnerRunner.slnx
+
+      - name: Run all tests
+        run: dotnet test RunnerRunner.slnx --configuration Release --no-restore --verbosity minimal
+
+      - name: Run coverage
+        run: |
+          ./scripts/coverage.sh \
+            --line-threshold 30 \
+            --branch-threshold 25 \
+            --critical-line-threshold 40
+
+      - name: Upload coverage results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-results
+          path: TestResults/coverage
+          if-no-files-found: ignore

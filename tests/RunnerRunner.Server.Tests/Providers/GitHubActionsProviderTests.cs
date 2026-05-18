@@ -5,6 +5,7 @@ using NSubstitute;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Services;
+using RunnerRunner.Server.Tests.TestSupport;
 
 namespace RunnerRunner.Server.Tests.Providers;
 
@@ -15,18 +16,55 @@ public class GitHubActionsProviderTests
 
     private GitHubActionsProvider CreateProvider(HttpResponseMessage response)
     {
-        var handler = new FakeHttpHandler(response);
-        var factory = Substitute.For<IHttpClientFactory>();
-        factory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-        return new GitHubActionsProvider(factory, new GitHubAuthenticationService(factory, _authLogger), _logger);
+        var api = new FakeProviderHttpApi(response);
+        return new GitHubActionsProvider(api, new GitHubAuthenticationService(api, _authLogger), _logger);
     }
 
     private GitHubActionsProvider CreateProvider(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
-        var fakeHandler = new FakeHttpHandler(handler);
-        var factory = Substitute.For<IHttpClientFactory>();
-        factory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(fakeHandler));
-        return new GitHubActionsProvider(factory, new GitHubAuthenticationService(factory, _authLogger), _logger);
+        var api = new FakeProviderHttpApi(handler);
+        return new GitHubActionsProvider(api, new GitHubAuthenticationService(api, _authLogger), _logger);
+    }
+
+    [Fact]
+    public async Task GetRegistrationToken_SendsBearerAuthAndGitHubHeaders()
+    {
+        var api = new FakeProviderHttpApi(_ => FakeProviderHttpApi.JsonResponse("""
+        {
+          "token": "runner-token"
+        }
+        """, HttpStatusCode.Created));
+        var provider = new GitHubActionsProvider(api, new GitHubAuthenticationService(api, _authLogger), _logger);
+
+        var token = await provider.GetRegistrationTokenAsync(new ProviderCredential
+        {
+            Name = "github",
+            GitHubOrg = "octo-org",
+            GitHubToken = "ghp_test"
+        });
+
+        Assert.Equal("runner-token", token);
+        var request = Assert.Single(api.Requests);
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("/orgs/octo-org/actions/runners/registration-token", request.PathAndQuery);
+        Assert.Equal("Bearer", request.Authorization?.Scheme);
+        Assert.Equal("ghp_test", request.Authorization?.Parameter);
+        Assert.Contains("RunnerRunner/1.0", request.UserAgent);
+    }
+
+    [Fact]
+    public async Task GetRegistrationToken_MissingPat_ThrowsWithoutHttpCall()
+    {
+        var api = new FakeProviderHttpApi(_ => throw new InvalidOperationException("HTTP should not be called"));
+        var provider = new GitHubActionsProvider(api, new GitHubAuthenticationService(api, _authLogger), _logger);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.GetRegistrationTokenAsync(new ProviderCredential
+        {
+            Name = "github",
+            GitHubOrg = "octo-org"
+        }));
+
+        Assert.Empty(api.Requests);
     }
 
     [Fact]
@@ -321,6 +359,14 @@ public class GitHubActionsProviderTests
     }
 
     [Fact]
+    public async Task GetAvailableVersions_MalformedJson_Throws()
+    {
+        var provider = CreateProvider(FakeProviderHttpApi.JsonResponse("""{"not":"an array"}"""));
+
+        await Assert.ThrowsAsync<JsonException>(() => provider.GetAvailableVersionsAsync());
+    }
+
+    [Fact]
     public async Task RemoveRunner_FindsAndDeletesRunner()
     {
         var callCount = 0;
@@ -382,23 +428,45 @@ public class GitHubActionsProviderTests
         // Should not throw
         await provider.RemoveRunnerAsync(cred, "nonexistent-runner");
     }
-}
 
-/// <summary>
-/// Fake HTTP handler that returns a pre-configured response.
-/// </summary>
-internal class FakeHttpHandler : HttpMessageHandler
-{
-    private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
-
-    public FakeHttpHandler(HttpResponseMessage response)
-        : this(_ => response) { }
-
-    public FakeHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    [Fact]
+    public async Task RemoveOfflineDynamicRunners_RemovesOnlyOfflineUnprotectedDynamicRegistrations()
     {
-        _handler = handler;
-    }
+        var deletedPaths = new List<string>();
+        var api = new FakeProviderHttpApi()
+            .Respond(
+                req => req.Method == HttpMethod.Get,
+                _ => FakeProviderHttpApi.JsonResponse("""
+                {
+                  "runners": [
+                    { "id": 10, "name": "rr-jit-offline", "status": "offline", "busy": false },
+                    { "id": 11, "name": "rr-static", "status": "offline", "busy": false },
+                    { "id": 12, "name": "rr-jit-online", "status": "online", "busy": false },
+                    { "id": 13, "name": "rr-jit-busy", "status": "offline", "busy": true },
+                    { "id": 14, "name": "rr-jit-protected", "status": "offline", "busy": false }
+                  ]
+                }
+                """))
+            .Respond(
+                req => req.Method == HttpMethod.Delete,
+                req =>
+                {
+                    deletedPaths.Add(req.RequestUri?.PathAndQuery ?? "");
+                    return new HttpResponseMessage(HttpStatusCode.NoContent);
+                });
+        var provider = new GitHubActionsProvider(api, new GitHubAuthenticationService(api, _authLogger), _logger);
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        => Task.FromResult(_handler(request));
+        var removed = await provider.RemoveOfflineDynamicRunnersAsync(
+            new ProviderCredential
+            {
+                Name = "github",
+                GitHubOrg = "octo-org",
+                GitHubToken = "ghp_test"
+            },
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "rr-jit-protected" });
+
+        Assert.Equal(1, removed);
+        Assert.Equal(["/orgs/octo-org/actions/runners/10"], deletedPaths);
+        Assert.All(api.Requests, request => Assert.Equal("Bearer", request.Authorization?.Scheme));
+    }
 }
