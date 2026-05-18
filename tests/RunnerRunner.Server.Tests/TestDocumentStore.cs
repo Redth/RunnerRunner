@@ -21,6 +21,7 @@ public static class TestDocumentStore
         .MapTypeToTable<RunnerProfile>("runner_profiles")
         .MapTypeToTable<RunnerInstance>("runner_instances")
         .MapTypeToTable<RunnerAssignment>("runner_assignments")
+        .MapTypeToTable<ProvisioningRule>("provisioning_rules")
         .MapTypeToTable<EnvironmentVariableSet>("env_var_sets")
         .MapTypeToTable<RunnerAgentVersion>("runner_agent_versions")
         .MapTypeToTable<ProviderCredential>("provider_credentials")

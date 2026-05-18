@@ -59,6 +59,13 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         // Look up the profile to get the backend
         var profileGrain = GrainFactory.GetGrain<IProfileGrain>(profileId);
         var profile = await profileGrain.GetProfile();
+        if (profile == null)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+            profile = await store.Get<RunnerProfile>(profileId);
+        }
+
         if (profile != null)
             _state.State.Backend = profile.ExecutionBackend;
 

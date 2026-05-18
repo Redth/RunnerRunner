@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Runtime;
+using RunnerRunner.Core.Hub;
+using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
@@ -8,22 +11,34 @@ using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Grains;
 
-public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
+public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
 {
+    private const string ReconcileReminderName = "reconcile";
+    private static readonly TimeSpan ReconcileDueTime = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ReconcilePeriod = TimeSpan.FromSeconds(30);
+
     private readonly IPersistentState<ProvisioningRuleGrainState> _state;
     private readonly ILogger<ProvisioningRuleGrain> _logger;
     private readonly IServiceProvider _serviceProvider;
-    private IGrainTimer? _reconcileTimer;
+    private readonly IHostCommandDispatcher _hostCommands;
 
     public ProvisioningRuleGrain(
         [PersistentState("provisioningRule", "PersistentStore")]
         IPersistentState<ProvisioningRuleGrainState> state,
         ILogger<ProvisioningRuleGrain> logger,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        IHostCommandDispatcher hostCommands)
     {
         _state = state;
         _logger = logger;
         _serviceProvider = serviceProvider;
+        _hostCommands = hostCommands;
+    }
+
+    public override async Task OnActivateAsync(CancellationToken cancellationToken)
+    {
+        await base.OnActivateAsync(cancellationToken);
+        await SyncReconcileReminder();
     }
 
     public async Task SetConfig(ProvisioningRuleConfig config)
@@ -31,13 +46,8 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
         _state.State.Config = config;
         _state.State.CreatedAt = DateTime.UtcNow;
 
-        if (config.Enabled &&
-            config.Type is ProvisioningType.Static or ProvisioningType.ScaleSet)
-        {
-            StartReconcileTimer();
-        }
-
         await _state.WriteStateAsync();
+        await SyncReconcileReminder();
 
         _logger.LogInformation("Provisioning rule {RuleId} configured: Type={Type}, Enabled={Enabled}",
             this.GetPrimaryKeyString(), config.Type, config.Enabled);
@@ -46,8 +56,8 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
     public async Task Enable()
     {
         _state.State.Config.Enabled = true;
-        StartReconcileTimer();
         await _state.WriteStateAsync();
+        await SyncReconcileReminder();
 
         _logger.LogInformation("Provisioning rule {RuleId} enabled", this.GetPrimaryKeyString());
     }
@@ -55,8 +65,8 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
     public async Task Disable()
     {
         _state.State.Config.Enabled = false;
-        StopReconcileTimer();
         await _state.WriteStateAsync();
+        await SyncReconcileReminder();
 
         _logger.LogInformation("Provisioning rule {RuleId} disabled", this.GetPrimaryKeyString());
     }
@@ -94,7 +104,16 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
 
     public async Task HandleWebhookEvent(string jobId, string repo, List<string> labels, string? jitConfig, string? imageTagOverride = null)
     {
-        if (_state.State.Config.Type is not (ProvisioningType.Webhook or ProvisioningType.ScaleSet))
+        if (_state.State.Config.Type == ProvisioningType.Webhook)
+        {
+            _logger.LogDebug(
+                "Rule {RuleId} received webhook event for job {JobId}; webhook dispatch is handled by DynamicProvisioningService during migration",
+                this.GetPrimaryKeyString(),
+                jobId);
+            return;
+        }
+
+        if (_state.State.Config.Type != ProvisioningType.ScaleSet)
         {
             _logger.LogWarning("Rule {RuleId} received webhook event but type is {Type}",
                 this.GetPrimaryKeyString(), _state.State.Config.Type);
@@ -262,7 +281,13 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
         foreach (var (id, _) in toStop)
         {
             var grain = GrainFactory.GetGrain<IRunnerInstanceGrain>(id);
+            var instanceState = await grain.GetState();
             await grain.MarkStopping();
+            await _hostCommands.DispatchStopRunnerAsync(instanceState.HostId, new StopRunnerCommand
+            {
+                InstanceId = id,
+                InstanceHandle = instanceState.ContainerId ?? instanceState.VmName ?? instanceState.ProcessId?.ToString()
+            });
             _logger.LogInformation("Stopping excess instance {InstanceId}", id);
         }
     }
@@ -315,8 +340,10 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
 
     private async Task<string?> ProvisionRunner(string? jitConfig = null, string? jobId = null)
     {
-        var profileGrain = GrainFactory.GetGrain<IProfileGrain>(_state.State.Config.ProfileId);
-        var profile = await profileGrain.GetProfile();
+        using var scope = _serviceProvider.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+
+        var profile = await store.Get<RunnerProfile>(_state.State.Config.ProfileId);
         if (profile == null)
         {
             _logger.LogWarning("Rule {RuleId} references missing profile {ProfileId}",
@@ -325,8 +352,6 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
             return null;
         }
 
-        using var scope = _serviceProvider.CreateScope();
-        var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
         var hosts = (await store.Query<Core.Models.Host>().ToList()).ToList();
         var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
         var profilesById = (await store.Query<RunnerProfile>().ToList())
@@ -349,13 +374,42 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
         };
 
         var analysis = CapacityPlanningService.AnalyzeHostSelection(profile, ruleModel, hosts, profilesById, instances);
-        var hostId = analysis.SelectedHost?.Id;
-        if (hostId == null)
+        var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
+        var host = analysis.Candidates
+            .Where(candidate => candidate.CanRunNow)
+            .Select(candidate => hosts.First(h => string.Equals(h.Id, candidate.HostId, StringComparison.OrdinalIgnoreCase)))
+            .FirstOrDefault(h =>
+                h.AgentStatus == AgentStatus.Online
+                && h.Capabilities.Any(c => c.Equals(backendName, StringComparison.OrdinalIgnoreCase)));
+        if (host == null)
         {
             _logger.LogWarning("No host available for rule {RuleId}: {Reason}",
                 this.GetPrimaryKeyString(),
-                analysis.Reason);
+                analysis.SelectedHost == null
+                    ? analysis.Reason
+                    : $"No online HostWorker with backend '{backendName}' is currently available");
             return null;
+        }
+
+        var credential = string.IsNullOrWhiteSpace(profile.ProviderCredentialId)
+            ? null
+            : await store.Get<ProviderCredential>(profile.ProviderCredentialId);
+        var provider = ResolveProvider(profile.Provider);
+        string? registrationToken = null;
+        string? runnerUrl = null;
+
+        if (credential != null && provider != null)
+        {
+            try
+            {
+                registrationToken = await provider.GetRegistrationTokenAsync(credential);
+                runnerUrl = GetRunnerUrl(credential);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get registration token for profile {Profile}", profile.Name);
+                return null;
+            }
         }
 
         var instanceId = Guid.NewGuid().ToString();
@@ -363,40 +417,106 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
         var runnerName = $"{_state.State.Config.Name}-{instanceId[..8]}";
 
         var provisioningMode = _state.State.Config.Type == ProvisioningType.Webhook ? "dynamic" : "static";
+        var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host, credential);
+        envVars["RR_INSTANCE_ID"] = instanceId;
+        envVars["RR_RUNNER_NAME"] = runnerName;
 
-        await runnerGrain.Initialize(hostId, _state.State.Config.ProfileId, runnerName, provisioningMode, jobId, provisioningRuleId: this.GetPrimaryKeyString());
+        var agentVersion = await ResolveRunnerAgentVersion(store, profile, provider);
+        if (profile.EmitJobStartedBanner)
+            envVars["RR_HOOK_JOB_STARTED_REQUESTED"] = "1";
+
+        foreach (var kv in RunnerMetadataBuilder.BuildMetadataEnv(profile, host, agentVersion, instanceId))
+            envVars[kv.Key] = kv.Value;
+
+        var effectiveLabels = RunnerMetadataBuilder.MergeMetadataLabels(profile.Labels, profile, host);
+        var initSteps = await InitStepResolver.ResolveAsync(
+            store,
+            profile,
+            envVars,
+            profile.ExecutionBackend,
+            host.Platform);
+        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
+
+        await runnerGrain.Initialize(host.Id, _state.State.Config.ProfileId, runnerName, provisioningMode, jobId, provisioningRuleId: this.GetPrimaryKeyString());
+        await runnerGrain.MarkStarting("Sending deploy command to host");
 
         _state.State.ManagedInstanceIds.Add(instanceId);
         await _state.WriteStateAsync();
 
+        var command = new DeployRunnerCommand
+        {
+            InstanceId = instanceId,
+            ProfileId = profile.Id,
+            RunnerName = runnerName,
+            Backend = profile.ExecutionBackend,
+            Provider = profile.Provider,
+            EnvironmentVariables = envVars,
+            RunnerAgentVersion = agentVersion,
+            DockerConfig = profile.DockerConfig,
+            TartConfig = profile.TartConfig,
+            Labels = effectiveLabels,
+            RunnerGroup = profile.RunnerGroup,
+            Ephemeral = profile.Ephemeral,
+            RegistrationToken = registrationToken,
+            RunnerUrl = runnerUrl,
+            RunnerBasePath = host.RunnerBasePath,
+            WorkDirectory = host.WorkDirectory,
+            InitSteps = initSteps,
+            RegistryUsername = registryCred?.Username,
+            RegistryPassword = registryCred?.Password,
+            BackendCapacityLimit = CapacityPlanningService.GetBackendLimit(host, profile.ExecutionBackend),
+            ProvisioningMode = provisioningMode
+        };
+
+        try
+        {
+            await _hostCommands.DispatchDeployRunnerAsync(host.Id, command);
+            await runnerGrain.UpdateStatusMessage("Deploy command sent to host");
+            await runnerGrain.MarkDeployed();
+        }
+        catch (Exception ex)
+        {
+            await runnerGrain.MarkFailed($"Failed to dispatch deploy command: {ex.Message}");
+            _state.State.ManagedInstanceIds.Remove(instanceId);
+            await _state.WriteStateAsync();
+            throw;
+        }
+
         _logger.LogInformation("Provisioned runner {InstanceId} ({RunnerName}) on host {HostId}",
-            instanceId, runnerName, hostId);
+            instanceId, runnerName, host.Id);
 
         return instanceId;
     }
 
-    // --- Timer management ---
+    // --- Reminder management ---
 
-    private void StartReconcileTimer()
+    public Task ReceiveReminder(string reminderName, TickStatus status)
     {
-        StopReconcileTimer();
-        _reconcileTimer = this.RegisterGrainTimer<object?>(
-            (_, ct) => OnReconcileTimer(ct),
-            null,
-            new GrainTimerCreationOptions
-            {
-                DueTime = TimeSpan.FromSeconds(5),
-                Period = TimeSpan.FromSeconds(30)
-            });
+        if (!string.Equals(reminderName, ReconcileReminderName, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("Provisioning rule {RuleId} received unknown reminder {ReminderName}",
+                this.GetPrimaryKeyString(),
+                reminderName);
+            return Task.CompletedTask;
+        }
+
+        return OnReconcileReminder();
     }
 
-    private void StopReconcileTimer()
+    private async Task SyncReconcileReminder()
     {
-        _reconcileTimer?.Dispose();
-        _reconcileTimer = null;
+        if (ShouldRunReconcileReminder(_state.State.Config))
+        {
+            await this.RegisterOrUpdateReminder(ReconcileReminderName, ReconcileDueTime, ReconcilePeriod);
+            return;
+        }
+
+        var reminder = await this.GetReminder(ReconcileReminderName);
+        if (reminder is not null)
+            await this.UnregisterReminder(reminder);
     }
 
-    private async Task OnReconcileTimer(CancellationToken ct)
+    private async Task OnReconcileReminder()
     {
         try
         {
@@ -407,4 +527,154 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain
             _logger.LogError(ex, "Reconcile failed for rule {RuleId}", this.GetPrimaryKeyString());
         }
     }
+
+    private static bool ShouldRunReconcileReminder(ProvisioningRuleConfig config) =>
+        config.Enabled
+        && !string.IsNullOrWhiteSpace(config.Name)
+        && !string.IsNullOrWhiteSpace(config.ProfileId)
+        && config.Type is ProvisioningType.Static or ProvisioningType.ScaleSet;
+
+    private async Task<Dictionary<string, string>> ComposeEnvironmentVariablesAsync(
+        IDocumentStore store,
+        RunnerProfile profile,
+        Core.Models.Host host,
+        ProviderCredential? credential)
+    {
+        var result = new Dictionary<string, string>();
+
+        if (credential != null)
+            InjectCredentialVars(result, credential);
+
+        var allSets = (await store.Query<EnvironmentVariableSet>().ToList()).ToList();
+        var selectedSets = allSets
+            .Where(s => profile.EnvironmentVariableSetIds.Contains(s.Id))
+            .OrderBy(s => s.Priority)
+            .ToList();
+
+        foreach (var set in selectedSets)
+            foreach (var kvp in set.Variables)
+                result[kvp.Key] = kvp.Value;
+
+        foreach (var kvp in profile.EnvironmentOverrides)
+            result[kvp.Key] = kvp.Value;
+
+        foreach (var kvp in host.EnvironmentOverrides)
+            result[kvp.Key] = kvp.Value;
+
+        ExpandVariableReferences(result);
+        return result;
+    }
+
+    private async Task<string?> ResolveRunnerAgentVersion(
+        IDocumentStore store,
+        RunnerProfile profile,
+        IRunnerProviderPlugin? provider)
+    {
+        var agentVersion = profile.RunnerAgentVersion;
+        if (!string.IsNullOrEmpty(agentVersion) && agentVersion != "latest")
+            return agentVersion;
+
+        var versions = (await store.Query<RunnerAgentVersion>().ToList())
+            .Where(v => v.Provider == profile.Provider)
+            .OrderByDescending(v => v.IsLatest)
+            .ThenByDescending(v => v.Version)
+            .ToList();
+
+        if (versions.Count == 0 && provider != null)
+        {
+            try
+            {
+                versions = (await provider.GetAvailableVersionsAsync())
+                    .OrderByDescending(v => v.IsLatest)
+                    .ThenByDescending(v => v.Version)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to query live runner versions for {Provider}; deploy will rely on host-side fallback",
+                    profile.Provider);
+            }
+        }
+
+        agentVersion = versions.FirstOrDefault()?.Version;
+        if (agentVersion != null)
+            _logger.LogInformation("Resolved runner agent version to {Version} for {Provider}",
+                agentVersion,
+                profile.Provider);
+
+        return agentVersion;
+    }
+
+    private IRunnerProviderPlugin? ResolveProvider(RunnerProvider provider)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var providers = scope.ServiceProvider.GetServices<IRunnerProviderPlugin>();
+        return providers.FirstOrDefault(p => p.Provider == provider);
+    }
+
+    private static void InjectCredentialVars(Dictionary<string, string> vars, ProviderCredential cred)
+    {
+        switch (cred.Provider)
+        {
+            case RunnerProvider.GitHubActions:
+                var target = GitHubCredentialResolver.ResolveDefaultTarget(cred);
+                if (!string.IsNullOrEmpty(cred.GitHubToken)) vars["RR_GITHUB_TOKEN"] = cred.GitHubToken;
+                if (!string.IsNullOrEmpty(target?.Owner)) vars["RR_GITHUB_ORG"] = target.Owner;
+                if (!string.IsNullOrEmpty(target?.Repository)) vars["RR_GITHUB_REPO"] = target.Repository;
+                if (!string.IsNullOrEmpty(cred.GitHubApiUrl)) vars["RR_GITHUB_API_URL"] = cred.GitHubApiUrl;
+                if (!string.IsNullOrEmpty(cred.GitHubServerUrl)) vars["RR_GITHUB_SERVER_URL"] = cred.GitHubServerUrl;
+                break;
+
+            case RunnerProvider.GiteaActions:
+                if (!string.IsNullOrEmpty(cred.GiteaRunnerToken)) vars["RR_GITEA_RUNNER_TOKEN"] = cred.GiteaRunnerToken;
+                if (!string.IsNullOrEmpty(cred.GiteaInstanceUrl)) vars["RR_GITEA_INSTANCE_URL"] = cred.GiteaInstanceUrl;
+                break;
+
+            case RunnerProvider.AzureDevOps:
+                if (!string.IsNullOrEmpty(cred.AzDoPat)) vars["RR_AZDO_PAT"] = cred.AzDoPat;
+                if (!string.IsNullOrEmpty(cred.AzDoOrgUrl)) vars["RR_AZDO_ORG_URL"] = cred.AzDoOrgUrl;
+                if (!string.IsNullOrEmpty(cred.AzDoProjectName)) vars["RR_AZDO_PROJECT"] = cred.AzDoProjectName;
+                if (!string.IsNullOrEmpty(cred.AzDoPoolName)) vars["RR_AZDO_POOL"] = cred.AzDoPoolName;
+                break;
+        }
+    }
+
+    private static void ExpandVariableReferences(Dictionary<string, string> vars)
+    {
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var changed = false;
+            foreach (var key in vars.Keys.ToList())
+            {
+                var value = vars[key];
+                if (!value.Contains('$')) continue;
+
+                var expanded = value;
+                foreach (var refKey in vars.Keys)
+                {
+                    expanded = expanded
+                        .Replace($"${{{refKey}}}", vars[refKey])
+                        .Replace($"${refKey}", vars[refKey]);
+                }
+
+                if (expanded != value)
+                {
+                    vars[key] = expanded;
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+                break;
+        }
+    }
+
+    private static string? GetRunnerUrl(ProviderCredential credential) => credential.Provider switch
+    {
+        RunnerProvider.GitHubActions => GitHubCredentialResolver.GetRunnerUrl(credential),
+        RunnerProvider.GiteaActions => credential.GiteaInstanceUrl?.TrimEnd('/'),
+        RunnerProvider.AzureDevOps => credential.AzDoOrgUrl?.TrimEnd('/'),
+        _ => null
+    };
 }

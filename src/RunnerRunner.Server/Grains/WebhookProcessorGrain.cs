@@ -178,8 +178,6 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             };
         }
 
-        var ruleGrain = GrainFactory.GetGrain<IProvisioningRuleGrain>(matchedRule.Id);
-
         // Handle "in_progress"
         if (action == "in_progress")
         {
@@ -238,11 +236,9 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 Status = "completed"
             });
 
-            await ruleGrain.HandleJobCompleted(jobId);
-
-            _logger.LogInformation("Job {JobId} completed, cleanup delegated to ProvisioningRuleGrain {RuleId}",
+            _logger.LogInformation("Job {JobId} completed for webhook rule {RuleId}",
                 jobId, matchedRule.Id);
-            return new WebhookProcessResult { Success = true, Status = "completed", Message = "Job completed, cleanup triggered" };
+            return new WebhookProcessResult { Success = true, Status = "completed", Message = "Job completed" };
         }
 
         // Handle "queued"
@@ -313,8 +309,6 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 ImageTagOverrideRejectedReason = effectiveRejection
             };
             await store.Insert(webhookEvent);
-
-            await ruleGrain.HandleWebhookEvent(jobId, repo, labels, jitConfig: null, imageTagOverride: effectiveOverride);
 
             _logger.LogInformation(
                 "Webhook matched: {Repo} job {JobId} -> profile {ProfileName} ({ProfileId}) via rule {RuleId}",
