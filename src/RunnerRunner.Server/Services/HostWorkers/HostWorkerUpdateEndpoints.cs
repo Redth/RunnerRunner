@@ -33,39 +33,6 @@ public static class HostWorkerUpdateEndpoints
             });
         });
 
-        group.MapPost("/upload", async (
-            HttpRequest request,
-            IDocumentStore store,
-            IConfiguration configuration,
-            HostWorkerLocalUpdateStore localUpdateStore,
-            CancellationToken ct) =>
-        {
-            if (!await IsAuthorizedAsync(request, store, configuration, ct))
-                return Results.Unauthorized();
-
-            if (!request.HasFormContentType)
-                return Results.BadRequest(new { error = "Expected multipart/form-data with fields 'version' and 'file'." });
-
-            var form = await request.ReadFormAsync(ct);
-            var version = form["version"].FirstOrDefault();
-            var file = form.Files["file"] ?? form.Files.FirstOrDefault();
-            if (file == null)
-                return Results.BadRequest(new { error = "A HostWorker update artifact file is required." });
-
-            try
-            {
-                await using var stream = file.OpenReadStream();
-                var artifact = await localUpdateStore.SaveUploadAsync(version ?? "", file.FileName, stream, file.Length, ct);
-                return Results.Created(
-                    $"/api/hostworker-updates?source={HostWorkerUpdateSourceKind.Upload.ToSourceId()}",
-                    ToDto(artifact));
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-        }).DisableAntiforgery();
-
         group.MapPost("/hosts/{hostId}/update", async (
             string hostId,
             QueueHostWorkerUpdateApiRequest body,

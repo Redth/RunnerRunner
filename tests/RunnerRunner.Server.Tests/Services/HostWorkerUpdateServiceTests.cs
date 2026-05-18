@@ -224,8 +224,7 @@ public class HostWorkerUpdateServiceTests
             dispatcher,
             new HostWorkerLocalUpdateStore(
                 configuration,
-                environment,
-                NullLogger<HostWorkerLocalUpdateStore>.Instance),
+                environment),
             NullLogger<HostWorkerUpdateService>.Instance);
 
         return new ServiceFixture(root, service, dispatcher, httpFactory);

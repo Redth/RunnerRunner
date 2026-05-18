@@ -68,12 +68,15 @@ To update:
 
 ```bash
 sudo runnerrunner-server update
+# Or target a specific release tag, branch, or commit SHA
+sudo runnerrunner-server update main
 ```
 
 Useful day-two commands:
 
 ```bash
 sudo runnerrunner-server status
+sudo runnerrunner-server version
 sudo runnerrunner-server logs
 sudo runnerrunner-server restart
 ```
@@ -398,35 +401,32 @@ RunnerRunner publishes multi-architecture `linux/amd64` and `linux/arm64` images
 
 Tagged releases publish `<tag>`, `<git-sha>`, and `latest`. The `main` branch image workflow publishes `main` and `<git-sha>` for early adopters and lab installs.
 
+### Server and HostWorker updates
+
+The **Settings** page shows the server assembly version, informational version, commit SHA, and build tag. Server installs update from the host with `runnerrunner-server update [ref]`, where `ref` can be `latest`, a release tag, a branch, or a commit SHA. Branch refs resolve through the configured GitHub repository and then update to the matching published commit image.
+
 ### HostWorker updates from the UI
 
-The server can update HostWorkers from three sources:
+The server can update HostWorkers from two sources:
 
 - **GitHub ref** — `latest`, a release tag, branch name, or commit SHA from the configured source repository. Release tags use GitHub Release assets first; branches and commits resolve to the matching successful workflow artifacts.
-- **Uploaded builds** — manually uploaded from the **Hosts** page or the server API.
 - **SSH/local folder** — artifacts copied into the server's local artifact folder, usually by `scp` or lab automation.
 
-On the **Hosts** page, choose the source and ref/version, click **Check**, then apply the selected build to online workers. Uploaded and local-folder builds are intentionally allowed to reinstall the same version string so debug builds can move back and forth without creating public releases.
+On the **Hosts** page, choose the source and ref/version, click **Check**, then apply the selected build to online workers. Local-folder builds are intentionally allowed to reinstall the same version string so debug builds can move back and forth without creating public releases.
 
 Native workers download the matching artifact for their platform, verify the SHA256 from the selected source, stage the update under their data root, and restart through the platform service layer. Containerized HostWorkers use the manifest's matching GHCR image instead: the current container pulls the target image, creates a replacement container with the same environment, mounts, network, and restart policy, starts it, then stops the old container. A later `docker compose up` can still recreate the worker from the compose file image tag.
 
 The same flow is exposed through token-protected API endpoints. Use the HostWorker enrollment token as `Authorization: Bearer <token>` or `X-RunnerRunner-Enrollment-Token: <token>`.
 
 ```bash
-# Upload a local debug build to the server
+# List local-folder builds
 curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
-  -F version=dev-main-abc123 \
-  -F file=@artifacts/runnerrunner-hostworker-osx-arm64.tar.gz \
-  https://runner.example.com/api/hostworker-updates/upload
+  "https://runner.example.com/api/hostworker-updates?source=local-folder"
 
-# List uploaded builds
-curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
-  "https://runner.example.com/api/hostworker-updates?source=upload"
-
-# Queue that build for a host
+# Queue a GitHub ref for a host
 curl -H "Authorization: Bearer ${ENROLLMENT_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"source":"upload","version":"dev-main-abc123"}' \
+  -d '{"source":"release","version":"main"}' \
   https://runner.example.com/api/hostworker-updates/hosts/mac-mini-01/update
 ```
 
@@ -526,11 +526,9 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorkerUpdates:CacheMinutes` | `30` | How long the latest GitHub release check is cached |
 | `HostWorkerUpdates:ManifestArtifactName` | `runnerrunner-hostworker-manifest` | GitHub Actions artifact containing `release-manifest.json` for branch/commit update refs |
 | `HostWorkerUpdates:AssetsArtifactName` | `runnerrunner-hostworker-assets` | GitHub Actions artifact containing native HostWorker archives for branch/commit update refs |
-| `HostWorkerUpdates:StorageRoot` | `{ContentRoot}/data/hostworker-updates` | Root for uploaded and local-folder HostWorker update artifacts |
-| `HostWorkerUpdates:UploadRoot` | `{StorageRoot}/uploads` | Server-managed upload artifact root |
+| `HostWorkerUpdates:StorageRoot` | `{ContentRoot}/data/hostworker-updates` | Root for local-folder HostWorker update artifacts |
 | `HostWorkerUpdates:LocalArtifactRoot` | `{StorageRoot}/local` | SSH/local-folder artifact root; place assets under version subfolders |
 | `HostWorkerUpdates:PublicBaseUrl` | Current request URL | External server URL used in HostWorker artifact download commands when not queued from an HTTP request |
-| `HostWorkerUpdates:MaxUploadBytes` | `524288000` | Maximum uploaded HostWorker artifact size |
 | `Logging:Console:FormatterName` | `json` outside Development; compose bundles set `simple` | Console log format; set to `simple` for Docker/Dockhand-style text logs or `json` for stdout log shippers |
 | `Logging:Console:IncludeScopes` | `true` for JSON, `false` in compose bundles | Include activity/request scopes in console logs |
 

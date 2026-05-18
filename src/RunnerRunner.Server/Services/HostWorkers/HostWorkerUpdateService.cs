@@ -768,10 +768,19 @@ public static class HostWorkerUpdateSelector
         out string? unavailableReason)
     {
         var imageKey = host.Platform == HostPlatform.Windows ? "hostworkerWindows" : "hostworker";
+        return TrySelectImage(imageKey, release, out image, out unavailableReason);
+    }
+
+    public static bool TrySelectImage(
+        string imageKey,
+        HostWorkerReleaseInfo release,
+        out string? image,
+        out string? unavailableReason)
+    {
         if (!release.Images.TryGetValue(imageKey, out var images) || images.Count == 0)
         {
             image = null;
-            unavailableReason = $"Release {release.Version} does not include a {imageKey} container image.";
+            unavailableReason = $"Release {release.Version} does not include a {imageKey} image.";
             return false;
         }
 

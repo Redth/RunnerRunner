@@ -148,13 +148,26 @@ enable_linux_worker() {
   fi
 }
 
+show_version() {
+  if ! docker inspect runnerrunner-server >/dev/null 2>&1; then
+    echo "RunnerRunner server container was not found." >&2
+    exit 1
+  fi
+
+  docker inspect runnerrunner-server --format 'Image: {{.Config.Image}}
+Version: {{index .Config.Labels "org.opencontainers.image.version"}}
+Commit: {{index .Config.Labels "org.opencontainers.image.revision"}}
+Build tag: {{index .Config.Labels "org.opencontainers.image.ref.name"}}'
+}
+
 case "\${1:-status}" in
   update) shift; exec "${INSTALL_DIR}/update-server.sh" "\$@" ;;
+  version) show_version ;;
   status) exec docker compose --env-file .env -f compose.yaml ps ;;
   logs) shift; exec docker compose --env-file .env -f compose.yaml logs -f "\$@" ;;
   restart) exec docker compose --env-file .env -f compose.yaml up -d --remove-orphans ;;
   enable-linux-worker) enable_linux_worker; exec docker compose --env-file .env -f compose.yaml up -d --remove-orphans ;;
-  *) echo "Usage: runnerrunner-server {status|logs|restart|update|enable-linux-worker}" >&2; exit 1 ;;
+  *) echo "Usage: runnerrunner-server {status|logs|restart|update|version|enable-linux-worker}" >&2; exit 1 ;;
 esac
 BIN
 chmod 0755 "${BIN_PATH}"
@@ -164,4 +177,4 @@ docker compose --env-file .env -f compose.yaml pull
 docker compose --env-file .env -f compose.yaml up -d --remove-orphans
 
 echo "RunnerRunner server installed in ${INSTALL_DIR}."
-echo "Use: runnerrunner-server status | logs | update"
+echo "Use: runnerrunner-server status | logs | update | version"

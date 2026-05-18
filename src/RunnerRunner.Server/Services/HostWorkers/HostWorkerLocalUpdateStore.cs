@@ -7,7 +7,6 @@ namespace RunnerRunner.Server.Services.HostWorkers;
 public enum HostWorkerUpdateSourceKind
 {
     Release,
-    Upload,
     LocalFolder
 }
 
@@ -17,7 +16,6 @@ public static class HostWorkerUpdateSourceKinds
         => source switch
         {
             HostWorkerUpdateSourceKind.Release => "release",
-            HostWorkerUpdateSourceKind.Upload => "upload",
             HostWorkerUpdateSourceKind.LocalFolder => "local-folder",
             _ => source.ToString()
         };
@@ -26,7 +24,6 @@ public static class HostWorkerUpdateSourceKinds
         => source switch
         {
             HostWorkerUpdateSourceKind.Release => "GitHub ref",
-            HostWorkerUpdateSourceKind.Upload => "Uploaded builds",
             HostWorkerUpdateSourceKind.LocalFolder => "Local folder",
             _ => source.ToString()
         };
@@ -41,12 +38,10 @@ public static class HostWorkerUpdateSourceKinds
         source = normalized switch
         {
             "release" or "releases" or "github" or "github-releases" => HostWorkerUpdateSourceKind.Release,
-            "upload" or "uploads" or "uploaded" or "uploaded-builds" => HostWorkerUpdateSourceKind.Upload,
             "local" or "local-folder" or "folder" or "ssh" or "ssh-local-folder" => HostWorkerUpdateSourceKind.LocalFolder,
             _ => HostWorkerUpdateSourceKind.Release
         };
         return normalized is "release" or "releases" or "github" or "github-releases"
-            or "upload" or "uploads" or "uploaded" or "uploaded-builds"
             or "local" or "local-folder" or "folder" or "ssh" or "ssh-local-folder";
     }
 }
@@ -72,37 +67,24 @@ public sealed class HostWorkerLocalUpdateStore
         @"^runnerrunner-hostworker-(?<rid>linux-x64|linux-arm64|osx-x64|osx-arm64|win-x64)\.(?<extension>tar\.gz|zip)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private readonly ILogger<HostWorkerLocalUpdateStore> _logger;
-
     public HostWorkerLocalUpdateStore(
         IConfiguration configuration,
-        IWebHostEnvironment environment,
-        ILogger<HostWorkerLocalUpdateStore> logger)
+        IWebHostEnvironment environment)
     {
-        _logger = logger;
         var storageRoot = configuration["HostWorkerUpdates:StorageRoot"];
         if (string.IsNullOrWhiteSpace(storageRoot))
             storageRoot = Path.Combine(environment.ContentRootPath, "data", "hostworker-updates");
-
-        var uploadRoot = configuration["HostWorkerUpdates:UploadRoot"];
-        if (string.IsNullOrWhiteSpace(uploadRoot))
-            uploadRoot = Path.Combine(storageRoot, "uploads");
 
         var localFolderRoot = configuration["HostWorkerUpdates:LocalArtifactRoot"];
         if (string.IsNullOrWhiteSpace(localFolderRoot))
             localFolderRoot = Path.Combine(storageRoot, "local");
 
-        UploadRoot = uploadRoot;
         LocalFolderRoot = localFolderRoot;
-        MaxUploadBytes = configuration.GetValue("HostWorkerUpdates:MaxUploadBytes", 500L * 1024L * 1024L);
 
-        Directory.CreateDirectory(UploadRoot);
         Directory.CreateDirectory(LocalFolderRoot);
     }
 
-    public string UploadRoot { get; }
     public string LocalFolderRoot { get; }
-    public long MaxUploadBytes { get; }
 
     public IReadOnlyList<HostWorkerUpdateVersion> ListVersions(HostWorkerUpdateSourceKind source)
     {
@@ -129,57 +111,6 @@ public sealed class HostWorkerLocalUpdateStore
             return versions.FirstOrDefault();
 
         return versions.FirstOrDefault(x => string.Equals(x.Version, version.Trim(), StringComparison.OrdinalIgnoreCase));
-    }
-
-    public async Task<HostWorkerUpdateArtifact> SaveUploadAsync(
-        string version,
-        string assetName,
-        Stream content,
-        long sizeBytes,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(version))
-            throw new InvalidOperationException("A HostWorker update version is required.");
-
-        if (sizeBytes <= 0)
-            throw new InvalidOperationException("The uploaded HostWorker update artifact is empty.");
-
-        if (sizeBytes > MaxUploadBytes)
-            throw new InvalidOperationException($"The uploaded HostWorker update artifact exceeds the {MaxUploadBytes:n0} byte limit.");
-
-        var safeVersion = SanitizeVersion(version);
-        if (!string.Equals(version.Trim(), safeVersion, StringComparison.Ordinal))
-            throw new InvalidOperationException("HostWorker update versions can only contain letters, numbers, '.', '-', and '_'.");
-
-        if (!TryParseAssetName(assetName, out var runtimeIdentifier, out var normalizedAssetName))
-            throw new InvalidOperationException($"Unsupported HostWorker update artifact '{assetName}'. Expected runnerrunner-hostworker-<rid>.tar.gz or .zip.");
-
-        var targetDirectory = Path.Combine(UploadRoot, safeVersion);
-        Directory.CreateDirectory(targetDirectory);
-
-        var targetPath = Path.Combine(targetDirectory, normalizedAssetName);
-        var tempPath = targetPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            await using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                await content.CopyToAsync(output, ct);
-
-            var actualSize = new FileInfo(tempPath).Length;
-            if (actualSize <= 0)
-                throw new InvalidOperationException("The uploaded HostWorker update artifact is empty.");
-            if (actualSize > MaxUploadBytes)
-                throw new InvalidOperationException($"The uploaded HostWorker update artifact exceeds the {MaxUploadBytes:n0} byte limit.");
-
-            File.Move(tempPath, targetPath, overwrite: true);
-            var artifact = await CreateArtifactAsync(HostWorkerUpdateSourceKind.Upload, safeVersion, runtimeIdentifier, normalizedAssetName, targetPath, ct);
-            _logger.LogInformation("Stored uploaded HostWorker artifact {AssetName} for version {Version}", artifact.AssetName, artifact.Version);
-            return artifact;
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-        }
     }
 
     public async Task<HostWorkerUpdateArtifact?> GetArtifactAsync(
@@ -229,7 +160,6 @@ public sealed class HostWorkerLocalUpdateStore
     {
         var root = source switch
         {
-            HostWorkerUpdateSourceKind.Upload => UploadRoot,
             HostWorkerUpdateSourceKind.LocalFolder => LocalFolderRoot,
             _ => null
         };
@@ -265,7 +195,6 @@ public sealed class HostWorkerLocalUpdateStore
     {
         var root = source switch
         {
-            HostWorkerUpdateSourceKind.Upload => UploadRoot,
             HostWorkerUpdateSourceKind.LocalFolder => LocalFolderRoot,
             _ => null
         };

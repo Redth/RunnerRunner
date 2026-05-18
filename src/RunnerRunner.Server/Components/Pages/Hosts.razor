@@ -1,6 +1,5 @@
 @page "/hosts"
 @rendermode InteractiveServer
-@using Microsoft.AspNetCore.Components.Forms
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
@@ -52,7 +51,6 @@
                 <label class="form-label form-label-sm mb-1">HostWorker update source</label>
                 <select class="form-select form-select-sm" value="@selectedUpdateSource.ToSourceId()" @onchange="OnUpdateSourceChanged">
                     <option value="release">GitHub ref</option>
-                    <option value="upload">Uploaded builds</option>
                     <option value="local-folder">SSH/local folder</option>
                 </select>
             </div>
@@ -87,27 +85,8 @@
             }
         </div>
         <div class="small text-muted mt-2">
-            GitHub refs resolve to a release tag first, then to matching workflow artifacts for a branch or commit. Containerized HostWorkers use the matching GHCR image. Uploaded builds are stored by the server. SSH/local folder builds are read from
+            GitHub refs resolve to a release tag first, then to matching workflow artifacts for a branch or commit. Containerized HostWorkers use the matching GHCR image. SSH/local folder builds are read from
             <code>@HostWorkerUpdateStore.LocalFolderRoot</code> with artifacts under version folders.
-        </div>
-        <div class="row g-2 align-items-end mt-2">
-            <div class="col-md-3">
-                <label class="form-label form-label-sm mb-1">Upload version</label>
-                <input class="form-control form-control-sm" @bind="uploadVersion" placeholder="dev-main-abc123" />
-            </div>
-            <div class="col-md-5">
-                <label class="form-label form-label-sm mb-1">Upload artifact</label>
-                <InputFile class="form-control form-control-sm" OnChange="OnUpdateArtifactSelected" />
-            </div>
-            <div class="col-auto">
-                <button class="btn btn-outline-primary btn-sm" @onclick="UploadHostWorkerBuild" disabled="@(!CanUploadBuild)">
-                    <i class="bi bi-upload me-1"></i> @(uploadingUpdate ? "Uploading..." : "Upload build")
-                </button>
-            </div>
-            @if (!string.IsNullOrWhiteSpace(uploadMessage))
-            {
-                <div class="col-12 small text-muted">@uploadMessage</div>
-            }
         </div>
     </div>
 </div>
@@ -377,15 +356,6 @@
     private HostWorkerUpdateSourceKind selectedUpdateSource = HostWorkerUpdateSourceKind.Release;
     private string? selectedUpdateVersion;
     private IReadOnlyList<HostWorkerUpdateVersion> availableUpdateVersions = [];
-    private string uploadVersion = $"dev-{DateTime.UtcNow:yyyyMMddHHmmss}";
-    private IBrowserFile? selectedUpdateFile;
-    private bool uploadingUpdate;
-    private string? uploadMessage;
-
-    private bool CanUploadBuild
-        => !uploadingUpdate
-           && selectedUpdateFile != null
-           && !string.IsNullOrWhiteSpace(uploadVersion);
 
     // Filter & sort state
     private string searchText = "";
@@ -633,44 +603,6 @@
             !availableUpdateVersions.Any(x => string.Equals(x.Version, selectedUpdateVersion, StringComparison.OrdinalIgnoreCase)))
         {
             selectedUpdateVersion = availableUpdateVersions[0].Version;
-        }
-    }
-
-    private void OnUpdateArtifactSelected(InputFileChangeEventArgs e)
-    {
-        selectedUpdateFile = e.File;
-        uploadMessage = selectedUpdateFile == null ? null : $"Selected {selectedUpdateFile.Name} ({selectedUpdateFile.Size:n0} bytes).";
-    }
-
-    private async Task UploadHostWorkerBuild()
-    {
-        if (selectedUpdateFile == null)
-            return;
-
-        uploadingUpdate = true;
-        updateError = null;
-        uploadMessage = null;
-        try
-        {
-            await using var stream = selectedUpdateFile.OpenReadStream(HostWorkerUpdateStore.MaxUploadBytes);
-            var artifact = await HostWorkerUpdateStore.SaveUploadAsync(
-                uploadVersion,
-                selectedUpdateFile.Name,
-                stream,
-                selectedUpdateFile.Size);
-
-            selectedUpdateSource = HostWorkerUpdateSourceKind.Upload;
-            selectedUpdateVersion = artifact.Version;
-            uploadMessage = $"Uploaded {artifact.AssetName} for {artifact.Version}.";
-            await LoadUpdateVersions();
-        }
-        catch (Exception ex)
-        {
-            updateError = $"Unable to upload HostWorker build: {ex.Message}";
-        }
-        finally
-        {
-            uploadingUpdate = false;
         }
     }
 
