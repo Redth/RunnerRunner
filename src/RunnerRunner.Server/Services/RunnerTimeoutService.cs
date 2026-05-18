@@ -42,18 +42,28 @@ public class RunnerTimeoutService : BackgroundService
     {
         _logger.LogInformation("RunnerTimeoutService started");
 
-        using var timer = new PeriodicTimer(ScanInterval);
-
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        try
         {
-            try
+            using var timer = new PeriodicTimer(ScanInterval);
+
+            while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                await ScanForTimeoutsAsync(stoppingToken);
+                try
+                {
+                    await ScanForTimeoutsAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error during runner timeout scan");
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during runner timeout scan");
-            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
 
         _logger.LogInformation("RunnerTimeoutService stopped");

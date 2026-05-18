@@ -24,30 +24,36 @@ public class GitHubRunnerSweepService : BackgroundService
     {
         _logger.LogInformation("GitHub runner sweep service started");
 
-        await Task.Delay(InitialDelay, stoppingToken);
-
-        using var timer = new PeriodicTimer(SweepInterval);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                using var scope = _services.CreateScope();
-                var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
-                var cleanupService = scope.ServiceProvider.GetRequiredService<RunnerRegistrationCleanupService>();
-                await cleanupService.SweepStaleRegistrationsAsync(store, stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "GitHub stale-runner sweep failed");
-            }
+            await Task.Delay(InitialDelay, stoppingToken);
 
-            if (!await timer.WaitForNextTickAsync(stoppingToken))
-                break;
+            using var timer = new PeriodicTimer(SweepInterval);
+
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    using var scope = _services.CreateScope();
+                    var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+                    var cleanupService = scope.ServiceProvider.GetRequiredService<RunnerRegistrationCleanupService>();
+                    await cleanupService.SweepStaleRegistrationsAsync(store, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "GitHub stale-runner sweep failed");
+                }
+
+                if (!await timer.WaitForNextTickAsync(stoppingToken))
+                    break;
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
 
         _logger.LogInformation("GitHub runner sweep service stopped");

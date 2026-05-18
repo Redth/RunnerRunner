@@ -103,20 +103,30 @@ public class DynamicProvisioningService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                await RunQueueSweepAsync(stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error while reconciling pending webhook events");
-            }
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
 
-            await Task.Delay(_retrySweepInterval, stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await RunQueueSweepAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error while reconciling pending webhook events");
+                }
+
+                await Task.Delay(_retrySweepInterval, stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
     }
 

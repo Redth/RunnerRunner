@@ -96,7 +96,9 @@ public class ProvisioningRuleGrainSyncServiceTests
             services,
             NullLogger<ProvisioningRuleGrainStartupSyncService>.Instance);
 
-        await startupSync.StartAsync(CancellationToken.None);
+        var count = await startupSync.SynchronizeOnceAsync(CancellationToken.None);
+
+        Assert.Equal(2, count);
 
         await enabledGrain.Received(1).SetConfig(Arg.Is<ProvisioningRuleConfig>(config =>
             config.Name == "Enabled static"
@@ -106,11 +108,72 @@ public class ProvisioningRuleGrainSyncServiceTests
             && !config.Enabled));
     }
 
+    [Fact]
+    public async Task StartupSync_RetriesTransientFailuresWithoutFailingStartup()
+    {
+        var store = TestDocumentStore.Create();
+        var grain = Substitute.For<IProvisioningRuleGrain>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IProvisioningRuleGrain>("rule-1", null).Returns(grain);
+
+        await store.Insert(new ProvisioningRule
+        {
+            Id = "rule-1",
+            Name = "Transient rule",
+            ProfileId = "profile-1",
+            Type = ProvisioningType.Static,
+            Enabled = true
+        });
+
+        var setConfigCalls = 0;
+        grain.SetConfig(Arg.Any<ProvisioningRuleConfig>()).Returns(_ =>
+        {
+            if (Interlocked.Increment(ref setConfigCalls) == 1)
+                return Task.FromException(new TimeoutException("Orleans membership is still warming up"));
+
+            return Task.CompletedTask;
+        });
+
+        var services = new ServiceCollection()
+            .AddSingleton(store)
+            .AddSingleton(grainFactory)
+            .AddSingleton(new ProvisioningRuleGrainSyncService(
+                grainFactory,
+                NullLogger<ProvisioningRuleGrainSyncService>.Instance))
+            .BuildServiceProvider();
+
+        var startupSync = new ProvisioningRuleGrainStartupSyncService(
+            services,
+            NullLogger<ProvisioningRuleGrainStartupSyncService>.Instance,
+            TimeSpan.FromMilliseconds(10));
+
+        await startupSync.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => Volatile.Read(ref setConfigCalls) >= 2);
+        await startupSync.StopAsync(CancellationToken.None);
+
+        await grain.Received(2).SetConfig(Arg.Any<ProvisioningRuleConfig>());
+    }
+
     private static (ProvisioningRuleGrainSyncService Service, IGrainFactory GrainFactory) CreateService()
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         return (new ProvisioningRuleGrainSyncService(
             grainFactory,
             NullLogger<ProvisioningRuleGrainSyncService>.Instance), grainFactory);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+                return;
+
+            await Task.Delay(10);
+        }
+
+        Assert.True(condition());
     }
 }
