@@ -23,6 +23,7 @@ publish/
 out/
 .db/
 artifacts/
+TestResults/
 
 ## Deploy secrets
 deploy/.env

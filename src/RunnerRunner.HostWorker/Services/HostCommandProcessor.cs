@@ -44,6 +44,37 @@ internal sealed class HostCommandProcessor : BackgroundService
         HostResourceUsageCollector resourceUsageCollector,
         ILogger<HostCommandProcessor> logger,
         ILoggerFactory loggerFactory)
+        : this(
+            configuration,
+            identity,
+            lifecycleManager,
+            imageManager,
+            paths,
+            logStore,
+            selfUpdater,
+            resourceUsageCollector,
+            logger,
+            loggerFactory,
+            dockerBackend: null,
+            tartBackend: null,
+            nativeBackend: null)
+    {
+    }
+
+    internal HostCommandProcessor(
+        IConfiguration configuration,
+        HostWorkerIdentity identity,
+        RunnerLifecycleManager lifecycleManager,
+        ImageManager imageManager,
+        HostWorkerPaths paths,
+        HostWorkerLocalLogStore logStore,
+        HostWorkerSelfUpdater selfUpdater,
+        HostResourceUsageCollector resourceUsageCollector,
+        ILogger<HostCommandProcessor> logger,
+        ILoggerFactory loggerFactory,
+        IRunnerBackend? dockerBackend,
+        IRunnerBackend? tartBackend,
+        IRunnerBackend? nativeBackend)
     {
         _configuration = configuration;
         _identity = identity;
@@ -54,9 +85,9 @@ internal sealed class HostCommandProcessor : BackgroundService
         _selfUpdater = selfUpdater;
         _resourceUsageCollector = resourceUsageCollector;
         _logger = logger;
-        _dockerBackend = new DockerBackend(loggerFactory.CreateLogger<DockerBackend>());
-        _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>());
-        _nativeBackend = new NativeBackend(loggerFactory.CreateLogger<NativeBackend>());
+        _dockerBackend = dockerBackend ?? new DockerBackend(loggerFactory.CreateLogger<DockerBackend>());
+        _tartBackend = tartBackend ?? new TartBackend(loggerFactory.CreateLogger<TartBackend>());
+        _nativeBackend = nativeBackend ?? new NativeBackend(loggerFactory.CreateLogger<NativeBackend>());
     }
 
     public ValueTask EnqueueAsync(HostWorkerMessage message, CancellationToken cancellationToken)
@@ -108,7 +139,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         _eventSink = eventSink;
     }
 
-    private async Task ProcessCommandAsync(HostWorkerMessage message, CancellationToken ct)
+    internal async Task ProcessCommandAsync(HostWorkerMessage message, CancellationToken ct)
     {
         var envelope = HostWorkerProtocol.DeserializeCommand(message);
         try

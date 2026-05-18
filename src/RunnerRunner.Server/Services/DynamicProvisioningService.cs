@@ -533,6 +533,20 @@ public class DynamicProvisioningService : BackgroundService
         });
     }
 
+    internal async Task ProcessQueuedWebhookEventOnceAsync(
+        string eventId,
+        string? requestedProfileId,
+        CancellationToken ct = default)
+    {
+        using var scope = _services.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+        var evt = await store.Get<WebhookEvent>(eventId)
+            ?? throw new InvalidOperationException($"Webhook event '{eventId}' was not found.");
+
+        ct.ThrowIfCancellationRequested();
+        await HandleJobQueuedAsync(evt, requestedProfileId, isRecoveryAttempt: true);
+    }
+
     private void HandleRunnerStatusChanged(RunnerStatusChangedEvent _)
         => TriggerQueueSweep();
 

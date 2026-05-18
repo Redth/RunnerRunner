@@ -347,7 +347,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         };
     }
 
-    private static bool ValidateHmac(string body, string secret, string? signatureHeader, string provider)
+    internal static bool ValidateHmac(string body, string secret, string? signatureHeader, string provider)
     {
         if (string.IsNullOrEmpty(signatureHeader))
             return false;
@@ -367,7 +367,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             Encoding.UTF8.GetBytes(expected.ToLowerInvariant()));
     }
 
-    private static string? ResolveWebhookSecret(
+    internal static string? ResolveWebhookSecret(
         ProvisioningRule rule,
         ProviderCredential? credential,
         RunnerProvider? provider)

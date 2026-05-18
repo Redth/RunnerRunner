@@ -139,6 +139,115 @@ public class DynamicProvisioningServiceTests
         Assert.Equal(string.Empty, reason);
     }
 
+    public static IEnumerable<object[]> StaleProvisionedRunnerLinks()
+    {
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-missing-link",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1"
+            },
+            null!,
+            "no longer references"
+        ];
+
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-missing-runner",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1",
+                InstanceId = "inst-missing"
+            },
+            null!,
+            "missing"
+        ];
+
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-wrong-job",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1",
+                InstanceId = "inst-1"
+            },
+            new RunnerInstance
+            {
+                Id = "inst-1",
+                RunnerName = "dynamic-runner",
+                ProvisioningMode = "dynamic",
+                JobId = "job-2",
+                WebhookEventId = "evt-wrong-job",
+                Status = RunnerInstanceStatus.Running
+            },
+            "not linked"
+        ];
+
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-wrong-event",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1",
+                InstanceId = "inst-1"
+            },
+            new RunnerInstance
+            {
+                Id = "inst-1",
+                RunnerName = "dynamic-runner",
+                ProvisioningMode = "dynamic",
+                JobId = "job-1",
+                WebhookEventId = "evt-other",
+                Status = RunnerInstanceStatus.Running
+            },
+            "different webhook event"
+        ];
+
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-terminal-runner",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1",
+                InstanceId = "inst-1"
+            },
+            new RunnerInstance
+            {
+                Id = "inst-1",
+                RunnerName = "dynamic-runner",
+                ProvisioningMode = "dynamic",
+                JobId = "job-1",
+                WebhookEventId = "evt-terminal-runner",
+                Status = RunnerInstanceStatus.Failed
+            },
+            "no longer active"
+        ];
+    }
+
+    [Theory]
+    [MemberData(nameof(StaleProvisionedRunnerLinks))]
+    public void ShouldRetryProvisionedEvent_ReturnsTrueForStaleLinks(
+        WebhookEvent evt,
+        RunnerInstance? linkedInstance,
+        string expectedReason)
+    {
+        var shouldRetry = DynamicProvisioningService.ShouldRetryProvisionedEvent(evt, linkedInstance, out var reason);
+
+        Assert.True(shouldRetry);
+        Assert.Contains(expectedReason, reason, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void ShouldBlockQueuedGitHubBackfill_IgnoresTimedOutQueuedEvents()
     {
@@ -167,6 +276,49 @@ public class DynamicProvisioningServiceTests
         var shouldBlock = DynamicProvisioningService.ShouldBlockQueuedGitHubBackfill(evt);
 
         Assert.True(shouldBlock);
+    }
+
+    [Theory]
+    [InlineData("pending", true)]
+    [InlineData("pending_capacity", true)]
+    [InlineData("provisioned", true)]
+    [InlineData("completed", false)]
+    [InlineData("timed_out", false)]
+    [InlineData("rejected", false)]
+    [InlineData("ignored", false)]
+    [InlineData("in_progress", false)]
+    public void ShouldBlockQueuedGitHubBackfill_BlocksOnlyNonTerminalQueuedEvents(
+        string status,
+        bool expected)
+    {
+        var evt = new WebhookEvent
+        {
+            Provider = RunnerProvider.GitHubActions.ToString(),
+            Action = "queued",
+            Status = status
+        };
+
+        var shouldBlock = DynamicProvisioningService.ShouldBlockQueuedGitHubBackfill(evt);
+
+        Assert.Equal(expected, shouldBlock);
+    }
+
+    [Theory]
+    [InlineData("GiteaActions", "queued", "pending")]
+    [InlineData("GitHubActions", "completed", "pending")]
+    public void ShouldBlockQueuedGitHubBackfill_IgnoresNonGitHubQueuedWork(
+        string provider,
+        string action,
+        string status)
+    {
+        var evt = new WebhookEvent
+        {
+            Provider = provider,
+            Action = action,
+            Status = status
+        };
+
+        Assert.False(DynamicProvisioningService.ShouldBlockQueuedGitHubBackfill(evt));
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using RunnerRunner.Agent.Backends;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace RunnerRunner.Agent.Tests.Backends;
 
@@ -23,5 +24,31 @@ public class NativeBackendTests
     public void NormalizeVersionTag_StripsLeadingV(string? input, string? expected)
     {
         Assert.Equal(expected, NativeBackend.NormalizeVersionTag(input));
+    }
+
+    [Fact]
+    public async Task UnknownInstance_ReportsNotFoundHealthAndStopDoesNotThrow()
+    {
+        var backend = new NativeBackend(NullLogger<NativeBackend>.Instance);
+
+        var health = await backend.GetHealthAsync("missing-process");
+        await backend.StopRunnerAsync("missing-process");
+
+        Assert.False(health.IsRunning);
+        Assert.Equal("not_found", health.Status);
+    }
+
+    [Fact]
+    public void ExpandTokens_ReplacesKnownTokensAndLeavesUnknownTokens()
+    {
+        var expanded = NativeBackend.ExpandTokens(
+            "${BASE_PATH}/instances/${RUNNER_NAME}/${UNKNOWN}",
+            new Dictionary<string, string>
+            {
+                ["BASE_PATH"] = "/runner-root",
+                ["RUNNER_NAME"] = "runner-1"
+            });
+
+        Assert.Equal("/runner-root/instances/runner-1/${UNKNOWN}", expanded);
     }
 }
