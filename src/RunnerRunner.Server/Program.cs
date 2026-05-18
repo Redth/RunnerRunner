@@ -63,6 +63,11 @@ builder.UseOrleans(silo =>
 {
     var orleansConnString = pgConnectionString;
 
+    silo.Configure<Orleans.Hosting.ReminderOptions>(options =>
+    {
+        options.MinimumReminderPeriod = TimeSpan.FromSeconds(30);
+    });
+
     if (builder.Environment.IsDevelopment())
     {
         // Dev: localhost clustering + in-memory storage
@@ -144,6 +149,7 @@ builder.Services.AddSingleton<HostWorkerUpdateService>();
 builder.Services.AddSingleton<HostWorkerEventProcessor>();
 builder.Services.AddSingleton<LongRunningTaskService>();
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
+builder.Services.AddSingleton<ProvisioningRuleGrainSyncService>();
 builder.Services.AddScoped<CapacityPlanningService>();
 
 // === Orleans Grain Architecture (Phase 5) ===
@@ -160,6 +166,7 @@ builder.Services.AddScoped<CapacityPlanningService>();
 builder.Services.AddHostedService<OrchestrationEngine>();
 builder.Services.AddHostedService<VersionCheckService>();
 builder.Services.AddHostedService<DynamicProvisioningService>();
+builder.Services.AddHostedService<ProvisioningRuleGrainStartupSyncService>();
 builder.Services.AddHostedService<StreamSubscriptionService>();
 builder.Services.AddHostedService<GitHubRunnerSweepService>();
 builder.Services.AddHostedService<ReconciliationService>();    // extra stale/orphan cleanup during migration

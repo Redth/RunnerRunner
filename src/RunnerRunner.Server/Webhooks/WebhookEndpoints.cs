@@ -51,7 +51,8 @@ public static class WebhookEndpoints
             ? ctx.Request.Headers["X-Hub-Signature-256"].FirstOrDefault()
             : ctx.Request.Headers["X-Gitea-Signature"].FirstOrDefault();
 
-        // Delegate to the WebhookProcessorGrain for matching and provisioning
+        // Delegate to the WebhookProcessorGrain for matching and auditing.
+        // DynamicProvisioningService receives the event below and owns webhook runner dispatch during the grain migration.
         var providerString = provider == RunnerProvider.GitHubActions ? "github" : "gitea";
         var grainFactory = ctx.RequestServices.GetRequiredService<IGrainFactory>();
         var processorGrain = grainFactory.GetGrain<IWebhookProcessorGrain>(0);

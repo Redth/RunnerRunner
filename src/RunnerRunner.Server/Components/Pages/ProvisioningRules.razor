@@ -7,6 +7,7 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject CapacityPlanningService CapacityService
+@inject ProvisioningRuleGrainSyncService RuleGrainSync
 
 <PageTitle>Provisioning Rules - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -556,6 +557,8 @@
         else
             await Store.Insert(editRule);
 
+        await RuleGrainSync.ConfigureRuleAsync(editRule);
+
         await LoadDataAsync();
         showForm = false;
     }
@@ -565,6 +568,7 @@
         var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete provisioning rule '{rule.Name}'?");
         if (confirmed)
         {
+            await RuleGrainSync.DisableRuleAsync(rule.Id);
             await Store.Remove<ProvisioningRule>(rule.Id);
             await LoadDataAsync();
         }
