@@ -25,6 +25,7 @@ main {
 }
 
 .top-bar {
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -34,7 +35,8 @@ main {
     position: sticky;
     top: 0;
     z-index: 10;
-    min-height: 3.15rem;
+    height: var(--shell-header-height);
+    min-height: var(--shell-header-height);
     backdrop-filter: blur(14px);
 }
 
