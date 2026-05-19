@@ -532,7 +532,7 @@ After composition, `$VAR` and `${VAR}` references are expanded so values can cha
 | `HostWorkerUpdates:AssetsArtifactName` | `runnerrunner-hostworker-assets` | GitHub Actions artifact containing native HostWorker archives for branch/commit update refs |
 | `HostWorkerUpdates:StorageRoot` | `{ContentRoot}/data/hostworker-updates` | Root for local-folder HostWorker update artifacts |
 | `HostWorkerUpdates:LocalArtifactRoot` | `{StorageRoot}/local` | SSH/local-folder artifact root; place assets under version subfolders |
-| `HostWorkerUpdates:PublicBaseUrl` | Current request URL | External server URL used in HostWorker artifact download commands when not queued from an HTTP request |
+| `HostWorkerUpdates:PublicBaseUrl` | Current request URL | External web/API URL used in HostWorker artifact download commands; when set, this takes precedence over the current request URL |
 | `Logging:Console:FormatterName` | `json` outside Development; compose bundles set `simple` | Console log format; set to `simple` for Docker/Dockhand-style text logs or `json` for stdout log shippers |
 | `Logging:Console:IncludeScopes` | `true` for JSON, `false` in compose bundles | Include activity/request scopes in console logs |
 
