@@ -19,7 +19,7 @@
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-hdd-rack-fill"></i> Hosts</h1>
-        <span class="page-desc">Manage host machines and their capabilities. Provisioning is defined through rules.</span>
+        <span class="page-desc">Manage host machines and their capabilities.</span>
     </div>
 </SectionContent>
 
@@ -29,11 +29,8 @@
     </button>
     <button class="btn btn-outline-secondary" @onclick="ToggleUpdateOptions">
         <i class="bi bi-arrow-up-circle me-1"></i> HostWorker updates
-        <span class="badge bg-secondary ms-1">@SelectedUpdateTargetLabel</span>
+        <span class="badge bg-secondary ms-1" title="@SelectedUpdateTargetTitle">@SelectedUpdateTargetLabel</span>
     </button>
-    <a class="btn btn-outline-primary" href="/provisioning-rules">
-        <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
-    </a>
     @if (!string.IsNullOrWhiteSpace(updateError))
     {
         <div class="alert alert-warning mt-2 mb-0">
@@ -141,14 +138,12 @@
             <th role="button" style="width: 10rem;" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
             <th style="width: 12rem;">Worker</th>
             <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
-            <th style="width: 13rem;">Provisioning</th>
             <th style="width: 14rem;">Actions</th>
         </tr>
     </thead>
     <tbody>
         @foreach (var host in FilteredHosts)
         {
-            var hostRules = GetHostRules(host);
             <tr>
                 <td>
                     @if (renamingHostId == host.Id)
@@ -253,12 +248,12 @@
                                 if (capacity.BackendUsage.TryGetValue(backend, out var counter))
                                 {
                                     <span class="backend-capacity-chip @GetBackendUsageClass(counter)"
-                                          title="@GetBackendUsageTitle(backend, counter)">
+                                         title="@GetBackendUsageTitle(backend, counter)">
                                         <i class="bi @GetBackendIcon(backend)"></i>
+                                        <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
                                         <span class="backend-capacity-meter" style="@GetBackendUsageStyle(counter)" aria-hidden="true">
                                             <span></span>
                                         </span>
-                                        <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
                                     </span>
                                 }
                             }
@@ -279,29 +274,6 @@
                                 </span>
                             </div>
                         }
-                    }
-                </td>
-                <td>
-                    @if (hostRules.Any())
-                    {
-                        <div class="provisioning-chips">
-                            @foreach (var rule in hostRules)
-                            {
-                                <span class="provisioning-chip @GetProvisioningChipClass(rule)"
-                                      title="@GetProvisioningRuleTitle(rule)">
-                                    <i class="bi @GetProvisioningIcon(rule.Type)"></i>
-                                    <span>@rule.Name</span>
-                                </span>
-                            }
-                        </div>
-                    }
-                    else
-                    {
-                        <a class="provisioning-chip provisioning-chip-empty" href="/provisioning-rules"
-                           title="No provisioning rules target this host. Open provisioning rules.">
-                            <i class="bi bi-diagram-3"></i>
-                            <span>Rules</span>
-                        </a>
                     }
                 </td>
                 <td class="host-actions-cell">
@@ -342,7 +314,7 @@
             @if (configureHostId == host.Id)
             {
                 <tr>
-                    <td colspan="6" class="p-0">
+                    <td colspan="5" class="p-0">
                         <div class="card m-2">
                             <div class="card-body">
                                 <div class="row">
@@ -447,6 +419,11 @@
         selectedUpdateSource == HostWorkerUpdateSourceKind.Release
             ? $"GitHub: {SelectedUpdateVersionLabel}"
             : $"Local: {SelectedUpdateVersionLabel}";
+
+    private string SelectedUpdateTargetTitle =>
+        string.IsNullOrWhiteSpace(selectedUpdateVersion)
+            ? SelectedUpdateTargetLabel
+            : selectedUpdateVersion.Trim();
 
     private string SelectedUpdateVersionLabel =>
         string.IsNullOrWhiteSpace(selectedUpdateVersion)
@@ -795,16 +772,11 @@
 
         var value = version.Trim().Trim('\'');
         var metadataIndex = value.IndexOf('+');
-        if (metadataIndex >= 0)
-        {
-            var baseVersion = value[..metadataIndex];
-            var metadata = metadataIndex < value.Length - 1
-                ? value[(metadataIndex + 1)..]
-                : "";
-            return string.IsNullOrWhiteSpace(metadata)
-                ? ShortenVersionSegment(baseVersion)
-                : $"{ShortenVersionSegment(baseVersion)}+{ShortenVersionSegment(metadata)}";
-        }
+        if (metadataIndex > 0)
+            return ShortenVersionSegment(value[..metadataIndex]);
+
+        if (metadataIndex == 0 && value.Length > 1)
+            return ShortenVersionSegment(value[(metadataIndex + 1)..]);
 
         return ShortenVersionSegment(value);
     }
@@ -944,40 +916,6 @@
         HostPlatform.Windows => "bi-windows",
         _ => "bi-pc-display"
     };
-
-    private List<ProvisioningRule> GetHostRules(Host host) =>
-        rules.Where(r =>
-                r.TargetHostId == host.Id ||
-                (!string.IsNullOrWhiteSpace(host.GroupId) && r.TargetGroupId == host.GroupId))
-            .OrderBy(r => r.Name)
-            .ToList();
-
-    private static string GetProvisioningIcon(ProvisioningType type) => type switch
-    {
-        ProvisioningType.Static => "bi-pin-angle-fill",
-        ProvisioningType.ScaleSet => "bi-layers-fill",
-        ProvisioningType.Webhook => "bi-lightning-charge-fill",
-        ProvisioningType.Scheduled => "bi-calendar2-week-fill",
-        _ => "bi-diagram-3-fill"
-    };
-
-    private static string GetProvisioningChipClass(ProvisioningRule rule)
-        => rule.Enabled
-            ? rule.Type switch
-            {
-                ProvisioningType.Static => "provisioning-static",
-                ProvisioningType.ScaleSet => "provisioning-scale",
-                ProvisioningType.Webhook => "provisioning-webhook",
-                ProvisioningType.Scheduled => "provisioning-scheduled",
-                _ => "provisioning-static"
-            }
-            : "provisioning-disabled";
-
-    private static string GetProvisioningRuleTitle(ProvisioningRule rule)
-    {
-        var state = rule.Enabled ? "enabled" : "disabled";
-        return $"{rule.Type} rule: {rule.Name} ({state})";
-    }
 
     private async Task<HostGrainState?> GetHostGrainState(string hostId)
     {

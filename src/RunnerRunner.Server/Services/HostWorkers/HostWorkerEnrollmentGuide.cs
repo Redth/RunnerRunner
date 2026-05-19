@@ -626,14 +626,9 @@ public sealed class HostWorkerEnrollmentGuideBuilder
 
         settings_backup="${tmp_dir}/appsettings.Production.json"
         cp "${existing_settings}" "${settings_backup}"
-        enrollment_token="$(sed -n 's/.*"EnrollmentToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${existing_settings}" | head -n 1)"
-        curl_args=(-fsSL)
-        if [ -n "${enrollment_token}" ]; then
-          curl_args+=(-H "Authorization: Bearer ${enrollment_token}")
-        fi
 
         archive="${tmp_dir}/hostworker.tar.gz"
-        if ! curl "${curl_args[@]}" "${asset_url}" -o "${archive}"; then
+        if ! curl -fsSL "${asset_url}" -o "${archive}"; then
           echo "Failed to download HostWorker update asset from ${asset_url}." >&2
           exit 1
         fi
@@ -754,11 +749,6 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         if (-not (Test-Path $settingsPath)) {
           throw "Manual update requires an existing $settingsPath."
         }
-        $existingSettings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
-        $downloadHeaders = @{}
-        if ($existingSettings.HostWorker -and -not [string]::IsNullOrWhiteSpace($existingSettings.HostWorker.EnrollmentToken)) {
-          $downloadHeaders['Authorization'] = "Bearer $($existingSettings.HostWorker.EnrollmentToken)"
-        }
 
         $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ('runnerrunner-hostworker-update-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
@@ -767,7 +757,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
           $settingsBackup = Join-Path $tmpDir 'appsettings.Production.json'
           Copy-Item -Path $settingsPath -Destination $settingsBackup -Force
           try {
-            Invoke-WebRequest $assetUrl -OutFile $archive -Headers $downloadHeaders
+            Invoke-WebRequest $assetUrl -OutFile $archive
           }
           catch {
             throw "Failed to download HostWorker update asset from $assetUrl. $($_.Exception.Message)"
