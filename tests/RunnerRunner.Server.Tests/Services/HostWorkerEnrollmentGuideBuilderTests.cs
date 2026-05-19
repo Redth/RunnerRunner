@@ -150,8 +150,9 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
         Assert.Contains("asset_url='https://runner.example.test/asset.tar.gz?sha256=abc'", command);
         Assert.Contains("expected_sha256='abc'", command);
         Assert.Contains("set -euo pipefail", command);
-        Assert.DoesNotContain("Authorization: Bearer", command);
-        Assert.Contains("if ! curl -fsSL \"${asset_url}\" -o \"${archive}\"", command);
+        Assert.Contains("Authorization: Bearer ${enrollment_token}", command);
+        Assert.Contains("if ! curl \"${curl_args[@]}\"", command);
+        Assert.Contains("Failed to download HostWorker update asset from ${asset_url}", command);
         Assert.Contains("tar -xzf", command);
         Assert.DoesNotContain("install-host-macos.sh", command);
     }
@@ -179,9 +180,9 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
 
         var command = Assert.Single(instructions.CommandBlocks).Command;
         Assert.Equal(HostWorkerEnrollmentRemoteShell.PowerShell, instructions.RemoteShell);
-        Assert.DoesNotContain("$downloadHeaders", command);
-        Assert.DoesNotContain("Authorization", command);
-        Assert.Contains("Invoke-WebRequest $assetUrl -OutFile $archive", command);
+        Assert.Contains("$downloadHeaders", command);
+        Assert.Contains("Authorization", command);
+        Assert.Contains("Invoke-WebRequest $assetUrl -OutFile $archive -Headers $downloadHeaders", command);
         Assert.Contains("Failed to download HostWorker update asset", command);
         Assert.Contains("Expand-Archive $archive", command);
     }
