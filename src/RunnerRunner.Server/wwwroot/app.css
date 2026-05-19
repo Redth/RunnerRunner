@@ -365,6 +365,90 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     font-size: 0.7rem;
 }
 
+.host-update-options {
+    border-color: var(--border-color);
+    box-shadow: var(--shadow-sm);
+}
+
+.host-worker-version {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.worker-version-label {
+    color: var(--text-tertiary);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.host-worker-version code,
+.host-update-summary code {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+}
+
+.host-update-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.45rem;
+}
+
+.host-update-summary .small {
+    flex-basis: 100%;
+}
+
+.host-actions-cell {
+    overflow: visible !important;
+}
+
+.host-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.host-action-menu {
+    position: relative;
+}
+
+.host-action-dropdown {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    right: 0;
+    min-width: 12rem;
+    padding: 0.35rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 20;
+}
+
+.host-action-dropdown-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 0.45rem;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    padding: 0.45rem 0.55rem;
+    text-align: left;
+}
+
+.host-action-dropdown-item:hover,
+.host-action-dropdown-item:focus {
+    background: var(--bg-secondary);
+}
+
 /* --- Host enrollment wizard --- */
 .enrollment-wizard-modal {
     background: rgba(15, 17, 23, 0.28);

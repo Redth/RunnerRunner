@@ -4,6 +4,7 @@
 @implements IDisposable
 @inject IDocumentStore Store
 @inject HostWorkerEnrollmentGuideBuilder GuideBuilder
+@inject HostWorkerUpdateService HostWorkerUpdateService
 @inject HostWorkerSshSetupService SshSetup
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
@@ -91,6 +92,8 @@
 @code {
     [Parameter] public bool IsOpen { get; set; }
     [Parameter] public Host? UpdateHost { get; set; }
+    [Parameter] public HostWorkerUpdateSourceKind UpdateSource { get; set; } = HostWorkerUpdateSourceKind.Release;
+    [Parameter] public string? UpdateVersion { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
 
@@ -147,6 +150,12 @@
     private string? autoSetupError;
     private HostWorkerSshSetupResult? autoSetupResult;
     private DateTime? manualOperationStartedAt;
+    private HostWorkerUpdateSourceKind manualUpdateSource = HostWorkerUpdateSourceKind.Release;
+    private string? manualUpdateVersion;
+    private IReadOnlyList<HostWorkerUpdateVersion> manualUpdateVersions = [];
+    private HostWorkerManualUpdatePackage? manualUpdatePackage;
+    private bool resolvingManualUpdate;
+    private string? manualUpdateError;
 
     private bool IsUpdateMode => UpdateHost != null;
     private IReadOnlyList<WizardStep> CurrentWizardSteps => IsUpdateMode ? UpdateWizardSteps : WizardSteps;
@@ -162,9 +171,16 @@
         : "now";
 
     private bool CanContinue =>
-        (IsUpdateMode || !string.IsNullOrWhiteSpace(enrollmentToken)) &&
-        !string.IsNullOrWhiteSpace(serverUrl) &&
-        !string.IsNullOrWhiteSpace(EffectiveHostName);
+        IsUpdateMode
+            ? ManualUpdateReady
+            : !string.IsNullOrWhiteSpace(enrollmentToken) &&
+              !string.IsNullOrWhiteSpace(serverUrl) &&
+              !string.IsNullOrWhiteSpace(EffectiveHostName);
+
+    private bool ManualUpdateReady =>
+        manualUpdatePackage != null &&
+        !resolvingManualUpdate &&
+        string.IsNullOrWhiteSpace(manualUpdateError);
 
     private string EffectiveHostName =>
         string.IsNullOrWhiteSpace(hostName)
@@ -187,7 +203,8 @@
                 new HostWorkerEnrollmentProxy(
                     string.IsNullOrWhiteSpace(httpProxy) ? null : httpProxy.Trim(),
                     string.IsNullOrWhiteSpace(httpsProxy) ? null : httpsProxy.Trim(),
-                    string.IsNullOrWhiteSpace(noProxy) ? null : noProxy.Trim())))
+                    string.IsNullOrWhiteSpace(noProxy) ? null : noProxy.Trim()),
+                manualUpdatePackage))
             : string.IsNullOrWhiteSpace(enrollmentToken) || string.IsNullOrWhiteSpace(serverUrl)
                 ? null
                 : GuideBuilder.Build(new HostWorkerEnrollmentRequest(
@@ -229,6 +246,10 @@
                 target = InferTarget(UpdateHost);
                 hostName = UpdateHost.Label;
                 hostId = UpdateHost.WorkerId ?? UpdateHost.Id;
+                manualUpdateSource = UpdateSource;
+                manualUpdateVersion = UpdateVersion;
+                await LoadManualUpdateVersionsAsync();
+                await ResolveManualUpdatePackageAsync();
                 return;
             }
 
@@ -279,6 +300,12 @@
         autoSetupError = null;
         autoSetupResult = null;
         manualOperationStartedAt = null;
+        manualUpdateSource = HostWorkerUpdateSourceKind.Release;
+        manualUpdateVersion = null;
+        manualUpdateVersions = [];
+        manualUpdatePackage = null;
+        resolvingManualUpdate = false;
+        manualUpdateError = null;
     }
 
     private RenderFragment RenderConfigureStep() => @<div class="row g-3">
@@ -324,13 +351,65 @@
                         <p class="small">This mode does not create a new token. It preserves the existing worker configuration from disk or the current container environment.</p>
                         <div class="small">
                             <div><strong>Status:</strong> <span class="badge @GetStatusBadge(UpdateHost.AgentStatus)">@UpdateHost.AgentStatus</span></div>
-                            <div><strong>Current version:</strong> @(UpdateHost.AgentVersion ?? "unknown")</div>
+                            <div><strong>Current version:</strong> <span title="@UpdateHost.AgentVersion">@FormatVersion(UpdateHost.AgentVersion)</span></div>
                             <div><strong>Platform:</strong> @UpdateHost.Platform</div>
                             @if (!string.IsNullOrWhiteSpace(UpdateHost.ContainerId))
                             {
                                 <div><strong>Container:</strong> <code>@UpdateHost.ContainerId</code></div>
                             }
                         </div>
+                        <hr />
+                        <h6><i class="bi bi-box-arrow-down me-1"></i>Update build</h6>
+                        <div class="mb-2">
+                            <label class="form-label form-label-sm">Source</label>
+                            <select class="form-select form-select-sm" value="@manualUpdateSource.ToSourceId()" @onchange="OnManualUpdateSourceChanged">
+                                <option value="release">GitHub ref</option>
+                                <option value="local-folder">SSH/local folder</option>
+                            </select>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label form-label-sm">@(manualUpdateSource == HostWorkerUpdateSourceKind.Release ? "Ref" : "Version")</label>
+                            @if (manualUpdateSource == HostWorkerUpdateSourceKind.Release)
+                            {
+                                <div class="input-group input-group-sm">
+                                    <input class="form-control" value="@manualUpdateVersion" @oninput="OnManualUpdateVersionInput" placeholder="latest, tag, branch, or commit" />
+                                    <button type="button" class="btn btn-outline-secondary" @onclick="ResolveManualUpdatePackageAsync" disabled="@resolvingManualUpdate">
+                                        @(resolvingManualUpdate ? "Resolving..." : "Resolve")
+                                    </button>
+                                </div>
+                            }
+                            else
+                            {
+                                <select class="form-select form-select-sm" value="@manualUpdateVersion" @onchange="OnManualUpdateVersionSelected">
+                                    @if (manualUpdateVersions.Count == 0)
+                                    {
+                                        <option value="">No builds found</option>
+                                    }
+                                    @foreach (var version in manualUpdateVersions)
+                                    {
+                                        <option value="@version.Version">@version.Version (@version.Assets.Count assets)</option>
+                                    }
+                                </select>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(manualUpdateError))
+                        {
+                            <div class="alert alert-warning py-2 small mb-0">@manualUpdateError</div>
+                        }
+                        else if (manualUpdatePackage != null)
+                        {
+                            <div class="alert alert-success py-2 small mb-0">
+                                <div><strong>Resolved:</strong> @manualUpdatePackage.Source.ToDisplayName() <span title="@manualUpdatePackage.Version">@FormatVersion(manualUpdatePackage.Version)</span></div>
+                                @if (!string.IsNullOrWhiteSpace(manualUpdatePackage.ContainerImage))
+                                {
+                                    <div class="text-muted text-break">@manualUpdatePackage.ContainerImage</div>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(manualUpdatePackage.AssetName))
+                                {
+                                    <div class="text-muted">@manualUpdatePackage.AssetName</div>
+                                }
+                            </div>
+                        }
                     }
                     else
                     {
@@ -342,13 +421,13 @@
                                 @(copiedKey == "token" ? "Copied" : "Copy")
                             </button>
                         </div>
-                    }
 
-                    <label class="form-label">Advertised HostWorker URL</label>
-                    <input class="form-control" @bind="serverUrl" @bind:event="oninput" placeholder="http://runner.example.com:4780" />
-                    <div class="form-text">
-                        This is the URL workers connect to over gRPC. Set <code>HostWorkerEnrollment:PublicServerUrl</code> on the server when using a proxy, DNS name, or custom port.
-                    </div>
+                        <label class="form-label">Advertised HostWorker URL</label>
+                        <input class="form-control" @bind="serverUrl" @bind:event="oninput" placeholder="http://runner.example.com:4780" />
+                        <div class="form-text">
+                            This is the URL workers connect to over gRPC. Set <code>HostWorkerEnrollment:PublicServerUrl</code> on the server when using a proxy, DNS name, or custom port.
+                        </div>
+                    }
                 </div>
             </div>
         </div>
@@ -586,7 +665,7 @@
         </div>
     </div>;
 
-    private void SelectTarget(HostWorkerEnrollmentTarget selectedTarget)
+    private async Task SelectTarget(HostWorkerEnrollmentTarget selectedTarget)
     {
         target = selectedTarget;
         if (!string.IsNullOrWhiteSpace(enrollmentToken))
@@ -596,6 +675,174 @@
         }
         autoSetupError = null;
         autoSetupResult = null;
+        if (IsUpdateMode)
+            await ResolveManualUpdatePackageAsync();
+    }
+
+    private async Task OnManualUpdateSourceChanged(ChangeEventArgs e)
+    {
+        if (!HostWorkerUpdateSourceKinds.TryParse(e.Value?.ToString(), out var source))
+        {
+            manualUpdateError = $"Unsupported HostWorker update source '{e.Value}'.";
+            manualUpdatePackage = null;
+            return;
+        }
+
+        manualUpdateSource = source;
+        manualUpdatePackage = null;
+        manualUpdateError = null;
+        await LoadManualUpdateVersionsAsync();
+        await ResolveManualUpdatePackageAsync();
+    }
+
+    private void OnManualUpdateVersionInput(ChangeEventArgs e)
+    {
+        manualUpdateVersion = e.Value?.ToString();
+        manualUpdatePackage = null;
+        manualUpdateError = null;
+    }
+
+    private async Task OnManualUpdateVersionSelected(ChangeEventArgs e)
+    {
+        manualUpdateVersion = e.Value?.ToString();
+        manualUpdatePackage = null;
+        manualUpdateError = null;
+        await ResolveManualUpdatePackageAsync();
+    }
+
+    private async Task LoadManualUpdateVersionsAsync()
+    {
+        if (manualUpdateSource == HostWorkerUpdateSourceKind.Release)
+        {
+            manualUpdateVersions = [];
+            return;
+        }
+
+        manualUpdateVersions = await HostWorkerUpdateService.GetAvailableVersionsAsync(manualUpdateSource);
+        if (manualUpdateVersions.Count == 0)
+        {
+            manualUpdateVersion = null;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(manualUpdateVersion) ||
+            !manualUpdateVersions.Any(x => string.Equals(x.Version, manualUpdateVersion, StringComparison.OrdinalIgnoreCase)))
+        {
+            manualUpdateVersion = manualUpdateVersions[0].Version;
+        }
+    }
+
+    private async Task ResolveManualUpdatePackageAsync()
+    {
+        if (!IsUpdateMode || UpdateHost == null)
+            return;
+
+        manualUpdatePackage = null;
+        manualUpdateError = null;
+
+        if (manualUpdateSource != HostWorkerUpdateSourceKind.Release &&
+            string.IsNullOrWhiteSpace(manualUpdateVersion))
+        {
+            manualUpdateError = $"No {manualUpdateSource.ToDisplayName()} HostWorker build version is selected.";
+            return;
+        }
+
+        resolvingManualUpdate = true;
+        try
+        {
+            var selection = new HostWorkerUpdateSelection(
+                manualUpdateSource,
+                string.IsNullOrWhiteSpace(manualUpdateVersion) ? null : manualUpdateVersion.Trim(),
+                AllowNonUpgrade: true,
+                PublicBaseUrl: Navigation.BaseUri);
+            var availability = await HostWorkerUpdateService.GetAvailabilityAsync(
+                CreateManualUpdateAvailabilityHost(UpdateHost, target),
+                selection,
+                forceRefresh: true);
+
+            if (!availability.IsAvailable || availability.Release == null)
+            {
+                manualUpdateError = availability.UnavailableReason ?? "No compatible HostWorker update build is available for this target.";
+                return;
+            }
+
+            manualUpdatePackage = new HostWorkerManualUpdatePackage(
+                manualUpdateSource,
+                selection.Version,
+                availability.Release.Version,
+                availability.Asset?.Name,
+                availability.Asset?.DownloadUrl,
+                availability.Asset?.Sha256,
+                availability.ContainerImage);
+        }
+        catch (Exception ex)
+        {
+            manualUpdateError = $"Unable to resolve HostWorker update build: {ex.Message}";
+        }
+        finally
+        {
+            resolvingManualUpdate = false;
+        }
+    }
+
+    private static Host CreateManualUpdateAvailabilityHost(Host source, HostWorkerEnrollmentTarget target)
+    {
+        var isContainerTarget = IsContainerUpdateTarget(target);
+        return new Host
+        {
+            Id = source.Id,
+            Name = source.Name,
+            DisplayName = source.DisplayName,
+            Platform = GetUpdatePlatform(target),
+            Architecture = source.Architecture,
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = source.AgentVersion,
+            IsContainerized = isContainerTarget,
+            Capabilities = isContainerTarget ? ["container"] : []
+        };
+    }
+
+    private static HostPlatform GetUpdatePlatform(HostWorkerEnrollmentTarget target)
+        => target switch
+        {
+            HostWorkerEnrollmentTarget.MacOSNative => HostPlatform.MacOS,
+            HostWorkerEnrollmentTarget.WindowsService or HostWorkerEnrollmentTarget.WindowsDockerWindows => HostPlatform.Windows,
+            _ => HostPlatform.Linux
+        };
+
+    private static bool IsContainerUpdateTarget(HostWorkerEnrollmentTarget target)
+        => target is HostWorkerEnrollmentTarget.LinuxDocker
+            or HostWorkerEnrollmentTarget.MacOSDocker
+            or HostWorkerEnrollmentTarget.WindowsDockerWindows
+            or HostWorkerEnrollmentTarget.WindowsDockerLinux;
+
+    private static string FormatVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return "unknown";
+
+        var value = version.Trim();
+        var metadataIndex = value.IndexOf('+');
+        if (metadataIndex >= 0 && metadataIndex < value.Length - 1)
+        {
+            var metadata = value[(metadataIndex + 1)..].Trim('\'');
+            var shortenedMetadata = ShortenCommitLike(metadata);
+            if (!string.Equals(metadata, shortenedMetadata, StringComparison.Ordinal))
+                return value[..(metadataIndex + 1)] + shortenedMetadata;
+        }
+
+        return ShortenCommitLike(value);
+    }
+
+    private static string ShortenCommitLike(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length >= 12 && trimmed.All(Uri.IsHexDigit))
+            return trimmed[..8];
+
+        return trimmed.Length > 32
+            ? $"{trimmed[..12]}...{trimmed[^7..]}"
+            : trimmed;
     }
 
     private void GoToStep(int targetStep)
