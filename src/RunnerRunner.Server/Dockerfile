@@ -30,14 +30,28 @@ RUN arch_args="" \
         /p:RunnerRunnerCommitSha=${SOURCE_REVISION_ID} \
         /p:RunnerRunnerBuildTag=${BUILD_TAG}
 
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS kerberos-libs
+RUN set -eu; \
+    mkdir -p /runtime-root; \
+    for package in libgssapi-krb5-2 libkrb5-3 libk5crypto3 libcom-err2 libkrb5support0 libkeyutils1; do \
+        dpkg -L "${package}" | while read -r path; do \
+            case "${path}" in \
+                /usr/lib/*) \
+                    if [ -f "${path}" ] || [ -L "${path}" ]; then \
+                        mkdir -p "/runtime-root$(dirname "${path}")"; \
+                        cp -a "${path}" "/runtime-root${path}"; \
+                    fi \
+                    ;; \
+            esac; \
+        done; \
+    done
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 ARG INFORMATIONAL_VERSION=0.0.0
 ARG SOURCE_REVISION_ID=unknown
 ARG BUILD_TAG=unknown
 WORKDIR /app
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=kerberos-libs /runtime-root/ /
 LABEL org.opencontainers.image.title="RunnerRunner Server" \
       org.opencontainers.image.version="${INFORMATIONAL_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_REVISION_ID}" \

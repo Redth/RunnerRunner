@@ -26,6 +26,8 @@ RUN arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
         /p:RunnerRunnerCommitSha=${SOURCE_REVISION_ID} \
         /p:RunnerRunnerBuildTag=${BUILD_TAG}
 
+FROM docker:29-cli AS docker-cli
+
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
 ARG INFORMATIONAL_VERSION=0.0.0
 ARG SOURCE_REVISION_ID=unknown
@@ -35,7 +37,6 @@ LABEL org.opencontainers.image.title="RunnerRunner HostWorker" \
       org.opencontainers.image.version="${INFORMATIONAL_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_REVISION_ID}" \
       org.opencontainers.image.ref.name="${BUILD_TAG}"
-# Install Docker CLI for DockerBackend
-RUN apt-get update && apt-get install -y --no-install-recommends docker.io && rm -rf /var/lib/apt/lists/*
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /app/publish .
 ENTRYPOINT ["./RunnerRunner.HostWorker"]
