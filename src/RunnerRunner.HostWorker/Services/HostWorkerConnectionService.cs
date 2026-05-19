@@ -4,6 +4,7 @@ using RunnerRunner.Agent.Services;
 using RunnerRunner.Core.HostWorkers;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using System.Net;
 using System.Threading.Channels;
 
 namespace RunnerRunner.HostWorker.Services;
@@ -87,7 +88,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
 
         _logger.LogInformation("Connecting HostWorker {HostId} to {ServerUrl}", _identity.HostId, serverUrl);
 
-        using var channel = GrpcChannel.ForAddress(serverUrl);
+        using var channel = GrpcChannel.ForAddress(serverUrl, CreateGrpcChannelOptions(serverUrl));
         var client = new HostWorkerControl.HostWorkerControlClient(channel);
         using var call = client.Connect(cancellationToken: stoppingToken);
 
@@ -116,6 +117,50 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
             }
         }
     }
+
+    private GrpcChannelOptions CreateGrpcChannelOptions(string serverUrl)
+    {
+        var proxyUrl = ResolveProxyUrl(serverUrl);
+        if (string.IsNullOrWhiteSpace(proxyUrl))
+            return new GrpcChannelOptions();
+
+        var proxy = new WebProxy(proxyUrl)
+        {
+            BypassProxyOnLocal = true
+        };
+        var bypassList = CreateProxyBypassList(_configuration["HostWorker:NoProxy"]);
+        if (bypassList.Length > 0)
+            proxy.BypassList = bypassList;
+
+        return new GrpcChannelOptions
+        {
+            HttpHandler = new SocketsHttpHandler
+            {
+                UseProxy = true,
+                Proxy = proxy
+            }
+        };
+    }
+
+    private string? ResolveProxyUrl(string serverUrl)
+    {
+        var httpProxy = _configuration["HostWorker:HttpProxy"];
+        var httpsProxy = _configuration["HostWorker:HttpsProxy"];
+        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) &&
+            string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrWhiteSpace(httpsProxy) ? httpProxy : httpsProxy;
+        }
+
+        return string.IsNullOrWhiteSpace(httpProxy) ? httpsProxy : httpProxy;
+    }
+
+    private static string[] CreateProxyBypassList(string? noProxy)
+        => string.IsNullOrWhiteSpace(noProxy)
+            ? []
+            : noProxy.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(entry => !string.IsNullOrWhiteSpace(entry))
+                .ToArray();
 
     private async Task SendLoopAsync(IClientStreamWriter<HostWorkerMessage> requestStream, CancellationToken ct)
     {

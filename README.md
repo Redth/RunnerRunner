@@ -110,7 +110,11 @@ sudo docker compose --env-file .env -f compose.yaml up -d --remove-orphans
 
 ## Install Host Workers
 
-Create a per-host enrollment token in **Hosts** before installing standalone workers. The server listens for HostWorker gRPC connections on port `4780` by default.
+Use **Hosts** -> **Add HostWorker** to launch the guided enrollment wizard. The wizard creates a per-host one-time token, shows OS-specific commands, includes the advertised HostWorker URL and optional proxy settings, can run the setup over SSH, and waits until the worker connects successfully. The server listens for HostWorker gRPC connections on port `4780` by default.
+
+If workers should connect through a DNS name, public IP, reverse proxy, or custom mapped port, set the server configuration value `HostWorkerEnrollment:PublicServerUrl` (or `HOSTWORKER_PUBLIC_SERVER_URL` in the Linux compose deployment) so the wizard advertises the right address.
+
+For recovery updates when an older HostWorker cannot accept a web UI update command, use **Hosts** -> **Manual update** on that host. The same wizard shows copyable update commands, can run them over SSH, preserves existing worker configuration, and waits for a fresh heartbeat from the updated worker.
 
 ### Linux
 

@@ -7,18 +7,14 @@ param(
     [string]$ServerUrl = "",
     [string]$EnrollmentToken = "",
     [string]$ServiceAccount = "LocalSystem",
-    [string]$ServicePassword = ""
+    [string]$ServicePassword = "",
+    [string]$HttpProxy = "",
+    [string]$HttpsProxy = "",
+    [string]$NoProxy = "",
+    [switch]$PreserveConfig
 )
 
 $ErrorActionPreference = "Stop"
-
-if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
-    throw "ServerUrl is required."
-}
-
-if ([string]::IsNullOrWhiteSpace($EnrollmentToken)) {
-    throw "EnrollmentToken is required."
-}
 
 $deployPath = $DeployDir.Replace('/', '\')
 $dataPath = $DataDir.Replace('/', '\')
@@ -37,19 +33,46 @@ if (-not (Test-Path $exePath)) {
     throw "RunnerRunner.HostWorker.exe not found in $deployPath"
 }
 
-$settings = @{
-    HostWorker = @{
-        ServerUrl = $ServerUrl
-        EnrollmentToken = $EnrollmentToken
-        HostId = $HostId
-        HostName = $HostName
-        Platform = "Windows"
-        DataRoot = $dataPath
-        LogRoot = $logsPath
+if ($PreserveConfig) {
+    if (-not (Test-Path $settingsPath)) {
+        throw "PreserveConfig requires an existing $settingsPath"
     }
 }
+else {
+    if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
+        throw "ServerUrl is required."
+    }
 
-$settings | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($EnrollmentToken)) {
+        throw "EnrollmentToken is required."
+    }
+
+    $settings = @{
+        HostWorker = @{
+            ServerUrl = $ServerUrl
+            EnrollmentToken = $EnrollmentToken
+            HostId = $HostId
+            HostName = $HostName
+            Platform = "Windows"
+            DataRoot = $dataPath
+            LogRoot = $logsPath
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($HttpProxy)) {
+        $settings["HostWorker"]["HttpProxy"] = $HttpProxy
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($HttpsProxy)) {
+        $settings["HostWorker"]["HttpsProxy"] = $HttpsProxy
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($NoProxy)) {
+        $settings["HostWorker"]["NoProxy"] = $NoProxy
+    }
+
+    $settings | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
+}
 
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service) {
