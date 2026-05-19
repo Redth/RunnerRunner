@@ -146,6 +146,7 @@ builder.Services.AddSingleton<LongRunningTaskService>();
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
 builder.Services.AddSingleton<ProvisioningRuleGrainSyncService>();
 builder.Services.AddScoped<CapacityPlanningService>();
+builder.Services.AddScoped<DemoDataSeeder>();
 
 // === Orleans Grain Architecture (Phase 5) ===
 // The following legacy services are replaced by Orleans grains:
@@ -213,5 +214,26 @@ app.MapOrleansDashboard("/orleans");
 
 // Aspire health check endpoints
 app.MapDefaultEndpoints();
+
+if (app.Environment.IsDevelopment())
+{
+    var demo = app.MapGroup("/dev/demo-data");
+
+    demo.MapPost("/seed", async (DemoDataSeeder seeder) =>
+    {
+        var result = await seeder.SeedAsync();
+        return Results.Ok(new
+        {
+            message = "Demo data seeded.",
+            result
+        });
+    });
+
+    demo.MapPost("/clear", async (DemoDataSeeder seeder) =>
+    {
+        await seeder.ClearAsync();
+        return Results.Ok(new { message = "Demo data cleared." });
+    });
+}
 
 app.Run();

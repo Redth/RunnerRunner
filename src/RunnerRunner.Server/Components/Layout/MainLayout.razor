@@ -1,5 +1,7 @@
 ﻿@inherits LayoutComponentBase
 
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
 <div class="page" id="page-root">
     <aside class="sidebar" onclick="if(event.target.closest('a'))closeMobileSidebar()">
         <NavMenu />
@@ -10,7 +12,7 @@
     </aside>
     <div class="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
-    <main>
+    <main id="main-content" tabindex="-1">
         <header class="top-bar">
             <div class="top-bar-left">
                 <button class="mobile-hamburger" onclick="toggleMobileSidebar()" title="Open menu">

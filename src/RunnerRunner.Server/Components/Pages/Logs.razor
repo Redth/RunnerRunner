@@ -15,55 +15,111 @@
 
 <PageTitle>Logs - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
-    <div class="page-header">
-        <h1><i class="bi bi-terminal-fill"></i> Logs</h1>
+    <div class="page-header logs-page-heading">
+        <h1>
+            <i class="bi bi-terminal-fill"></i> Logs
+            <span class="page-count-chip">@Math.Max(0, sources.Count - 1)</span>
+        </h1>
+        <span class="page-desc">
+            <span class="logs-live-pill"><span class="logs-live-dot"></span> Live</span>
+            runner, host, server, and task streams
+        </span>
     </div>
 </SectionContent>
 
-<div class="logs-console d-flex">
-    <div id="logs-sidebar" class="logs-sidebar d-flex flex-column">
-        <button type="button" class="log-source-card @(selectedSourceId == "all" ? "active" : "")" @onclick='() => SelectSource("all")'>
-            <span><i class="bi bi-collection me-2 text-primary"></i><strong>All logs</strong></span>
-            <small>Server, hosts, runners, tasks</small>
-        </button>
+<div class="logs-workspace @(sourcePanelCollapsed ? "sources-collapsed" : "sources-expanded")">
+    <aside id="logs-sidebar" class="logs-source-panel" aria-label="Log sources">
+        <div class="logs-source-panel-header">
+            <span><i class="bi bi-stack"></i> Sources</span>
+            <button type="button" class="icon-btn" @onclick="ToggleSourcePanel" aria-label="Collapse log sources" title="Collapse sources" aria-controls="logs-sidebar" aria-expanded="@(!sourcePanelCollapsed)">
+                <i class="bi bi-layout-sidebar-inset"></i>
+            </button>
+        </div>
 
-        @foreach (var group in GroupedSources)
-        {
-            <div class="sidebar-section-header mt-2">
-                <i class="bi @GroupIcon(group.Key) me-1"></i> @GroupTitle(group.Key)
-                <span class="badge bg-secondary ms-auto">@group.Count()</span>
-            </div>
-            @foreach (var source in group)
+        <div class="logs-source-search">
+            <i class="bi bi-search"></i>
+            <input type="search"
+                   class="form-control"
+                   placeholder="Filter sources..."
+                   aria-label="Filter log sources"
+                   @bind="sourceFilter"
+                   @bind:event="oninput" />
+        </div>
+
+        <div class="logs-source-actions">
+            <button type="button" @onclick='() => SelectSource("all")'>Select all</button>
+            <span aria-hidden="true"></span>
+            <button type="button" @onclick="ClearSourceFilter">Clear</button>
+        </div>
+
+        <div class="logs-source-list">
+            <button type="button" class="log-source-card log-source-card-all @(selectedSourceId == "all" ? "active" : "")" @onclick='() => SelectSource("all")'>
+                <span class="log-source-title">
+                    <i class="bi bi-collection text-primary"></i>
+                    <strong>All logs</strong>
+                    <span class="log-source-count">@Math.Max(0, sources.Count - 1)</span>
+                </span>
+                <small>Server, hosts, runners, tasks, and commands</small>
+            </button>
+
+            @foreach (var group in FilteredGroupedSources)
             {
-                <button type="button" class="log-source-card @(selectedSourceId == source.SourceId ? "active" : "")" @onclick="() => SelectSource(source.SourceId)">
-                    <span class="d-flex align-items-center gap-2">
-                        <i class="bi @SourceIcon(source)"></i>
-                        <span class="text-truncate">@source.Name</span>
-                        @if (source.IsOnline)
+                <div class="sidebar-section-header">
+                    <span><i class="bi @GroupIcon(group.Key)"></i> @GroupTitle(group.Key)</span>
+                    <span class="badge bg-secondary">@group.Count()</span>
+                </div>
+                @foreach (var source in group)
+                {
+                    <button type="button" class="log-source-card @(selectedSourceId == source.SourceId ? "active" : "")" @onclick="() => SelectSource(source.SourceId)">
+                        <span class="log-source-title">
+                            <i class="bi @SourceIcon(source)"></i>
+                            <span class="text-truncate">@source.Name</span>
+                            @if (source.IsOnline)
+                            {
+                                <span class="source-dot online ms-auto"></span>
+                            }
+                            else
+                            {
+                                <span class="source-dot ms-auto"></span>
+                            }
+                        </span>
+                        @if (!string.IsNullOrWhiteSpace(source.Description))
                         {
-                            <span class="source-dot online ms-auto"></span>
+                            <small class="text-truncate">@source.Description</small>
                         }
-                        else
-                        {
-                            <span class="source-dot ms-auto"></span>
-                        }
-                    </span>
-                    @if (!string.IsNullOrWhiteSpace(source.Description))
-                    {
-                        <small class="text-truncate">@source.Description</small>
-                    }
-                </button>
+                    </button>
+                }
             }
-        }
-    </div>
+        </div>
+    </aside>
 
-    <div id="logs-resize-handle" class="split-resize-handle"></div>
+    <div id="logs-resize-handle" class="split-resize-handle" aria-hidden="true"></div>
 
-    <div class="logs-main flex-grow-1 d-flex flex-column">
-        <div class="logs-toolbar">
+    @if (sourcePanelCollapsed)
+    {
+        <button type="button" class="source-panel-reveal" @onclick="ToggleSourcePanel" aria-label="Show log sources" title="Show sources" aria-controls="logs-sidebar" aria-expanded="false">
+            <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
+            <span>Show sources</span>
+        </button>
+    }
+
+    <section class="logs-console-panel" aria-label="Log console">
+        <div class="logs-mode-tabs" role="tablist" aria-label="Log view mode">
+            <button type="button" class="@(logViewMode == "single" ? "active" : "")" @onclick='() => SetLogViewMode("single")' aria-pressed="@(logViewMode == "single")">
+                <i class="bi bi-square"></i> Single
+            </button>
+            <button type="button" class="@(logViewMode == "multi" ? "active" : "")" @onclick='() => SetLogViewMode("multi")' aria-pressed="@(logViewMode == "multi")">
+                <i class="bi bi-list-ul"></i> Multi
+            </button>
+            <button type="button" class="@(logViewMode == "grouped" ? "active" : "")" @onclick='() => SetLogViewMode("grouped")' aria-pressed="@(logViewMode == "grouped")">
+                <i class="bi bi-stack"></i> Grouped
+            </button>
+        </div>
+
+        <div class="logs-filter-rack">
             <div class="input-group input-group-sm logs-search">
                 <span class="input-group-text"><i class="bi bi-search"></i></span>
-                <input type="text" class="form-control" placeholder="Search logs..." @bind="searchQuery" @bind:event="oninput" @bind:after="FetchLogs" />
+                <input type="search" class="form-control" placeholder="Search logs..." @bind="searchQuery" @bind:event="oninput" @bind:after="FetchLogs" aria-label="Search logs" />
             </div>
 
             <select class="form-select form-select-sm" @bind="minimumLevel" @bind:after="FetchLogs">
@@ -82,7 +138,7 @@
                 }
             </select>
 
-            <input class="form-control form-control-sm logs-category" placeholder="Category" @bind="categoryFilter" @bind:event="oninput" @bind:after="FetchLogs" />
+            <input class="form-control form-control-sm logs-category" placeholder="Category" @bind="categoryFilter" @bind:event="oninput" @bind:after="FetchLogs" aria-label="Filter by category" />
 
             <select class="form-select form-select-sm" @bind="tailLines" @bind:after="FetchLogs">
                 <option value="100">100 lines</option>
@@ -92,10 +148,11 @@
                 <option value="2000">2000 lines</option>
             </select>
 
-            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ToggleFollow" title="Auto-refresh">
-                <i class="bi @(followLogs ? "bi-pause-fill" : "bi-play-fill")"></i>
-                @(followLogs ? "Pause" : "Follow")
-            </button>
+            <div class="input-group input-group-sm logs-terminal-search">
+                <span class="input-group-text"><i class="bi bi-binoculars"></i></span>
+                <input type="search" class="form-control" placeholder="Find in terminal..." @bind="terminalSearchQuery" aria-label="Find in terminal" />
+            </div>
+
             <button type="button" class="btn btn-sm btn-primary" @onclick="FetchLogs" disabled="@isLoading">
                 <i class="bi bi-arrow-clockwise me-1"></i> Refresh
             </button>
@@ -105,141 +162,65 @@
             }
         </div>
 
-        <div class="logs-summary">
-            <span><i class="bi bi-funnel me-1"></i>@SelectedSourceName</span>
-            <span>@lastResultCount matched</span>
-            @if (lastResultWasTruncated)
-            {
-                <span class="text-warning">tail truncated</span>
-            }
-            @if (!string.IsNullOrEmpty(lastFetchTime))
-            {
-                <span class="ms-auto"><i class="bi bi-clock me-1"></i>@lastFetchTime</span>
-            }
+        <div class="logs-console-chrome">
+            <div class="logs-console-title">
+                <button type="button" class="console-icon-btn" @onclick="ToggleSourcePanel" aria-label="Toggle log sources" title="Toggle sources" aria-controls="logs-sidebar" aria-expanded="@(!sourcePanelCollapsed)">
+                    <i class="bi bi-layout-sidebar"></i>
+                </button>
+                <span class="logs-live-pill"><span class="logs-live-dot"></span> Live</span>
+                <strong>@SelectedSourceName</strong>
+                <span class="logs-source-focus-dot" aria-hidden="true"></span>
+                <span class="logs-console-meta">@lastResultCount matched</span>
+                @if (lastResultWasTruncated)
+                {
+                    <span class="logs-console-meta text-warning">tail truncated</span>
+                }
+                @if (!string.IsNullOrEmpty(lastFetchTime))
+                {
+                    <span class="logs-console-meta"><i class="bi bi-clock me-1"></i>@lastFetchTime</span>
+                }
+            </div>
+
+            <div class="logs-console-actions">
+                <button type="button" class="console-btn @(followLogs ? "active" : "")" @onclick="ToggleFollow" aria-pressed="@followLogs" title="Pause or resume auto-refresh">
+                    <i class="bi @(followLogs ? "bi-pause-fill" : "bi-play-fill")"></i>
+                    @(followLogs ? "Pause" : "Follow")
+                </button>
+                <button type="button" class="console-btn @(autoScroll ? "active" : "")" @onclick="ToggleAutoScroll" aria-pressed="@autoScroll" title="Toggle auto-scroll">
+                    <i class="bi bi-arrow-down"></i> Auto
+                </button>
+                <select class="console-select" @bind="terminalFontSize" @bind:after="ApplyTerminalFontSize" aria-label="Terminal font size">
+                    <option value="11">11px</option>
+                    <option value="12">12px</option>
+                    <option value="13">13px</option>
+                    <option value="14">14px</option>
+                </select>
+                <button type="button" class="console-btn @(wrapLogs ? "active" : "")" @onclick="ToggleWrap" aria-pressed="@wrapLogs" title="Toggle line wrapping">
+                    <i class="bi bi-text-wrap"></i> Wrap
+                </button>
+                <button type="button" class="console-icon-btn" @onclick="SearchPrevious" aria-label="Previous search match" title="Previous match">
+                    <i class="bi bi-chevron-up"></i>
+                </button>
+                <button type="button" class="console-icon-btn" @onclick="SearchNext" aria-label="Next search match" title="Next match">
+                    <i class="bi bi-search"></i>
+                </button>
+                <button type="button" class="console-icon-btn" @onclick="CopyLogs" aria-label="Copy logs" title="Copy logs">
+                    <i class="bi bi-clipboard"></i>
+                </button>
+                <button type="button" class="console-icon-btn" @onclick="DownloadLogs" aria-label="Download logs" title="Download logs">
+                    <i class="bi bi-download"></i>
+                </button>
+                <button type="button" class="console-icon-btn" @onclick="ClearTerminal" aria-label="Clear console" title="Clear console">
+                    <i class="bi bi-eraser"></i>
+                </button>
+            </div>
         </div>
 
-        <div class="logs-terminal flex-grow-1">
+        <div class="logs-terminal @(wrapLogs ? "wrap-enabled" : "wrap-disabled")">
             <div id="rr-terminal"></div>
         </div>
-    </div>
+    </section>
 </div>
-
-<style>
-    .logs-console {
-        height: calc(100vh - 120px);
-        min-height: 520px;
-    }
-    .logs-sidebar {
-        width: 320px;
-        min-width: 220px;
-        max-width: 560px;
-        overflow-y: auto;
-        padding-right: 0.25rem;
-    }
-    .logs-main {
-        min-width: 0;
-    }
-    .logs-toolbar {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 0.5rem;
-    }
-    .logs-toolbar .form-select {
-        width: auto;
-    }
-    .logs-search {
-        max-width: 300px;
-    }
-    .logs-category {
-        width: 180px;
-    }
-    .logs-summary {
-        display: flex;
-        gap: 1rem;
-        align-items: center;
-        color: var(--text-secondary);
-        font-size: 0.75rem;
-        margin-bottom: 0.5rem;
-    }
-    .logs-terminal {
-        min-height: 320px;
-        border: 1px solid var(--border-color);
-        border-radius: var(--radius-lg);
-        overflow: hidden;
-        background: #1a1b26;
-        box-shadow: var(--shadow-sm);
-    }
-    #rr-terminal {
-        width: 100%;
-        height: 100%;
-    }
-    #rr-terminal .xterm-screen {
-        padding: 0.75rem;
-    }
-    .log-source-card {
-        display: block;
-        width: 100%;
-        text-align: left;
-        background: transparent;
-        color: var(--text-primary);
-        padding: 0.55rem 0.75rem;
-        border-radius: var(--radius-md);
-        cursor: pointer;
-        transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
-        border: 1px solid transparent;
-        margin-bottom: 2px;
-    }
-    .log-source-card:hover {
-        background: var(--bg-hover);
-    }
-    .log-source-card.active {
-        background: var(--accent-soft);
-        border-color: var(--accent);
-        box-shadow: inset 3px 0 0 var(--accent);
-    }
-    .log-source-card small {
-        display: block;
-        color: var(--text-secondary);
-        font-size: 0.72rem;
-        margin-top: 0.1rem;
-    }
-    .sidebar-section-header {
-        display: flex;
-        align-items: center;
-        padding: 0.35rem 0.75rem;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-secondary);
-    }
-    .source-dot {
-        width: 0.5rem;
-        height: 0.5rem;
-        border-radius: 999px;
-        background: var(--text-tertiary);
-        flex: 0 0 auto;
-    }
-    .source-dot.online {
-        background: var(--success);
-        box-shadow: 0 0 0 3px var(--success-soft);
-    }
-    .split-resize-handle {
-        width: 6px;
-        cursor: col-resize;
-        background: transparent;
-        transition: background 0.15s;
-        flex-shrink: 0;
-        border-radius: 3px;
-        margin: 0 4px;
-    }
-    .split-resize-handle:hover, .split-resize-handle:active {
-        background: var(--accent);
-        opacity: 0.5;
-    }
-</style>
 
 @code {
     private List<Host> hosts = [];
@@ -250,7 +231,16 @@
     private bool isLoading;
     private bool termInitialized;
     private bool followLogs;
+    private bool autoScroll = true;
+    private bool wrapLogs = true;
+    private const string SourcePanelPreferenceKey = "rr-logs-sources-collapsed-v2";
+
+    private bool sourcePanelCollapsed;
+    private int terminalFontSize = 12;
+    private string logViewMode = "grouped";
+    private string sourceFilter = "";
     private string searchQuery = "";
+    private string terminalSearchQuery = "";
     private string categoryFilter = "";
     private string? minimumLevel;
     private string? streamKind;
@@ -274,9 +264,10 @@
 
     private static readonly ObservedLogStreamKind[] StreamKinds = Enum.GetValues<ObservedLogStreamKind>();
 
-    private IEnumerable<IGrouping<ObservedLogSourceType, ObservedLogSource>> GroupedSources =>
+    private IEnumerable<IGrouping<ObservedLogSourceType, ObservedLogSource>> FilteredGroupedSources =>
         sources
             .Where(s => s.SourceId != "all")
+            .Where(SourceMatchesFilter)
             .GroupBy(s => s.SourceType)
             .OrderBy(g => GroupOrder(g.Key));
 
@@ -301,8 +292,9 @@
         if (!firstRender)
             return;
 
-        termInitialized = await JS.InvokeAsync<bool>("rrTerminal.init", "rr-terminal", new { darkMode = true });
-        await JS.InvokeVoidAsync("rrSplitPane.init", "logs-resize-handle", "logs-sidebar", "rr-logs-sidebar-width", 220, 560);
+        termInitialized = await JS.InvokeAsync<bool>("rrTerminal.init", "rr-terminal", new { darkMode = true, fontSize = terminalFontSize });
+        await JS.InvokeVoidAsync("rrSplitPane.init", "logs-resize-handle", "logs-sidebar", "rr-logs-sidebar-width-v2", 220, 480);
+        await InitializeResponsiveSourcePanel();
         await FetchLogs();
     }
 
@@ -322,6 +314,43 @@
     private async Task SelectSource(string sourceId)
     {
         selectedSourceId = sourceId;
+        if (sourceId != "all")
+            logViewMode = "single";
+        else if (logViewMode == "single")
+            logViewMode = "multi";
+        await FetchLogs();
+    }
+
+    private void ClearSourceFilter()
+    {
+        sourceFilter = "";
+    }
+
+    private async Task ToggleSourcePanel()
+    {
+        sourcePanelCollapsed = !sourcePanelCollapsed;
+        await JS.InvokeVoidAsync("rrViewport.setBooleanPreference", SourcePanelPreferenceKey, sourcePanelCollapsed);
+        StateHasChanged();
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("rrTerminal.fit", "rr-terminal");
+    }
+
+    private async Task InitializeResponsiveSourcePanel()
+    {
+        var savedCollapsed = await JS.InvokeAsync<string?>("rrViewport.getPreference", SourcePanelPreferenceKey);
+        sourcePanelCollapsed = bool.TryParse(savedCollapsed, out var collapsed)
+            ? collapsed
+            : await JS.InvokeAsync<bool>("rrViewport.isBelow", 720);
+        StateHasChanged();
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("rrTerminal.fit", "rr-terminal");
+    }
+
+    private async Task SetLogViewMode(string mode)
+    {
+        logViewMode = mode;
+        if (mode is "multi" or "grouped")
+            selectedSourceId = "all";
         await FetchLogs();
     }
 
@@ -340,9 +369,7 @@
             lastResultWasTruncated = result.IsTruncated;
             lastFetchTime = DateTime.Now.ToString("HH:mm:ss");
 
-            var text = result.Entries.Count == 0
-                ? string.IsNullOrWhiteSpace(directTail) ? BuildEmptyMessage() : directTail
-                : string.Join('\n', result.Entries.Select(FormatEntry));
+            var text = BuildLogOutput(result, directTail);
             await WriteToTerminal(text);
         }
         catch (Exception ex)
@@ -388,7 +415,15 @@
             if (host?.AgentStatus == AgentStatus.Online)
             {
                 hostLogsTcs = new TaskCompletionSource<string>();
-                await HostCommandDispatcher.DispatchGetHostLogsAsync(host.Id, new GetHostLogsCommand { TailLines = tailLines });
+                try
+                {
+                    await HostCommandDispatcher.DispatchGetHostLogsAsync(host.Id, new GetHostLogsCommand { TailLines = tailLines });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return $"\x1b[33mLive host tail unavailable.\x1b[0m\n\x1b[90m{ex.Message}\x1b[0m";
+                }
+
                 var completed = await Task.WhenAny(hostLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(4)));
                 if (completed == hostLogsTcs.Task)
                     return await hostLogsTcs.Task;
@@ -402,7 +437,15 @@
             {
                 var handle = runner.ContainerId ?? runner.VmName ?? runner.ProcessId?.ToString() ?? runner.RunnerName;
                 runnerLogsTcs = new TaskCompletionSource<string>();
-                await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines });
+                try
+                {
+                    await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return $"\x1b[33mLive runner tail unavailable.\x1b[0m\n\x1b[90m{ex.Message}\x1b[0m";
+                }
+
                 var completed = await Task.WhenAny(runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(4)));
                 if (completed == runnerLogsTcs.Task)
                     return await runnerLogsTcs.Task;
@@ -417,9 +460,24 @@
         if (!termInitialized)
             return;
 
-        await JS.InvokeVoidAsync("rrTerminal.clear", "rr-terminal");
-        foreach (var line in text.Split('\n'))
-            await JS.InvokeVoidAsync("rrTerminal.writeln", "rr-terminal", line.TrimEnd('\r'));
+        await JS.InvokeVoidAsync("rrTerminal.writeText", "rr-terminal", text, autoScroll);
+    }
+
+    private string BuildLogOutput(ObservedLogQueryResult result, string? directTail)
+    {
+        if (result.Entries.Count == 0)
+            return string.IsNullOrWhiteSpace(directTail) ? BuildEmptyMessage() : directTail;
+
+        if (logViewMode != "grouped" || selectedSourceId != "all")
+            return string.Join('\n', result.Entries.Select(FormatEntry));
+
+        var groups = result.Entries
+            .GroupBy(entry => entry.SourceName)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
+
+        return string.Join("\n\n", groups.Select(group =>
+            $"\x1b[38;5;214m╭─ {group.Key} ({group.Count()} lines)\x1b[0m\n" +
+            string.Join('\n', group.Select(FormatEntry))));
     }
 
     private string BuildEmptyMessage()
@@ -494,6 +552,52 @@
         await Task.CompletedTask;
     }
 
+    private async Task ToggleAutoScroll()
+    {
+        autoScroll = !autoScroll;
+        if (autoScroll)
+            await JS.InvokeVoidAsync("rrTerminal.scrollToBottom", "rr-terminal");
+    }
+
+    private async Task ToggleWrap()
+    {
+        wrapLogs = !wrapLogs;
+        await JS.InvokeVoidAsync("rrTerminal.setWrap", "rr-terminal", wrapLogs);
+    }
+
+    private async Task ApplyTerminalFontSize()
+    {
+        if (termInitialized)
+            await JS.InvokeVoidAsync("rrTerminal.setFontSize", "rr-terminal", terminalFontSize);
+    }
+
+    private async Task SearchNext()
+    {
+        if (!string.IsNullOrWhiteSpace(terminalSearchQuery))
+            await JS.InvokeAsync<bool>("rrTerminal.search", "rr-terminal", terminalSearchQuery);
+    }
+
+    private async Task SearchPrevious()
+    {
+        if (!string.IsNullOrWhiteSpace(terminalSearchQuery))
+            await JS.InvokeAsync<bool>("rrTerminal.searchPrevious", "rr-terminal", terminalSearchQuery);
+    }
+
+    private async Task CopyLogs()
+    {
+        await JS.InvokeVoidAsync("rrTerminal.copy", "rr-terminal");
+    }
+
+    private async Task DownloadLogs()
+    {
+        await JS.InvokeVoidAsync("rrTerminal.download", "rr-terminal", $"runnerrunner-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+    }
+
+    private async Task ClearTerminal()
+    {
+        await JS.InvokeVoidAsync("rrTerminal.clear", "rr-terminal");
+    }
+
     private async Task RunFollowLoopAsync(CancellationToken ct)
     {
         try
@@ -557,6 +661,16 @@
         ObservedLogSourceType.Task => "bi-list-task text-primary",
         _ => "bi-terminal"
     };
+
+    private bool SourceMatchesFilter(ObservedLogSource source)
+    {
+        if (string.IsNullOrWhiteSpace(sourceFilter))
+            return true;
+
+        return source.Name.Contains(sourceFilter, StringComparison.OrdinalIgnoreCase)
+            || (source.Description?.Contains(sourceFilter, StringComparison.OrdinalIgnoreCase) ?? false)
+            || source.SourceId.Contains(sourceFilter, StringComparison.OrdinalIgnoreCase);
+    }
 
     public void Dispose()
     {

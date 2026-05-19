@@ -18,127 +18,128 @@
     </div>
 </SectionContent>
 
-<div class="split-pane-container d-flex" style="height: calc(100vh - 120px);">
-    <div id="registries-sidebar" class="split-pane-sidebar d-flex flex-column" style="width: 290px; min-width: 220px; max-width: 500px; overflow-y: auto;">
-        <div class="sidebar-section-header">
-            <i class="bi bi-boxes me-1"></i> Registries
-            <span class="badge bg-secondary ms-auto">@registries.Count</span>
+<div class="registries-workspace images-workspace logs-workspace @(registryPanelCollapsed ? "sources-collapsed" : "sources-expanded")">
+    <aside id="registries-sidebar" class="logs-source-panel registries-source-panel" aria-label="Registries">
+        <div class="logs-source-panel-header">
+            <span><i class="bi bi-boxes"></i> Registries</span>
+            <span class="badge bg-secondary">@registries.Count</span>
+            <button type="button" class="icon-btn" @onclick="ToggleRegistryPanel" aria-label="Collapse registries" title="Collapse registries" aria-controls="registries-sidebar" aria-expanded="@(!registryPanelCollapsed)">
+                <i class="bi bi-layout-sidebar-inset"></i>
+            </button>
         </div>
 
-        <div class="p-2 border-bottom">
+        <div class="registries-sidebar-cta">
             <button class="btn btn-primary btn-sm w-100" @onclick="ShowCreateRegistry">
                 <i class="bi bi-plus-lg me-1"></i> Add Registry
             </button>
         </div>
 
-        @if (!registries.Any())
-        {
-            <div class="p-3 text-muted small">
-                No registries yet. Add one to search images and launch pulls.
-            </div>
-        }
-        else
-        {
-            @foreach (var registry in registries.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+        <div class="logs-source-search">
+            <i class="bi bi-search"></i>
+            <input type="search"
+                   class="form-control"
+                   placeholder="Filter registries..."
+                   aria-label="Filter registries"
+                   @bind="registryFilter"
+                   @bind:event="oninput" />
+        </div>
+
+        <div class="logs-source-actions">
+            <button type="button" @onclick="SelectFirstRegistry">Select first</button>
+            <span aria-hidden="true"></span>
+            <button type="button" @onclick="ClearRegistryFilter">Clear</button>
+        </div>
+
+        <div class="logs-source-list">
+            @if (!FilteredRegistries.Any())
             {
-                <div class="registry-card @(selectedRegistryId == registry.Id ? "active" : "")"
-                     @onclick="() => SelectRegistry(registry.Id)">
-                    <div class="d-flex align-items-center">
-                        <div class="text-truncate">
-                            <div class="fw-semibold text-truncate">@registry.Name</div>
-                            <small class="text-muted">@registry.RegistryUrl</small>
-                        </div>
-                        @if (registry.IsDefault)
-                        {
-                            <span class="badge bg-primary ms-auto">Default</span>
-                        }
-                    </div>
-                    <div class="mt-1 d-flex gap-1 flex-wrap">
-                        <span class="badge bg-secondary">@registry.RegistryType</span>
-                        <span class="badge @(string.IsNullOrWhiteSpace(registry.Username) ? "bg-light text-dark" : "bg-success")">
-                            @(string.IsNullOrWhiteSpace(registry.Username) ? "No auth" : "Auth")
-                        </span>
-                    </div>
+                <div class="p-3 text-muted small">
+                    No registries match the current filter.
                 </div>
             }
-        }
-    </div>
+            else
+            {
+                @foreach (var group in FilteredRegistries.GroupBy(r => r.RegistryType).OrderBy(g => RegistryTypeOrder(g.Key)))
+                {
+                    <div class="sidebar-section-header">
+                        <span><i class="bi @GetRegistryTypeIcon(group.Key)"></i> @GetRegistryTypeTitle(group.Key)</span>
+                        <span class="badge bg-secondary">@group.Count()</span>
+                    </div>
+                    @foreach (var registry in group.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        <button type="button"
+                                class="log-source-card registry-source-card @(selectedRegistryId == registry.Id ? "active" : "")"
+                                @onclick="() => SelectRegistry(registry.Id)">
+                            <span class="log-source-title">
+                                <i class="bi @GetRegistryTypeIcon(registry.RegistryType)"></i>
+                                <span class="text-truncate">@registry.Name</span>
+                                @if (registry.IsDefault)
+                                {
+                                    <span class="log-source-count">Default</span>
+                                }
+                            </span>
+                            <small class="text-truncate">@registry.RegistryUrl</small>
+                            <span class="registry-source-badges">
+                                <span class="badge bg-secondary">@registry.RegistryType</span>
+                                <span class="badge @(string.IsNullOrWhiteSpace(registry.Username) ? "bg-secondary" : "bg-success")">
+                                    @(string.IsNullOrWhiteSpace(registry.Username) ? "No auth" : "Auth")
+                                </span>
+                            </span>
+                        </button>
+                    }
+                }
+            }
+        </div>
+    </aside>
 
     <div id="registries-resize-handle" class="split-resize-handle"></div>
 
-    <div class="split-pane-main flex-grow-1 d-flex flex-column" style="min-width: 0; overflow-y: auto;">
-        @if (showRegistryForm && !isEditingRegistry && !registries.Any())
-        {
-            <div class="card mb-3">
-                <div class="card-body">
-                    <h5 class="card-title">Add Registry</h5>
-                    <div class="row mb-3">
-                        <div class="col-md-3">
-                            <label class="form-label">Name</label>
-                            <input class="form-control" @bind="editRegistry.Name" />
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Registry URL</label>
-                            <input class="form-control" @bind="editRegistry.RegistryUrl" placeholder="ghcr.io" />
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label">Type</label>
-                            <select class="form-select" @bind="editRegistry.RegistryType">
-                                @foreach (var t in Enum.GetValues<RegistryType>())
-                                {
-                                    <option value="@t">@t</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="col-md-3 d-flex align-items-end">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" @bind="editRegistry.IsDefault" id="registriesEmptyDefaultCheck" />
-                                <label class="form-check-label" for="registriesEmptyDefaultCheck">Default</label>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label">Username</label>
-                            <input class="form-control" @bind="editRegistry.Username" />
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Password / Token</label>
-                            <input type="password" class="form-control" @bind="editRegistry.Password" />
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Default namespace / owner</label>
-                            <input class="form-control" @bind="editRegistry.DefaultNamespace" placeholder="e.g., redth or my-org" />
-                        </div>
-                    </div>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-success" @onclick="SaveRegistry">Save</button>
-                        <button class="btn btn-secondary" @onclick="CloseRegistryForm">Cancel</button>
-                    </div>
-                </div>
-            </div>
-        }
+    @if (registryPanelCollapsed)
+    {
+        <button type="button" class="source-panel-reveal" @onclick="ToggleRegistryPanel" aria-label="Show registries" title="Show registries" aria-controls="registries-sidebar" aria-expanded="false">
+            <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
+            <span>Show registries</span>
+        </button>
+    }
 
+    <section class="images-main-panel registries-main-panel" aria-label="Registry browser">
         @if (GetSelectedRegistry() is not RegistryCredential selectedRegistry)
         {
-            <div class="border rounded d-flex flex-column align-items-center justify-content-center flex-grow-1 text-muted" style="background: var(--bg-card, #fff);">
-                <i class="bi bi-arrow-left-circle" style="font-size: 3rem; opacity: 0.4;"></i>
-                <h5 class="mt-3">Select a registry</h5>
+            <div class="images-empty-state">
+                <button type="button" class="console-icon-btn mb-3" @onclick="ToggleRegistryPanel" aria-label="Show registries" title="Show registries" aria-controls="registries-sidebar" aria-expanded="@(!registryPanelCollapsed)">
+                    <i class="bi bi-layout-sidebar"></i>
+                </button>
+                <span class="empty-state-icon"><i class="bi bi-boxes" aria-hidden="true"></i></span>
+                <h3>Select a registry</h3>
                 <p>Choose a registry from the sidebar or add a new one to start browsing images.</p>
             </div>
         }
         else
         {
-            <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
-                <div>
-                    <h4 class="mb-0">@selectedRegistry.Name</h4>
-                    <small class="text-muted"><code>@selectedRegistry.RegistryUrl</code> · @selectedRegistry.RegistryType</small>
-                    @if (!string.IsNullOrWhiteSpace(selectedRegistry.DefaultNamespace))
-                    {
-                        <small class="d-block text-muted">Default namespace: <code>@selectedRegistry.DefaultNamespace</code></small>
-                    }
+            <div class="images-toolbar registries-toolbar">
+                <div class="images-toolbar-title">
+                    <div class="images-toolbar-heading">
+                        <button type="button" class="console-icon-btn" @onclick="ToggleRegistryPanel" aria-label="Toggle registries" title="Toggle registries" aria-controls="registries-sidebar" aria-expanded="@(!registryPanelCollapsed)">
+                            <i class="bi bi-layout-sidebar"></i>
+                        </button>
+                        <i class="bi @GetRegistryTypeIcon(selectedRegistry.RegistryType)"></i>
+                        <strong>@selectedRegistry.Name</strong>
+                        @if (selectedRegistry.IsDefault)
+                        {
+                            <span class="logs-console-meta">Default</span>
+                        }
+                        <span class="logs-console-meta">@selectedRegistry.RegistryType</span>
+                    </div>
+                    <p>
+                        <code>@selectedRegistry.RegistryUrl</code>
+                        @if (!string.IsNullOrWhiteSpace(selectedRegistry.DefaultNamespace))
+                        {
+                            <span> · Namespace <code>@selectedRegistry.DefaultNamespace</code></span>
+                        }
+                        <span> · @(string.IsNullOrWhiteSpace(selectedRegistry.Username) ? "No authentication" : "Authenticated")</span>
+                    </p>
                 </div>
-                <div class="ms-auto d-flex gap-2">
+                <div class="images-toolbar-actions">
                     <button class="btn btn-outline-primary btn-sm" @onclick="() => EditRegistry(selectedRegistry)">
                         <i class="bi bi-pencil-square"></i> Edit
                     </button>
@@ -148,131 +149,82 @@
                 </div>
             </div>
 
-            @if (showRegistryForm)
-            {
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <h5 class="card-title">@(isEditingRegistry ? "Edit" : "Add") Registry</h5>
-                        <div class="row mb-3">
-                            <div class="col-md-3">
-                                <label class="form-label">Name</label>
-                                <input class="form-control" @bind="editRegistry.Name" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Registry URL</label>
-                                <input class="form-control" @bind="editRegistry.RegistryUrl" placeholder="ghcr.io" />
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label">Type</label>
-                                <select class="form-select" @bind="editRegistry.RegistryType">
-                                    @foreach (var t in Enum.GetValues<RegistryType>())
-                                    {
-                                        <option value="@t">@t</option>
-                                    }
-                                </select>
-                            </div>
-                            <div class="col-md-3 d-flex align-items-end">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" @bind="editRegistry.IsDefault" id="registriesDefaultCheck" />
-                                    <label class="form-check-label" for="registriesDefaultCheck">Default</label>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-md-4">
-                                <label class="form-label">Username</label>
-                                <input class="form-control" @bind="editRegistry.Username" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Password / Token</label>
-                                <input type="password" class="form-control" @bind="editRegistry.Password" />
-                            </div>
-                            <div class="col-md-4">
-                                <label class="form-label">Default namespace / owner</label>
-                                <input class="form-control" @bind="editRegistry.DefaultNamespace" placeholder="e.g., redth or my-org" />
-                            </div>
-                        </div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-success" @onclick="SaveRegistry">Save</button>
-                            <button class="btn btn-secondary" @onclick="CloseRegistryForm">Cancel</button>
-                        </div>
-                    </div>
-                </div>
-            }
-
-            <div class="card mb-3">
-                <div class="card-body">
-                    <div class="d-flex flex-wrap gap-2 align-items-end">
-                        <div style="min-width: 320px; flex: 1 1 320px;">
-                            <label class="form-label">@GetSearchLabel()</label>
+            <div class="images-content-card registries-content-card registries-search-card">
+                <div class="images-filter-row registries-search-row">
+                    <div>
+                        <label class="form-label">@GetSearchLabel()</label>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
                             <input class="form-control" @bind="searchText" @bind:event="oninput"
                                    placeholder="@GetSearchPlaceholder()" />
-                        </div>
-                        <div>
                             <button class="btn btn-primary" @onclick="SearchAsync" disabled="@searchInProgress">
                                 @if (searchInProgress)
                                 {
                                     <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
                                 }
-                                <i class="bi bi-search"></i> Search
+                                Search
                             </button>
                         </div>
-                        @if (!string.IsNullOrWhiteSpace(searchStatus))
-                        {
-                            <span class="small @(searchIsError ? "text-danger" : "text-muted")">@searchStatus</span>
-                        }
                     </div>
-
-                    <div class="form-text mt-2">
-                        @GetSearchHelpText()
-                    </div>
+                    @if (!string.IsNullOrWhiteSpace(searchStatus))
+                    {
+                        <span class="small @(searchIsError ? "text-danger" : "text-muted")">@searchStatus</span>
+                    }
                 </div>
+                <div class="registries-help-text">@GetSearchHelpText()</div>
             </div>
 
-            <div class="card mb-3">
-                <div class="card-body">
-                    <div class="d-flex align-items-center mb-2">
-                        <h5 class="mb-0">Repositories</h5>
-                        @if (searchResults.FromCache)
-                        {
-                            <span class="badge bg-secondary ms-2">Cached</span>
-                        }
+            <div class="images-content-card registries-content-card">
+                <div class="registries-card-header">
+                    <div>
+                        <h2>Repositories</h2>
+                        <p>Search results from @selectedRegistry.RegistryUrl.</p>
                     </div>
-
-                    @if (!string.IsNullOrWhiteSpace(searchResults.Warning))
+                    @if (searchResults.FromCache)
                     {
-                        <div class="alert alert-warning">@searchResults.Warning</div>
+                        <span class="badge bg-secondary">Cached</span>
                     }
+                </div>
 
-                    @if (!string.IsNullOrWhiteSpace(searchResults.InfoMessage))
-                    {
-                        <div class="alert alert-secondary">@searchResults.InfoMessage</div>
-                    }
+                @if (!string.IsNullOrWhiteSpace(searchResults.Warning))
+                {
+                    <div class="alert alert-warning mx-3 mt-3">@searchResults.Warning</div>
+                }
 
-                    @if (!searchResults.Results.Any())
-                    {
-                        <div class="alert alert-secondary mb-0">Search a registry to see matching repositories.</div>
-                    }
-                    else
-                    {
+                @if (!string.IsNullOrWhiteSpace(searchResults.InfoMessage))
+                {
+                    <div class="alert alert-secondary mx-3 mt-3">@searchResults.InfoMessage</div>
+                }
+
+                @if (!searchResults.Results.Any())
+                {
+                    <div class="images-empty-state images-empty-state-compact">
+                        <span class="empty-state-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                        <h3>Search a registry</h3>
+                        <p>Search to see matching repositories.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="images-table-wrap registries-table-wrap">
                         <div class="table-responsive">
                             <table class="table table-striped align-middle mb-0">
                                 <thead>
                                     <tr>
-                                        <th>Repository</th>
-                                        <th>Description</th>
-                                        <th>Stars</th>
-                                        <th></th>
+                                        <th data-col-kind="name" data-col-min="180" data-col-preferred="280" data-col-weight="3.5">Repository</th>
+                                        <th data-col-kind="description" data-col-min="180" data-col-preferred="300" data-col-priority="4" data-col-weight="2">Description</th>
+                                        <th data-col-kind="compact" data-col-min="70" data-col-preferred="88" data-col-priority="4">Stars</th>
+                                        <th class="actions-col" data-col-min="92" data-col-preferred="112"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     @foreach (var result in searchResults.Results)
                                     {
                                         <tr class="@(selectedRepository == result.Name ? "table-primary" : "")">
-                                            <td><code>@result.Name</code></td>
+                                            <td class="name-cell"><code class="primary-label">@result.Name</code></td>
                                             <td>@(string.IsNullOrWhiteSpace(result.Description) ? "—" : result.Description)</td>
                                             <td>@(result.StarCount?.ToString() ?? "—")</td>
-                                            <td>
+                                            <td class="actions-cell">
                                                 <button class="btn btn-sm btn-outline-primary" @onclick="() => SelectRepositoryAsync(result.Name)">
                                                     View tags
                                                 </button>
@@ -282,50 +234,54 @@
                                 </tbody>
                             </table>
                         </div>
-                    }
-                </div>
+                    </div>
+                }
             </div>
 
             @if (!string.IsNullOrWhiteSpace(selectedRepository))
             {
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center mb-2">
-                            <div>
-                                <h5 class="mb-0">Tags for <code>@selectedRepository</code></h5>
-                                <small class="text-muted">Choose a version to inspect host cache status or pull it now.</small>
-                            </div>
-                            @if (tagResults.FromCache)
-                            {
-                                <span class="badge bg-secondary ms-2">Cached</span>
-                            }
+                <div class="images-content-card registries-content-card">
+                    <div class="registries-card-header">
+                        <div>
+                            <h2>Tags for <code>@selectedRepository</code></h2>
+                            <p>Choose a version to inspect host cache status or pull it now.</p>
                         </div>
-
-                        @if (!string.IsNullOrWhiteSpace(tagResults.Warning))
+                        @if (tagResults.FromCache)
                         {
-                            <div class="alert alert-warning">@tagResults.Warning</div>
+                            <span class="badge bg-secondary">Cached</span>
                         }
+                    </div>
 
-                        @if (!string.IsNullOrWhiteSpace(tagResults.InfoMessage))
-                        {
-                            <div class="alert alert-secondary">@tagResults.InfoMessage</div>
-                        }
+                    @if (!string.IsNullOrWhiteSpace(tagResults.Warning))
+                    {
+                        <div class="alert alert-warning mx-3 mt-3">@tagResults.Warning</div>
+                    }
 
-                        @if (!tagResults.Tags.Any())
-                        {
-                            <div class="alert alert-secondary mb-0">No tags loaded yet.</div>
-                        }
-                        else
-                        {
+                    @if (!string.IsNullOrWhiteSpace(tagResults.InfoMessage))
+                    {
+                        <div class="alert alert-secondary mx-3 mt-3">@tagResults.InfoMessage</div>
+                    }
+
+                    @if (!tagResults.Tags.Any())
+                    {
+                        <div class="images-empty-state images-empty-state-compact">
+                            <span class="empty-state-icon"><i class="bi bi-tags" aria-hidden="true"></i></span>
+                            <h3>No tags loaded</h3>
+                            <p>No tags are available for this repository yet.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="images-table-wrap registries-table-wrap">
                             <div class="table-responsive">
                                 <table class="table table-striped align-middle mb-0">
                                     <thead>
                                         <tr>
-                                            <th>Tag</th>
-                                            <th>Size</th>
-                                            <th>Updated</th>
-                                            <th>Cached on</th>
-                                            <th></th>
+                                            <th data-col-kind="name" data-col-min="140" data-col-preferred="220" data-col-weight="3">Tag</th>
+                                            <th data-col-kind="compact" data-col-min="82" data-col-preferred="100" data-col-priority="2">Size</th>
+                                            <th data-col-kind="time" data-col-min="108" data-col-preferred="132" data-col-priority="4">Updated</th>
+                                            <th data-col-kind="optional" data-col-min="92" data-col-preferred="116" data-col-priority="4">Cached on</th>
+                                            <th class="actions-col" data-col-min="144" data-col-preferred="172"></th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -333,12 +289,12 @@
                                         {
                                             var cachedCount = CountCachedHosts(tag.Name);
                                             <tr class="@(selectedTag == tag.Name ? "table-primary" : "")">
-                                                <td><span class="badge bg-secondary">@tag.Name</span></td>
+                                                <td class="name-cell"><span class="badge bg-secondary primary-label">@tag.Name</span></td>
                                                 <td>@FormatSize(tag.SizeBytes)</td>
                                                 <td>@FormatDateTime(tag.UpdatedAt)</td>
                                                 <td>@cachedCount host(s)</td>
-                                                <td class="text-nowrap">
-                                                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => SelectTagAsync(tag.Name)">
+                                                <td class="actions-cell">
+                                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => SelectTagAsync(tag.Name)">
                                                         Cache status
                                                     </button>
                                                     <button class="btn btn-sm btn-primary" @onclick="() => OpenPullDialog(tag.Name)">
@@ -350,44 +306,50 @@
                                     </tbody>
                                 </table>
                             </div>
-                        }
-                    </div>
+                        </div>
+                    }
                 </div>
             }
 
             @if (!string.IsNullOrWhiteSpace(selectedTag))
             {
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <div class="d-flex align-items-center mb-2">
-                            <h5 class="mb-0">Cached on hosts</h5>
-                            <span class="small text-muted ms-2">Best-effort inventory from each host's last reported image list.</span>
+                <div class="images-content-card registries-content-card">
+                    <div class="registries-card-header">
+                        <div>
+                            <h2>Cached on hosts</h2>
+                            <p>Best-effort inventory from each host's last reported image list.</p>
                         </div>
+                    </div>
 
-                        @if (!hostPresence.Any())
-                        {
-                            <div class="alert alert-secondary mb-0">No cached presence information is available yet for <code>@selectedRepository:@selectedTag</code>.</div>
-                        }
-                        else
-                        {
+                    @if (!hostPresence.Any())
+                    {
+                        <div class="images-empty-state images-empty-state-compact">
+                            <span class="empty-state-icon"><i class="bi bi-hdd-network" aria-hidden="true"></i></span>
+                            <h3>No cache data</h3>
+                            <p>No cached presence information is available yet for <code>@selectedRepository:@selectedTag</code>.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="images-table-wrap registries-table-wrap">
                             <div class="table-responsive">
                                 <table class="table table-striped align-middle mb-0">
                                     <thead>
                                         <tr>
-                                            <th>Host</th>
-                                            <th>Group</th>
-                                            <th>Status</th>
-                                            <th>Cached?</th>
-                                            <th>Last reported</th>
+                                            <th data-col-kind="name" data-col-min="170" data-col-preferred="260" data-col-weight="3.5">Host</th>
+                                            <th data-col-kind="related" data-col-min="110" data-col-preferred="150" data-col-priority="4">Group</th>
+                                            <th data-col-kind="compact" data-col-min="92" data-col-preferred="112" data-col-priority="2">Status</th>
+                                            <th data-col-kind="compact" data-col-min="82" data-col-preferred="100" data-col-priority="3">Cached?</th>
+                                            <th data-col-kind="time" data-col-min="108" data-col-preferred="132" data-col-priority="4">Last reported</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         @foreach (var presence in hostPresence.OrderByDescending(x => x.HasImage).ThenBy(x => x.HostLabel, StringComparer.OrdinalIgnoreCase))
                                         {
                                             <tr>
-                                                <td>
-                                                    <div>@presence.HostLabel</div>
-                                                    <small class="text-muted">@presence.HostName</small>
+                                                <td class="name-cell">
+                                                    <span class="primary-label">@presence.HostLabel</span>
+                                                    <small class="secondary-label">@presence.HostName</small>
                                                 </td>
                                                 <td>@(string.IsNullOrWhiteSpace(presence.GroupId) ? "—" : presence.GroupId)</td>
                                                 <td><span class="badge @GetStatusBadge(presence.AgentStatus)">@presence.AgentStatus</span></td>
@@ -402,8 +364,8 @@
                                     </tbody>
                                 </table>
                             </div>
-                        }
-                    </div>
+                        </div>
+                    }
                 </div>
             }
 
@@ -414,8 +376,88 @@
                 </div>
             }
         }
-    </div>
+    </section>
 </div>
+
+@if (showRegistryForm)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="registry-form-title" @onclick="CloseRegistryForm">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="registry-form-title" class="modal-title">
+                            <i class="bi bi-boxes me-2"></i>@(isEditingRegistry ? "Edit" : "Add") Registry
+                        </h5>
+                        <div class="modal-kicker">Store registry connection details and optional authentication in a focused dialog.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseRegistryForm" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    @if (actionIsError && !string.IsNullOrWhiteSpace(actionStatus))
+                    {
+                        <div class="alert alert-danger py-2">@actionStatus</div>
+                    }
+
+                    <div class="rr-form-section">
+                        <div class="rr-form-section-title"><i class="bi bi-info-circle"></i> Registry details</div>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Name</label>
+                                <input class="form-control" @bind="editRegistry.Name" />
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Registry URL</label>
+                                <input class="form-control" @bind="editRegistry.RegistryUrl" placeholder="ghcr.io" />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Type</label>
+                                <select class="form-select" @bind="editRegistry.RegistryType">
+                                    @foreach (var t in Enum.GetValues<RegistryType>())
+                                    {
+                                        <option value="@t">@t</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label">Default namespace / owner</label>
+                                <input class="form-control" @bind="editRegistry.DefaultNamespace" placeholder="e.g., redth or my-org" />
+                            </div>
+                            <div class="col-md-4 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" @bind="editRegistry.IsDefault" id="registryDefaultCheck" />
+                                    <label class="form-check-label" for="registryDefaultCheck">Use as default registry</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="rr-form-section">
+                        <div class="rr-form-section-title"><i class="bi bi-shield-lock"></i> Authentication</div>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Username</label>
+                                <input class="form-control" @bind="editRegistry.Username" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Password / Token</label>
+                                <input type="password" class="form-control" @bind="editRegistry.Password" autocomplete="off" />
+                                <div class="form-text">Leave blank for public registries or hosts that already have credentials configured.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="CloseRegistryForm">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveRegistry">
+                        <i class="bi bi-check2 me-1"></i>Save registry
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (showPullDialog && GetSelectedRegistry() is not null)
 {
@@ -493,62 +535,14 @@
     </div>
 }
 
-<style>
-    .registry-card {
-        padding: 0.65rem 0.75rem;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: background 0.15s;
-        border: 1px solid transparent;
-        margin: 2px 6px;
-    }
-
-    .registry-card:hover {
-        background: var(--bg-secondary, #f0f0f0);
-    }
-
-    .registry-card.active {
-        background: var(--bg-tertiary, #e8e8e8);
-        border-color: var(--bs-primary);
-        box-shadow: inset 3px 0 0 var(--bs-primary);
-    }
-
-    .sidebar-section-header {
-        display: flex;
-        align-items: center;
-        padding: 0.35rem 0.75rem;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-muted, #6c757d);
-    }
-
-    .split-resize-handle {
-        width: 6px;
-        cursor: col-resize;
-        background: transparent;
-        transition: background 0.15s;
-        flex-shrink: 0;
-        border-radius: 3px;
-        margin: 0 2px;
-    }
-
-    .split-resize-handle:hover, .split-resize-handle:active {
-        background: var(--bs-primary);
-        opacity: 0.4;
-    }
-
-    .host-pick-list {
-        max-height: 320px;
-        overflow-y: auto;
-    }
-</style>
-
 @code {
+    private const string RegistryPanelPreferenceKey = "rr-registries-panel-collapsed-v2";
+
     private List<RegistryCredential> registries = [];
     private List<RunnerHost> hosts = [];
     private string selectedRegistryId = "";
+    private bool registryPanelCollapsed;
+    private string registryFilter = "";
 
     private RegistryCredential editRegistry = new() { Name = "", RegistryUrl = "" };
     private bool showRegistryForm;
@@ -583,8 +577,11 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-            await JS.InvokeVoidAsync("rrSplitPane.init", "registries-resize-handle", "registries-sidebar", "rr-registries-sidebar-width", 220, 500);
+        if (!firstRender)
+            return;
+
+        await JS.InvokeVoidAsync("rrSplitPane.init", "registries-resize-handle", "registries-sidebar", "rr-registries-sidebar-width-v2", 220, 420);
+        await InitializeResponsiveRegistryPanel();
     }
 
     private async Task LoadPageDataAsync()
@@ -600,6 +597,55 @@
 
     private RegistryCredential? GetSelectedRegistry() =>
         registries.FirstOrDefault(r => r.Id == selectedRegistryId);
+
+    private IEnumerable<RegistryCredential> FilteredRegistries
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(registryFilter))
+                return registries;
+
+            var query = registryFilter.Trim();
+            return registries.Where(r =>
+                r.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || r.RegistryUrl.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || r.RegistryType.ToString().Contains(query, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(r.DefaultNamespace) && r.DefaultNamespace.Contains(query, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(r.Username) && r.Username.Contains(query, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private async Task ToggleRegistryPanel()
+    {
+        registryPanelCollapsed = !registryPanelCollapsed;
+        await JS.InvokeVoidAsync("rrViewport.setBooleanPreference", RegistryPanelPreferenceKey, registryPanelCollapsed);
+        StateHasChanged();
+    }
+
+    private async Task InitializeResponsiveRegistryPanel()
+    {
+        var savedCollapsed = await JS.InvokeAsync<string?>("rrViewport.getPreference", RegistryPanelPreferenceKey);
+        registryPanelCollapsed = bool.TryParse(savedCollapsed, out var collapsed)
+            ? collapsed
+            : await JS.InvokeAsync<bool>("rrViewport.isBelow", 720);
+        StateHasChanged();
+    }
+
+    private void SelectFirstRegistry()
+    {
+        var first = FilteredRegistries
+            .OrderByDescending(r => r.IsDefault)
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+
+        if (first != null)
+            SelectRegistry(first.Id);
+    }
+
+    private void ClearRegistryFilter()
+    {
+        registryFilter = "";
+    }
 
     private void SelectRegistry(string id)
     {
@@ -621,6 +667,8 @@
     {
         editRegistry = new RegistryCredential { Name = "", RegistryUrl = "" };
         isEditingRegistry = false;
+        actionIsError = false;
+        actionStatus = "";
         showRegistryForm = true;
     }
 
@@ -640,12 +688,19 @@
             UpdatedAt = reg.UpdatedAt
         };
         isEditingRegistry = true;
+        actionIsError = false;
+        actionStatus = "";
         showRegistryForm = true;
     }
 
     private void CloseRegistryForm()
     {
         showRegistryForm = false;
+        if (actionIsError)
+        {
+            actionIsError = false;
+            actionStatus = "";
+        }
     }
 
     private async Task SaveRegistry()
@@ -926,6 +981,26 @@
 
     private bool IsGhcrSelected() =>
         IsGhcrRegistry(GetSelectedRegistry()?.RegistryUrl);
+
+    private static int RegistryTypeOrder(RegistryType type) => type switch
+    {
+        RegistryType.Docker => 0,
+        RegistryType.Tart => 1,
+        _ => 2
+    };
+
+    private static string GetRegistryTypeIcon(RegistryType type) => type switch
+    {
+        RegistryType.Tart => "bi-apple",
+        _ => "bi-box"
+    };
+
+    private static string GetRegistryTypeTitle(RegistryType type) => type switch
+    {
+        RegistryType.Tart => "Tart OCI",
+        RegistryType.Docker => "Docker",
+        _ => type.ToString()
+    };
 
     private static bool IsGhcrRegistry(string? registryUrl)
     {

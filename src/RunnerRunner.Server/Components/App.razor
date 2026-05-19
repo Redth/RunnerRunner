@@ -22,7 +22,7 @@
     <ResourcePreloader />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="@Assets["lib/bootstrap/dist/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["lib/bootstrap-icons/bootstrap-icons.min.css"]" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
@@ -41,7 +41,8 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/lib/xterm-addon-search.js"></script>
-    <script src="js/terminal.js"></script>
+    <script src="@Assets["js/terminal.js"]"></script>
+    <script src="@Assets["js/table-grid.js"]"></script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
     <script>
         window.toggleMobileSidebar = function() {
@@ -77,10 +78,20 @@
             }
         });
         // Auto-init resizable table columns on DOM changes (Blazor navigations)
+        var _resizeInitPending = false;
+        function scheduleResizableColumnsInit() {
+            if (_resizeInitPending) return;
+            _resizeInitPending = true;
+            requestAnimationFrame(function() {
+                _resizeInitPending = false;
+                if (window.rrResizableColumns) window.rrResizableColumns.init();
+            });
+        }
         var _resizeObserver = new MutationObserver(function() {
-            if (window.rrResizableColumns) window.rrResizableColumns.init();
+            scheduleResizableColumnsInit();
         });
         _resizeObserver.observe(document.body, { childList: true, subtree: true });
+        scheduleResizableColumnsInit();
     </script>
 </body>
 

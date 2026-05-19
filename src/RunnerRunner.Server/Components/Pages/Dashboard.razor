@@ -1,8 +1,11 @@
 @page "/"
+@using RunnerRunner.Core.Models
 @using RunnerRunner.Server.Grains.Events
 @using RunnerRunner.Server.Services
 @using Shiny.DocumentDb
-@inject IGrainFactory GrainFactory
+@using RunnerHost = RunnerRunner.Core.Models.Host
+@inject IDocumentStore Store
+@inject LongRunningTaskService Tasks
 @rendermode InteractiveServer
 @implements IDisposable
 
@@ -10,148 +13,268 @@
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-grid-1x2-fill"></i> Dashboard</h1>
+        <span class="page-desc">Fleet health, dynamic runner pressure, active work, and operator attention.</span>
     </div>
 </SectionContent>
 
-<div class="row mt-3">
-    <div class="col-md-3">
-        <div class="card text-bg-primary mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-hdd-rack me-1"></i> Connected Hosts</h5>
-                <p class="card-text display-4">@connectedHostCount</p>
-            </div>
+<div class="dashboard-grid">
+    <section class="dashboard-hero-card">
+        <div>
+            <div class="dashboard-kicker"><i class="bi bi-activity"></i> Fleet pulse</div>
+            <h2>@onlineHostCount/@totalHostCount hosts online</h2>
+            <p>
+                @activeRunnerCount active runners,
+                @queuedJobCount queued webhook job@(queuedJobCount == 1 ? "" : "s"),
+                and @runningTaskCount long-running task@(runningTaskCount == 1 ? "" : "s") in progress.
+            </p>
         </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-bg-success mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-lightning-charge me-1"></i> Running Instances</h5>
-                <p class="card-text display-4">@runningInstanceCount</p>
-            </div>
+        <div class="dashboard-hero-actions">
+            <a class="btn btn-outline-primary btn-sm" href="/hosts"><i class="bi bi-hdd-network"></i> Hosts</a>
+            <a class="btn btn-outline-primary btn-sm" href="/jobs"><i class="bi bi-briefcase"></i> Jobs</a>
+            <a class="btn btn-outline-primary btn-sm" href="/logs"><i class="bi bi-terminal"></i> Logs</a>
         </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-bg-info mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-clipboard2-check me-1"></i> Profiles</h5>
-                <p class="card-text display-4">@profileCount</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-bg-warning mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-braces me-1"></i> Env Var Sets</h5>
-                <p class="card-text display-4">@envVarSetCount</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-bg-warning mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-lightning me-1"></i> Dynamic Runners</h5>
-                <p class="card-text display-4">@dynamicRunnerCount</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-bg-info mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-broadcast-pin me-1"></i> Webhook Events (1h)</h5>
-                <p class="card-text display-4">@recentWebhookEventCount</p>
-            </div>
-        </div>
-    </div>
-</div>
+    </section>
 
-<h3 class="mt-4"><i class="bi bi-diagram-3-fill me-2"></i>Cluster Status</h3>
-<div class="row mb-3">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-body">
-                <h6>Orleans Silo</h6>
-                <p class="mb-1"><span class="badge bg-success">Active</span> Silo running on this server</p>
-                <small class="text-muted">
-                    <a href="/orleans" target="_blank"><i class="bi bi-box-arrow-up-right me-1"></i>Open Orleans Dashboard</a>
-                </small>
+    <section class="dashboard-stat-grid" aria-label="Fleet summary">
+        <article class="dashboard-stat-card @GetStatTone(disconnectedExpectedCount, warnWhenPositive: true)">
+            <span class="dashboard-stat-icon"><i class="bi bi-hdd-network"></i></span>
+            <div>
+                <span class="dashboard-stat-label">Hosts online</span>
+                <strong>@onlineHostCount<span>/@totalHostCount</span></strong>
+                <small>@disconnectedExpectedCount expected offline · @staleHostCount stale</small>
             </div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-body">
-                <h6>Database</h6>
-                <p class="mb-1"><span class="badge bg-success">PostgreSQL</span> Connected</p>
-                <small class="text-muted">Grain persistence + DocumentDB</small>
-            </div>
-        </div>
-    </div>
-</div>
+        </article>
 
-<h3 class="mt-4"><i class="bi bi-hdd-rack me-2"></i>Hosts</h3>
-@if (!hosts.Any())
-{
-    <div class="alert alert-secondary">No hosts registered. Deploy a HostWorker on your machines to get started.</div>
-}
-else
-{
-    <div class="table-responsive">
-    <table class="table table-striped resizable-table">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Platform</th>
-                <th>Last Heartbeat</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var host in hosts)
-            {
-                <tr>
-                    <td>
-                        <span>@host.Label</span>
-                        @if (!string.IsNullOrWhiteSpace(host.DisplayName))
-                        {
-                            <br/><small class="text-muted">@host.Name</small>
-                        }
-                    </td>
-                    <td><span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span></td>
-                    <td>
-                        <div class="d-flex flex-wrap gap-1">
-                            <span class="host-chip platform-chip"><i class="bi @GetPlatformIcon(host.Platform) me-1"></i>@host.Platform</span>
-                            @if (!string.IsNullOrEmpty(host.Architecture))
-                            {
-                                <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@host.Architecture</span>
-                            }
+        <article class="dashboard-stat-card @GetStatTone(stuckJobCount, warnWhenPositive: true)">
+            <span class="dashboard-stat-icon"><i class="bi bi-hourglass-split"></i></span>
+            <div>
+                <span class="dashboard-stat-label">Queue pressure</span>
+                <strong>@queuedJobCount</strong>
+                <small>@stuckJobCount likely blocked · @recentWebhookEventCount events in 1h</small>
+            </div>
+        </article>
+
+        <article class="dashboard-stat-card @GetStatTone(failedRunnerCount, warnWhenPositive: true)">
+            <span class="dashboard-stat-icon"><i class="bi bi-lightning-charge"></i></span>
+            <div>
+                <span class="dashboard-stat-label">Runner activity</span>
+                <strong>@activeRunnerCount</strong>
+                <small>@dynamicRunnerCount dynamic · @failedRunnerCount failed/crashed</small>
+            </div>
+        </article>
+
+        <article class="dashboard-stat-card @GetStatTone(updateAvailableCount, warnWhenPositive: true)">
+            <span class="dashboard-stat-icon"><i class="bi bi-arrow-up-circle"></i></span>
+            <div>
+                <span class="dashboard-stat-label">Host updates</span>
+                <strong>@updateAvailableCount</strong>
+                <small>@runningTaskCount active task@(runningTaskCount == 1 ? "" : "s") · @profileCount profiles</small>
+            </div>
+        </article>
+    </section>
+
+    <section class="dashboard-card dashboard-attention-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-exclamation-diamond"></i> Attention needed</h2>
+                <p>Items that may require operator action instead of passive monitoring.</p>
+            </div>
+            <span class="badge @(attentionItems.Any() ? "bg-warning" : "bg-success")">@attentionItems.Count</span>
+        </div>
+
+        @if (!attentionItems.Any())
+        {
+            <div class="dashboard-empty-state">
+                <i class="bi bi-check-circle"></i>
+                <strong>No immediate blockers</strong>
+                <span>Hosts, queues, updates, and runner lifecycle checks look healthy.</span>
+            </div>
+        }
+        else
+        {
+            <div class="dashboard-attention-list">
+                @foreach (var item in attentionItems.Take(8))
+                {
+                    <a class="dashboard-attention-item @item.Tone" href="@item.Href">
+                        <span class="dashboard-attention-icon"><i class="bi @item.Icon"></i></span>
+                        <span>
+                            <strong>@item.Title</strong>
+                            <small>@item.Detail</small>
+                        </span>
+                    </a>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="dashboard-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-play-circle"></i> Active work</h2>
+                <p>Long-running pulls and background work currently visible to the server.</p>
+            </div>
+            <span class="badge bg-primary">@runningTaskCount</span>
+        </div>
+
+        @if (!runningTasks.Any())
+        {
+            <div class="dashboard-empty-state">
+                <i class="bi bi-inbox"></i>
+                <strong>No active tasks</strong>
+                <span>Image pulls and background operations will appear here while they run.</span>
+            </div>
+        }
+        else
+        {
+            <div class="dashboard-task-list">
+                @foreach (var task in runningTasks.Take(5))
+                {
+                    <div class="dashboard-task-card">
+                        <div class="dashboard-task-heading">
+                            <span><i class="bi @GetTaskIcon(task.Kind)"></i> @task.Title</span>
+                            <small>@FormatRelative(task.UpdatedAt)</small>
                         </div>
-                    </td>
-                    <td>@(host.LastHeartbeat?.ToString("HH:mm:ss") ?? "—")</td>
-                </tr>
-            }
-        </tbody>
-    </table>
-    </div>
-}
+                        <div class="progress dashboard-progress" role="progressbar" aria-valuenow="@Math.Round(task.ProgressPercent)" aria-valuemin="0" aria-valuemax="100">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: @Math.Clamp(task.ProgressPercent, 0, 100)%"></div>
+                        </div>
+                        <div class="dashboard-task-meta">
+                            <span>@task.StatusText</span>
+                            <span>@ResolveHostLabel(task.HostId ?? task.Location)</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="dashboard-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-hourglass-bottom"></i> Queue risk</h2>
+                <p>Queued webhook jobs that are waiting on capacity, configuration, or host matching.</p>
+            </div>
+            <a class="btn btn-outline-secondary btn-sm" href="/webhook-events">View events</a>
+        </div>
+
+        @if (!queuedEvents.Any())
+        {
+            <div class="dashboard-empty-state">
+                <i class="bi bi-check2-circle"></i>
+                <strong>No queued webhook jobs</strong>
+                <span>Dynamic provisioning has no open queue pressure right now.</span>
+            </div>
+        }
+        else
+        {
+            <div class="dashboard-mini-list">
+                @foreach (var evt in queuedEvents.Take(6))
+                {
+                    <div class="dashboard-mini-row @GetQueueTone(evt)">
+                        <span class="dashboard-mini-icon"><i class="bi @GetQueueIcon(evt)"></i></span>
+                        <span>
+                            <strong>@(string.IsNullOrWhiteSpace(evt.Repository) ? "Unknown repository" : evt.Repository)</strong>
+                            <small>@GetQueueSummary(evt)</small>
+                        </span>
+                        <span class="badge bg-secondary">@evt.Status</span>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="dashboard-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-arrow-up-circle"></i> Host updates</h2>
+                <p>HostWorkers with available updates or update activity.</p>
+            </div>
+            <a class="btn btn-outline-secondary btn-sm" href="/hosts">Manage</a>
+        </div>
+
+        @if (!hostsWithUpdates.Any())
+        {
+            <div class="dashboard-empty-state">
+                <i class="bi bi-shield-check"></i>
+                <strong>Hosts are current</strong>
+                <span>No HostWorker update availability has been reported.</span>
+            </div>
+        }
+        else
+        {
+            <div class="dashboard-mini-list">
+                @foreach (var host in hostsWithUpdates.Take(6))
+                {
+                    <div class="dashboard-mini-row warn">
+                        <span class="dashboard-mini-icon"><i class="bi bi-arrow-up-circle"></i></span>
+                        <span>
+                            <strong>@host.Label</strong>
+                            <small>@GetUpdateSummary(host)</small>
+                        </span>
+                        <span class="badge bg-warning">Update</span>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="dashboard-card dashboard-system-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-diagram-3"></i> Control plane</h2>
+                <p>Core server services and configuration counts.</p>
+            </div>
+        </div>
+        <div class="dashboard-system-grid">
+            <div>
+                <span class="badge bg-success">Active</span>
+                <strong>Orleans silo</strong>
+                <small><a href="/orleans" target="_blank"><i class="bi bi-box-arrow-up-right"></i> Open dashboard</a></small>
+            </div>
+            <div>
+                <span class="badge bg-success">PostgreSQL</span>
+                <strong>Persistence</strong>
+                <small>Grain state + DocumentDB</small>
+            </div>
+            <div>
+                <span class="badge bg-secondary">@envVarSetCount</span>
+                <strong>Env var sets</strong>
+                <small>@profileCount runner profiles configured</small>
+            </div>
+        </div>
+    </section>
+</div>
 
 @code {
-    private int connectedHostCount;
-    private int runningInstanceCount;
+    private int totalHostCount;
+    private int onlineHostCount;
+    private int disconnectedExpectedCount;
+    private int staleHostCount;
+    private int updateAvailableCount;
+    private int activeRunnerCount;
+    private int failedRunnerCount;
     private int profileCount;
     private int envVarSetCount;
     private int dynamicRunnerCount;
     private int recentWebhookEventCount;
-    private List<RunnerRunner.Core.Models.Host> hosts = [];
-    private List<RunnerRunner.Core.Models.RunnerAssignment> assignments = [];
-    private Dictionary<string, string> profileNames = new();
+    private int queuedJobCount;
+    private int stuckJobCount;
+    private int runningTaskCount;
 
-    [Inject] IDocumentStore Store { get; set; } = default!;
+    private List<RunnerHost> hosts = [];
+    private List<RunnerInstance> runnerInstances = [];
+    private List<WebhookEvent> webhookEvents = [];
+    private IReadOnlyList<LongRunningTaskInfo> taskSnapshot = [];
+    private List<LongRunningTaskInfo> runningTasks = [];
+    private List<WebhookEvent> queuedEvents = [];
+    private List<RunnerHost> hostsWithUpdates = [];
+    private List<DashboardAttentionItem> attentionItems = [];
 
     protected override async Task OnInitializedAsync()
     {
         await LoadData();
         StreamSubscriptionService.OnRunnerStatusChanged += OnStreamRunnerStatusChanged;
         StreamSubscriptionService.OnHostStatusChanged += OnStreamHostStatusChanged;
+        Tasks.OnChanged += OnTasksChanged;
     }
 
     private void OnStreamRunnerStatusChanged(RunnerStatusChangedEvent evt)
@@ -164,51 +287,250 @@ else
         InvokeAsync(async () => { await LoadData(); StateHasChanged(); });
     }
 
+    private void OnTasksChanged()
+    {
+        InvokeAsync(async () => { await LoadData(); StateHasChanged(); });
+    }
+
     public void Dispose()
     {
         StreamSubscriptionService.OnRunnerStatusChanged -= OnStreamRunnerStatusChanged;
         StreamSubscriptionService.OnHostStatusChanged -= OnStreamHostStatusChanged;
+        Tasks.OnChanged -= OnTasksChanged;
     }
 
     private async Task LoadData()
     {
-        hosts = (await Store.Query<RunnerRunner.Core.Models.Host>().ToList()).ToList();
-        connectedHostCount = hosts.Count(h => h.AgentStatus == RunnerRunner.Core.Models.AgentStatus.Online);
+        var now = DateTime.UtcNow;
 
-        var profiles = (await Store.Query<RunnerRunner.Core.Models.RunnerProfile>().ToList()).ToList();
+        hosts = (await Store.Query<RunnerHost>().ToList()).OrderBy(h => h.Label, StringComparer.OrdinalIgnoreCase).ToList();
+        runnerInstances = (await Store.Query<RunnerInstance>().ToList()).ToList();
+        webhookEvents = (await Store.Query<WebhookEvent>().ToList()).ToList();
+        var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+
+        totalHostCount = hosts.Count;
+        onlineHostCount = hosts.Count(h => h.AgentStatus == AgentStatus.Online);
+        disconnectedExpectedCount = hosts.Count(h => h.IsApproved && h.AgentStatus != AgentStatus.Online);
+        staleHostCount = hosts.Count(h => h.AgentStatus == AgentStatus.Online && IsStaleHeartbeat(h.LastHeartbeat, now));
+        hostsWithUpdates = hosts.Where(HasUpdateAvailable).ToList();
+        updateAvailableCount = hostsWithUpdates.Count;
+
         profileCount = profiles.Count;
-        profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
-        envVarSetCount = (await Store.Query<RunnerRunner.Core.Models.EnvironmentVariableSet>().ToList()).Count;
-        assignments = (await Store.Query<RunnerRunner.Core.Models.RunnerAssignment>().ToList()).ToList();
+        envVarSetCount = (await Store.Query<EnvironmentVariableSet>().ToList()).Count;
 
-        var allInstances = (await Store.Query<RunnerRunner.Core.Models.RunnerInstance>().ToList()).ToList();
-
-        runningInstanceCount = allInstances.Count(i =>
-            i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Running
-            || i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Starting);
-
-        dynamicRunnerCount = allInstances.Count(i =>
+        activeRunnerCount = runnerInstances.Count(i => i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting);
+        failedRunnerCount = runnerInstances.Count(i => i.Status is RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed);
+        dynamicRunnerCount = runnerInstances.Count(i =>
             i.ProvisioningMode == "dynamic"
-            && (i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Running
-                || i.Status == RunnerRunner.Core.Models.RunnerInstanceStatus.Starting));
+            && i.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting);
 
-        var oneHourAgo = DateTime.UtcNow.AddHours(-1);
-        recentWebhookEventCount = (await Store.Query<RunnerRunner.Core.Models.WebhookEvent>().ToList())
-            .Count(e => e.ReceivedAt > oneHourAgo);
+        var oneHourAgo = now.AddHours(-1);
+        recentWebhookEventCount = webhookEvents.Count(e => e.ReceivedAt > oneHourAgo);
+        queuedEvents = webhookEvents
+            .Where(IsOpenQueuedEvent)
+            .OrderByDescending(IsQueueRisk)
+            .ThenBy(e => e.ReceivedAt)
+            .ToList();
+        queuedJobCount = queuedEvents.Count;
+        stuckJobCount = queuedEvents.Count(IsQueueRisk);
+
+        taskSnapshot = Tasks.GetSnapshot();
+        runningTasks = taskSnapshot
+            .Where(t => t.Status == LongRunningTaskStatus.Running)
+            .OrderBy(t => t.StartedAt)
+            .ToList();
+        runningTaskCount = runningTasks.Count;
+
+        attentionItems = BuildAttentionItems(now);
     }
 
-    private string GetPlatformIcon(RunnerRunner.Core.Models.HostPlatform platform) => platform switch
+    private List<DashboardAttentionItem> BuildAttentionItems(DateTime now)
     {
-        RunnerRunner.Core.Models.HostPlatform.Linux => "bi-ubuntu",
-        RunnerRunner.Core.Models.HostPlatform.MacOS => "bi-apple",
-        RunnerRunner.Core.Models.HostPlatform.Windows => "bi-windows",
-        _ => "bi-pc-display"
+        var items = new List<DashboardAttentionItem>();
+
+        items.AddRange(hosts
+            .Where(h => h.IsApproved && h.AgentStatus != AgentStatus.Online)
+            .OrderBy(h => h.LastHeartbeat ?? DateTime.MinValue)
+            .Take(4)
+            .Select(h => new DashboardAttentionItem(
+                "Host disconnected",
+                $"{h.Label} expected online · last heartbeat {FormatRelative(h.LastHeartbeat)}",
+                "bi-plug-fill",
+                "danger",
+                "/hosts")));
+
+        items.AddRange(hosts
+            .Where(h => h.AgentStatus == AgentStatus.Online && IsStaleHeartbeat(h.LastHeartbeat, now))
+            .OrderBy(h => h.LastHeartbeat ?? DateTime.MinValue)
+            .Take(3)
+            .Select(h => new DashboardAttentionItem(
+                "Heartbeat stale",
+                $"{h.Label} last checked in {FormatRelative(h.LastHeartbeat)}",
+                "bi-heart-pulse-fill",
+                "warn",
+                "/hosts")));
+
+        items.AddRange(hostsWithUpdates
+            .Take(4)
+            .Select(h => new DashboardAttentionItem(
+                "HostWorker update available",
+                GetUpdateSummary(h),
+                "bi-arrow-up-circle-fill",
+                "info",
+                "/hosts")));
+
+        items.AddRange(queuedEvents
+            .Where(IsQueueRisk)
+            .Take(5)
+            .Select(e => new DashboardAttentionItem(
+                "Webhook queue may be blocked",
+                GetQueueSummary(e),
+                GetQueueIcon(e),
+                "warn",
+                "/webhook-events")));
+
+        items.AddRange(runnerInstances
+            .Where(i => i.Status is RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)
+            .OrderByDescending(i => i.StoppedAt ?? i.CreatedAt)
+            .Take(4)
+            .Select(i => new DashboardAttentionItem(
+                "Runner failed",
+                $"{i.RunnerName} · {FirstNonEmpty(i.ErrorMessage, i.StatusMessage, i.Status.ToString())}",
+                "bi-exclamation-octagon-fill",
+                "danger",
+                "/runners")));
+
+        items.AddRange(runningTasks
+            .Where(t => DateTimeOffset.UtcNow - t.StartedAt > TimeSpan.FromMinutes(20))
+            .Take(3)
+            .Select(t => new DashboardAttentionItem(
+                "Long task still running",
+                $"{t.Title} · {ResolveHostLabel(t.HostId ?? t.Location)} · started {FormatRelative(t.StartedAt)}",
+                GetTaskIcon(t.Kind),
+                "info",
+                "/logs")));
+
+        return items
+            .GroupBy(i => $"{i.Title}|{i.Detail}", StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .Take(12)
+            .ToList();
+    }
+
+    private static bool IsStaleHeartbeat(DateTime? heartbeat, DateTime now) =>
+        !heartbeat.HasValue || now - heartbeat.Value > TimeSpan.FromMinutes(5);
+
+    private static bool HasUpdateAvailable(RunnerHost host)
+    {
+        if (!string.IsNullOrWhiteSpace(host.LatestAvailableVersion)
+            && !string.Equals(host.LatestAvailableVersion, host.AgentVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return host.UpdateStatus?.Contains("available", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static bool IsOpenQueuedEvent(WebhookEvent evt) =>
+        evt.Action == "queued"
+        && !evt.IsTerminal
+        && evt.Status is not "provisioned";
+
+    private static bool IsQueueRisk(WebhookEvent evt)
+    {
+        if (!IsOpenQueuedEvent(evt))
+            return false;
+
+        var age = DateTime.UtcNow - evt.ReceivedAt;
+        return evt.Status is "pending_host_match" or "pending_config" or "no_match"
+            || evt.RetryCount >= 2
+            || !string.IsNullOrWhiteSpace(evt.Error)
+            || age > TimeSpan.FromMinutes(10);
+    }
+
+    private static string GetQueueIcon(WebhookEvent evt) => evt.Status switch
+    {
+        "pending_host_match" or "no_match" => "bi-bullseye",
+        "pending_config" => "bi-sliders",
+        "pending_capacity" => "bi-speedometer2",
+        "pending_fifo" => "bi-list-ol",
+        _ => "bi-hourglass-split"
     };
 
-    private string GetStatusBadge(RunnerRunner.Core.Models.AgentStatus status) => status switch
+    private static string GetQueueTone(WebhookEvent evt) => IsQueueRisk(evt) ? "warn" : "info";
+
+    private static string GetQueueSummary(WebhookEvent evt)
     {
-        RunnerRunner.Core.Models.AgentStatus.Online => "bg-success",
-        RunnerRunner.Core.Models.AgentStatus.Connecting => "bg-warning",
-        _ => "bg-secondary"
+        var labels = evt.Labels.Count == 0 ? "no labels" : string.Join(", ", evt.Labels.Take(4));
+        var reason = FirstNonEmpty(evt.Error, evt.MatchedProfileName, evt.Status);
+        return $"{evt.WorkflowName} · {labels} · {reason} · queued {FormatRelative(evt.ReceivedAt)}";
+    }
+
+    private string ResolveHostLabel(string? hostId)
+    {
+        if (string.IsNullOrWhiteSpace(hostId))
+            return "Unknown host";
+
+        return hosts.FirstOrDefault(h => string.Equals(h.Id, hostId, StringComparison.OrdinalIgnoreCase))?.Label
+            ?? hosts.FirstOrDefault(h => string.Equals(h.Name, hostId, StringComparison.OrdinalIgnoreCase))?.Label
+            ?? hostId;
+    }
+
+    private static string GetUpdateSummary(RunnerHost host)
+    {
+        var current = string.IsNullOrWhiteSpace(host.AgentVersion) ? "unknown" : host.AgentVersion;
+        var latest = string.IsNullOrWhiteSpace(host.LatestAvailableVersion) ? "available" : host.LatestAvailableVersion;
+        return $"{host.Label} · {current} -> {latest}{(string.IsNullOrWhiteSpace(host.UpdateMessage) ? "" : $" · {host.UpdateMessage}")}";
+    }
+
+    private static string GetTaskIcon(LongRunningTaskKind kind) => kind switch
+    {
+        LongRunningTaskKind.ImagePull => "bi-cloud-arrow-down",
+        LongRunningTaskKind.HostWorkerUpdate => "bi-arrow-up-circle",
+        LongRunningTaskKind.RunnerDeployment => "bi-rocket-takeoff",
+        LongRunningTaskKind.RunnerTeardown => "bi-stop-circle",
+        LongRunningTaskKind.TartVmSetup => "bi-apple",
+        LongRunningTaskKind.Cleanup => "bi-trash3",
+        _ => "bi-gear-wide-connected"
     };
+
+    private static string GetStatTone(int count, bool warnWhenPositive) =>
+        warnWhenPositive && count > 0 ? "warn" : "good";
+
+    private static string FormatRelative(DateTime? value) =>
+        value.HasValue ? FormatRelative(value.Value) : "never";
+
+    private static string FormatRelative(DateTime value)
+    {
+        var delta = DateTime.UtcNow - value.ToUniversalTime();
+        if (delta < TimeSpan.Zero)
+            delta = TimeSpan.Zero;
+
+        if (delta < TimeSpan.FromMinutes(1)) return "just now";
+        if (delta < TimeSpan.FromHours(1)) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta < TimeSpan.FromDays(1)) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+
+    private static string FormatRelative(DateTimeOffset value)
+    {
+        var delta = DateTimeOffset.UtcNow - value.ToUniversalTime();
+        if (delta < TimeSpan.Zero)
+            delta = TimeSpan.Zero;
+
+        if (delta < TimeSpan.FromMinutes(1)) return "just now";
+        if (delta < TimeSpan.FromHours(1)) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta < TimeSpan.FromDays(1)) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? "No details";
+
+    private sealed record DashboardAttentionItem(
+        string Title,
+        string Detail,
+        string Icon,
+        string Tone,
+        string Href);
 }

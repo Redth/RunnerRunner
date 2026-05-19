@@ -89,15 +89,15 @@ else
     <table class="table table-striped resizable-table">
         <thead>
             <tr>
-                <th style="width:2rem;"></th>
-                <th role="button" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
-                <th role="button" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner / Job @SortIndicator("RunnerName")</th>
-                <th role="button" @onclick='() => SetSort("Mode")' style="cursor:pointer; user-select:none;">Mode @SortIndicator("Mode")</th>
-                <th role="button" @onclick='() => SetSort("Rule")' style="cursor:pointer; user-select:none;">Provisioning Rule @SortIndicator("Rule")</th>
-                <th role="button" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
-                <th role="button" @onclick='() => SetSort("Host")' style="cursor:pointer; user-select:none;">Host @SortIndicator("Host")</th>
-                <th role="button" @onclick='() => SetSort("Created")' style="cursor:pointer; user-select:none;">Created @SortIndicator("Created")</th>
-                <th role="button" @onclick='() => SetSort("Duration")' style="cursor:pointer; user-select:none;">Duration @SortIndicator("Duration")</th>
+                <th data-col-kind="control" data-col-min="34" data-col-preferred="38"></th>
+                <th role="button" data-col-kind="description" data-col-min="220" data-col-preferred="320" data-col-priority="2" data-col-weight="1.7" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
+                <th role="button" data-col-kind="name" data-col-min="180" data-col-preferred="260" data-col-weight="3.5" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner / Job @SortIndicator("RunnerName")</th>
+                <th role="button" data-col-kind="compact" data-col-min="76" data-col-preferred="96" data-col-priority="2" @onclick='() => SetSort("Mode")' style="cursor:pointer; user-select:none;">Mode @SortIndicator("Mode")</th>
+                <th role="button" data-col-kind="related" data-col-min="120" data-col-preferred="160" data-col-priority="4" @onclick='() => SetSort("Rule")' style="cursor:pointer; user-select:none;">Provisioning Rule @SortIndicator("Rule")</th>
+                <th role="button" data-col-kind="related" data-col-min="112" data-col-preferred="150" data-col-priority="4" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
+                <th role="button" data-col-kind="related" data-col-min="110" data-col-preferred="142" data-col-priority="4" @onclick='() => SetSort("Host")' style="cursor:pointer; user-select:none;">Host @SortIndicator("Host")</th>
+                <th role="button" data-col-kind="time" data-col-min="108" data-col-preferred="130" data-col-priority="3" @onclick='() => SetSort("Created")' style="cursor:pointer; user-select:none;">Created @SortIndicator("Created")</th>
+                <th role="button" data-col-kind="compact" data-col-min="82" data-col-preferred="104" data-col-priority="3" @onclick='() => SetSort("Duration")' style="cursor:pointer; user-select:none;">Duration @SortIndicator("Duration")</th>
             </tr>
         </thead>
         <tbody>
@@ -107,25 +107,61 @@ else
                 <tr class="job-row" role="button" @onclick="() => ToggleRow(job.Id)" style="cursor:pointer;">
                     <td><i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i></td>
                     <td>
-                        <span class="badge @job.StatusBadge">@job.StatusLabel</span>
-                        @if (!string.IsNullOrEmpty(job.Error))
-                        {
-                            <i class="bi bi-exclamation-triangle-fill text-danger ms-1" title="@job.Error"></i>
+                        @{
+                            var insight = GetJobEventInsight(job);
+                            var statusSummary = GetJobStatusSummary(job);
+                            var metaItems = GetJobStatusMeta(job).ToList();
                         }
+                        <div class="event-status-card @GetJobStatusToneClass(job)">
+                            <div class="event-status-heading">
+                                <span class="badge @job.StatusBadge">@GetJobStatusLabel(job)</span>
+                                @if (insight is not null && insight.BlockedBy != CapacityBlockerKind.None)
+                                {
+                                    <span class="event-blocker-pill @GetLimitToneClass(insight.BlockedBy)" title="@GetInsightTitle(insight)">
+                                        <i class="bi @GetLimitIcon(insight.BlockedBy)"></i>@GetLimitLabel(insight.BlockedBy)
+                                    </span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(statusSummary))
+                            {
+                                <span class="event-status-summary" title="@statusSummary">@statusSummary</span>
+                            }
+                            @if (metaItems.Any())
+                            {
+                                <div class="event-status-meta">
+                                    @foreach (var item in metaItems)
+                                    {
+                                        <span title="@item.Title">
+                                            <i class="bi @item.Icon"></i>@item.Text
+                                        </span>
+                                    }
+                                </div>
+                            }
+                        </div>
                     </td>
-                    <td>
+                    <td class="name-cell">
                         @if (!string.IsNullOrEmpty(job.RunnerName))
                         {
-                            <span>@job.RunnerName</span>
+                            <span class="primary-label">@job.RunnerName</span>
+                        }
+                        else if (!string.IsNullOrEmpty(job.JobId))
+                        {
+                            <span class="primary-label">Job @job.JobId</span>
+                        }
+                        else
+                        {
+                            <span class="primary-label">Pending runner</span>
                         }
                         @if (!string.IsNullOrEmpty(job.JobId))
                         {
-                            @if (!string.IsNullOrEmpty(job.RunnerName)) { <br/> }
-                            <small class="text-muted">Job: @job.JobId</small>
+                            @if (!string.IsNullOrEmpty(job.RunnerName))
+                            {
+                                <small class="secondary-label">Job: @job.JobId</small>
+                            }
                         }
                         @if (!string.IsNullOrEmpty(job.Repository))
                         {
-                            <br/><small class="text-muted">@job.Repository</small>
+                            <small class="secondary-label">@job.Repository</small>
                         }
                     </td>
                     <td><span class="badge @(job.Mode == "dynamic" ? "bg-warning text-dark" : "bg-secondary")">@(job.Mode == "dynamic" ? "Dynamic" : "Static")</span></td>
@@ -436,6 +472,8 @@ else
     private Dictionary<string, string> profileNames = new();
     private Dictionary<string, RunnerProfile> profilesById = new();
     private Dictionary<string, string> ruleNames = new();
+    private List<WebhookEvent> allWebhookEvents = [];
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
 
     private string searchText = "";
     private string filterStatus = "active";
@@ -456,6 +494,7 @@ else
     private int logTailLines = 200;
     private JobView? logModalJob;
     private TaskCompletionSource<string>? _runnerLogsTcs;
+    private sealed record JobStatusMeta(string Icon, string Text, string Title);
 
     // Auto-refresh timer for queued webhook events
     private PeriodicTimer? _refreshTimer;
@@ -509,12 +548,13 @@ else
         allHosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         var rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
-        var allWebhookEvents = (await Store.Query<WebhookEvent>().ToList()).ToList();
+        allWebhookEvents = (await Store.Query<WebhookEvent>().ToList()).ToList();
 
         hostNames = allHosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         profilesById = profiles.ToDictionary(p => p.Id, p => p);
         ruleNames = rules.ToDictionary(r => r.Id, r => r.Name);
+        capacitySnapshot = CapacityPlanningService.BuildSnapshot(allHosts, profiles, rules, managedInstances, allWebhookEvents);
 
         // Index webhook events by ID
         var webhookEventsById = allWebhookEvents.ToDictionary(e => e.Id);
@@ -795,11 +835,206 @@ else
         "matching" or "preparing" or "dispatching" => "bg-info",
         "timed_out" => "bg-danger",
         "rejected" => "bg-danger",
-        "no_match" => "bg-danger",
         "ignored" => "bg-dark",
-        _ when status.StartsWith("pending") => "bg-warning text-dark",
+        "no_match" => "bg-warning text-dark",
+        _ when status.StartsWith("pending", StringComparison.OrdinalIgnoreCase) => "bg-warning text-dark",
         _ => "bg-secondary"
     };
+
+    private static string GetWebhookStatusLabel(string status) => status switch
+    {
+        "pending_fifo" => "Queued (FIFO)",
+        "pending_capacity" => "Waiting capacity",
+        "pending_host_match" => "Waiting host",
+        "pending_config" => "Waiting config",
+        "matching" => "Matching",
+        "preparing" => "Preparing",
+        "dispatching" => "Dispatching",
+        "provisioned" => "Provisioned",
+        "in_progress" => "Job running",
+        "no_match" => "No match",
+        _ => status
+    };
+
+    private static bool IsQueuedWait(WebhookEvent evt) =>
+        evt.Action == "queued"
+        && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match";
+
+    private string GetJobStatusLabel(JobView job)
+    {
+        if (job.Instance is not null)
+            return job.Instance.Status.ToString();
+
+        return job.WebhookEvent is null
+            ? job.StatusLabel
+            : GetWebhookStatusLabel(job.WebhookEvent.Status);
+    }
+
+    private EventCapacityView? GetJobEventInsight(JobView job) =>
+        job.WebhookEvent is { } evt
+        && IsQueuedWait(evt)
+        && capacitySnapshot.Events.TryGetValue(evt.Id, out var insight)
+            ? insight
+            : null;
+
+    private string? GetJobStatusSummary(JobView job)
+    {
+        if (!string.IsNullOrWhiteSpace(job.Error))
+            return job.Error;
+
+        if (job.Instance is { } instance)
+        {
+            if (!string.IsNullOrWhiteSpace(instance.ErrorMessage))
+                return instance.ErrorMessage;
+            if (!string.IsNullOrWhiteSpace(instance.StatusMessage))
+                return instance.StatusMessage;
+
+            return instance.Status switch
+            {
+                RunnerInstanceStatus.Pending => "Runner is waiting for provisioning.",
+                RunnerInstanceStatus.Starting => $"Runner is starting on {job.HostName}.",
+                RunnerInstanceStatus.Running => $"Runner is active on {job.HostName}.",
+                RunnerInstanceStatus.Stopping => "Runner is shutting down.",
+                RunnerInstanceStatus.Stopped => "Runner stopped.",
+                RunnerInstanceStatus.Failed => "Runner failed.",
+                RunnerInstanceStatus.Crashed => "Runner crashed.",
+                _ => null
+            };
+        }
+
+        if (job.WebhookEvent is not { } evt)
+            return null;
+
+        var insight = GetJobEventInsight(job);
+        if (!string.IsNullOrWhiteSpace(insight?.Summary))
+            return insight.Summary;
+
+        return evt.Status switch
+        {
+            "provisioned" when !string.IsNullOrWhiteSpace(evt.InstanceId) => $"Runner {evt.InstanceId[..Math.Min(8, evt.InstanceId.Length)]} created.",
+            "in_progress" => "Workflow job is running on a matched runner.",
+            "completed" => "Workflow job completed.",
+            "ignored" => "Event ignored by the provisioning pipeline.",
+            _ => null
+        };
+    }
+
+    private IEnumerable<JobStatusMeta> GetJobStatusMeta(JobView job)
+    {
+        if (job.WebhookEvent is { } evt)
+        {
+            if (IsQueuedWait(evt))
+            {
+                var queuePosition = GetQueuePosition(evt);
+                if (queuePosition.HasValue)
+                    yield return new("bi-list-ol", $"#{queuePosition.Value}", $"Queue position #{queuePosition.Value}");
+
+                yield return new("bi-clock", evt.ReceivedAt.ToLocalTime().ToString("t"), $"Waiting since {evt.ReceivedAt.ToLocalTime():f}");
+            }
+
+            if (evt.RetryCount > 0)
+                yield return new("bi-arrow-repeat", evt.RetryCount.ToString(), $"{evt.RetryCount} provisioning attempt(s)");
+
+            if (evt.NextRetryAt.HasValue && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "provisioned")
+                yield return new("bi-skip-forward", evt.NextRetryAt.Value.ToLocalTime().ToString("t"), $"Next check at {evt.NextRetryAt.Value.ToLocalTime():f}");
+
+            yield break;
+        }
+
+        if (job.Instance is not { } instance)
+            yield break;
+
+        if (instance.StartedAt.HasValue)
+            yield return new("bi-play-circle", instance.StartedAt.Value.ToLocalTime().ToString("t"), $"Started at {instance.StartedAt.Value.ToLocalTime():f}");
+        else if (instance.DeployedAt.HasValue)
+            yield return new("bi-box-arrow-in-down", instance.DeployedAt.Value.ToLocalTime().ToString("t"), $"Deployed at {instance.DeployedAt.Value.ToLocalTime():f}");
+        else
+            yield return new("bi-clock", instance.CreatedAt.ToLocalTime().ToString("t"), $"Created at {instance.CreatedAt.ToLocalTime():f}");
+
+        if (instance.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting or RunnerInstanceStatus.Stopping)
+            yield return new("bi-stopwatch", job.FormattedDuration, $"Running for {job.FormattedDuration}");
+    }
+
+    private static string GetJobStatusToneClass(JobView job)
+    {
+        if (job.Instance is { } instance)
+        {
+            return instance.Status switch
+            {
+                RunnerInstanceStatus.Running or RunnerInstanceStatus.Stopped => "event-status-good",
+                RunnerInstanceStatus.Starting or RunnerInstanceStatus.Pending or RunnerInstanceStatus.Stopping => "event-status-info",
+                RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed => "event-status-danger",
+                _ => ""
+            };
+        }
+
+        return job.WebhookEvent?.Status switch
+        {
+            "provisioned" or "completed" => "event-status-good",
+            "matching" or "preparing" or "dispatching" or "in_progress" => "event-status-info",
+            "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "event-status-warn",
+            "error" or "rejected" or "timed_out" => "event-status-danger",
+            "ignored" => "event-status-muted",
+            _ => ""
+        };
+    }
+
+    private int? GetQueuePosition(WebhookEvent evt)
+    {
+        if (!IsQueuedWait(evt))
+            return null;
+
+        var orderedQueue = allWebhookEvents
+            .Where(IsQueuedWait)
+            .OrderBy(e => e.ReceivedAt)
+            .ThenBy(e => e.Id)
+            .Select((e, index) => new { e.Id, Position = index + 1 })
+            .FirstOrDefault(e => e.Id == evt.Id);
+
+        return orderedQueue?.Position;
+    }
+
+    private static string GetLimitToneClass(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "event-blocker-neutral",
+        CapacityBlockerKind.ProvisioningRule => "event-blocker-warn",
+        CapacityBlockerKind.Profile => "event-blocker-info",
+        CapacityBlockerKind.Host => "event-blocker-danger",
+        CapacityBlockerKind.Matching => "event-blocker-dark",
+        CapacityBlockerKind.Configuration => "event-blocker-neutral",
+        _ => "event-blocker-neutral"
+    };
+
+    private static string GetLimitIcon(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "bi-signpost-split",
+        CapacityBlockerKind.ProvisioningRule => "bi-diagram-3",
+        CapacityBlockerKind.Profile => "bi-person-badge",
+        CapacityBlockerKind.Host => "bi-hdd-network",
+        CapacityBlockerKind.Matching => "bi-filter-circle",
+        CapacityBlockerKind.Configuration => "bi-gear",
+        _ => "bi-check-circle"
+    };
+
+    private static string GetLimitLabel(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "FIFO",
+        CapacityBlockerKind.ProvisioningRule => "Rule",
+        CapacityBlockerKind.Profile => "Profile",
+        CapacityBlockerKind.Host => "Host",
+        CapacityBlockerKind.Matching => "Match",
+        CapacityBlockerKind.Configuration => "Config",
+        _ => "Ready"
+    };
+
+    private static string GetInsightTitle(EventCapacityView insight)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(insight.Summary))
+            parts.Add(insight.Summary);
+        parts.AddRange(insight.Details);
+        return string.Join(" · ", parts);
+    }
 
     /// <summary>Unified view model for the jobs table.</summary>
     private class JobView

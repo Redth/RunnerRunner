@@ -17,66 +17,124 @@
     </div>
 </SectionContent>
 
-<div class="split-pane-container d-flex" style="height: calc(100vh - 120px);">
-    @* Left sidebar *@
-    <div id="images-sidebar" class="split-pane-sidebar d-flex flex-column" style="width: 260px; min-width: 180px; max-width: 500px; overflow-y: auto;">
-        <div class="sidebar-section-header">
-            <i class="bi bi-pc-display me-1"></i> Hosts
-            <span class="badge bg-secondary ms-auto">@hosts.Count</span>
+<div class="images-workspace logs-workspace @(hostPanelCollapsed ? "sources-collapsed" : "sources-expanded")">
+    <aside id="images-sidebar" class="logs-source-panel images-host-panel" aria-label="Image hosts">
+        <div class="logs-source-panel-header">
+            <span><i class="bi bi-pc-display"></i> Hosts</span>
+            <button type="button" class="icon-btn" @onclick="ToggleHostPanel" aria-label="Collapse image hosts" title="Collapse hosts" aria-controls="images-sidebar" aria-expanded="@(!hostPanelCollapsed)">
+                <i class="bi bi-layout-sidebar-inset"></i>
+            </button>
         </div>
-        @foreach (var h in hosts)
-        {
-            <div class="image-host-card @(selectedHostId == h.Id ? "active" : "")"
-                 @onclick="() => SelectHost(h.Id)">
-                <div class="d-flex align-items-center">
-                    <i class="bi @GetPlatformIcon(h.Platform) me-2"></i>
-                    <span class="text-truncate">@h.Label</span>
-                    <span class="badge ms-auto @GetStatusBadge(h.AgentStatus)" style="font-size: 0.65rem;">@h.AgentStatus</span>
-                </div>
-                @if (!string.IsNullOrWhiteSpace(h.DisplayName))
-                {
-                    <small class="text-muted text-truncate d-block" style="font-size: 0.7rem;">@h.Name</small>
-                }
-            </div>
-        }
-    </div>
 
-    @* Resize handle *@
+        <div class="logs-source-search">
+            <i class="bi bi-search"></i>
+            <input type="search"
+                   class="form-control"
+                   placeholder="Filter hosts..."
+                   aria-label="Filter image hosts"
+                   @bind="hostFilter"
+                   @bind:event="oninput" />
+        </div>
+
+        <div class="logs-source-actions">
+            <button type="button" @onclick="SelectFirstHost">Select first</button>
+            <span aria-hidden="true"></span>
+            <button type="button" @onclick="ClearHostFilter">Clear</button>
+        </div>
+
+        <div class="logs-source-list">
+            @foreach (var group in FilteredHosts.GroupBy(h => h.AgentStatus).OrderBy(g => HostStatusOrder(g.Key)))
+            {
+                <div class="sidebar-section-header">
+                    <span><i class="bi @HostStatusGroupIcon(group.Key)"></i> @HostStatusGroupTitle(group.Key)</span>
+                    <span class="badge bg-secondary">@group.Count()</span>
+                </div>
+                @foreach (var h in group.OrderByDescending(h => h.AgentStatus == AgentStatus.Online).ThenBy(h => h.Label))
+                {
+                    <button type="button"
+                            class="log-source-card image-host-card @(selectedHostId == h.Id ? "active" : "")"
+                            @onclick="() => SelectHost(h.Id)">
+                        <span class="log-source-title">
+                            <i class="bi @GetPlatformIcon(h.Platform)"></i>
+                            <span class="text-truncate">@h.Label</span>
+                            <span class="source-dot @h.AgentStatus.ToString().ToLowerInvariant() ms-auto"></span>
+                        </span>
+                        <small class="text-truncate">@GetHostDescription(h)</small>
+                        <span class="image-host-meta">
+                            <span><i class="bi bi-box-seam"></i>@GetHostImageCount(h.Id, ImageType.Docker)</span>
+                            @if (h.Platform == HostPlatform.MacOS)
+                            {
+                                <span><i class="bi bi-apple"></i>@GetHostImageCount(h.Id, ImageType.Tart)</span>
+                            }
+                        </span>
+                    </button>
+                }
+            }
+        </div>
+    </aside>
+
     <div id="images-resize-handle" class="split-resize-handle"></div>
 
-    @* Right pane *@
-    <div class="split-pane-main flex-grow-1 d-flex flex-column" style="min-width: 0; overflow-y: auto;">
+    @if (hostPanelCollapsed)
+    {
+        <button type="button" class="source-panel-reveal" @onclick="ToggleHostPanel" aria-label="Show image hosts" title="Show hosts" aria-controls="images-sidebar" aria-expanded="false">
+            <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
+            <span>Show hosts</span>
+        </button>
+    }
+
+    <section class="images-main-panel" aria-label="Host images">
         @if (string.IsNullOrEmpty(selectedHostId))
         {
-            <div class="border rounded d-flex flex-column align-items-center justify-content-center flex-grow-1 text-muted" style="background: var(--bg-card, #fff);">
-                <i class="bi bi-arrow-left-circle" style="font-size: 3rem; opacity: 0.4;"></i>
-                <h5 class="mt-3">Select a host</h5>
+            <div class="images-empty-state">
+                <button type="button" class="console-icon-btn mb-3" @onclick="ToggleHostPanel" aria-label="Show image hosts" title="Show hosts" aria-controls="images-sidebar" aria-expanded="@(!hostPanelCollapsed)">
+                    <i class="bi bi-layout-sidebar"></i>
+                </button>
+                <span class="empty-state-icon"><i class="bi bi-box-seam" aria-hidden="true"></i></span>
+                <h3>Select a host</h3>
                 <p>Choose a host from the sidebar to manage its images.</p>
             </div>
         }
         else
         {
-            @* Toolbar *@
-            <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
-                <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages" disabled="@refreshInProgress">
-                    <i class="bi bi-arrow-clockwise"></i> Refresh
-                </button>
-                <button class="btn btn-primary btn-sm" @onclick="OpenPullForm" disabled="@pullInProgress">
-                    <i class="bi bi-cloud-arrow-down"></i> Pull Image
-                </button>
-                @if (!string.IsNullOrWhiteSpace(refreshStatus))
-                {
-                    <span class="small @(refreshStatusIsError ? "text-danger" : refreshInProgress ? "text-muted" : "text-success")">
-                        @if (refreshInProgress)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                        }
-                        @refreshStatus
-                    </span>
-                }
+            var selectedHost = SelectedHost;
+            <div class="images-toolbar">
+                <div class="images-toolbar-title">
+                    <div class="images-toolbar-heading">
+                        <button type="button" class="console-icon-btn" @onclick="ToggleHostPanel" aria-label="Toggle image hosts" title="Toggle hosts" aria-controls="images-sidebar" aria-expanded="@(!hostPanelCollapsed)">
+                            <i class="bi bi-layout-sidebar"></i>
+                        </button>
+                        <span class="source-dot @(selectedHost?.AgentStatus.ToString().ToLowerInvariant() ?? "")" aria-hidden="true"></span>
+                        <strong>@(selectedHost?.Label ?? selectedHostId)</strong>
+                        <span class="logs-console-meta">@dockerImages.Count Docker</span>
+                        <span class="logs-console-meta">@tartImages.Count Tart</span>
+                    </div>
+                    @if (selectedHost is not null)
+                    {
+                        <p>@GetHostDescription(selectedHost)</p>
+                    }
+                </div>
+                <div class="images-toolbar-actions">
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="RefreshImages" disabled="@refreshInProgress">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                    <button class="btn btn-primary btn-sm" @onclick="OpenPullForm" disabled="@pullInProgress">
+                        <i class="bi bi-cloud-arrow-down"></i> Pull Image
+                    </button>
+                </div>
             </div>
 
-            @* Pull progress indicator *@
+            @if (!string.IsNullOrWhiteSpace(refreshStatus))
+            {
+                <div class="images-refresh-status @(refreshStatusIsError ? "text-danger" : refreshInProgress ? "text-muted" : "text-success")">
+                    @if (refreshInProgress)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                    }
+                    @refreshStatus
+                </div>
+            }
+
             @if (showPullStatus)
             {
                 <div class="card mb-3 @PullStatusCardClass">
@@ -97,74 +155,26 @@
                 </div>
             }
 
-            @* Pull form *@
-            @if (showPullForm)
-            {
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <h5>Pull Image</h5>
-                        <div class="row">
-                            <div class="col-md-2 mb-3">
-                                <label class="form-label">Type</label>
-                                <select class="form-select" @bind="pullType">
-                                    <option value="@ImageType.Docker">Docker</option>
-                                    <option value="@ImageType.Tart">Tart</option>
-                                </select>
-                            </div>
-                            <div class="col-md-3 mb-3">
-                                <label class="form-label">Registry</label>
-                                <select class="form-select" @bind="pullRegistryId">
-                                    <option value="">(default / no auth)</option>
-                                    @foreach (var r in registries)
-                                    {
-                                        <option value="@r.Id">@r.Name (@r.RegistryUrl)</option>
-                                    }
-                                </select>
-                            </div>
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Image</label>
-                                <input class="form-control" @bind="pullImage" placeholder="org/image-name" />
-                            </div>
-                            <div class="col-md-2 mb-3">
-                                <label class="form-label">Tag</label>
-                                <input class="form-control" @bind="pullTag" placeholder="latest" />
-                            </div>
-                            <div class="col-md-1 d-flex align-items-end mb-3">
-                                <button class="btn btn-success" @onclick="StartPull"><i class="bi bi-download"></i></button>
-                            </div>
-                        </div>
-                        <button class="btn btn-secondary btn-sm" @onclick="() => showPullForm = false">Cancel</button>
-                    </div>
+            <div class="images-content-card">
+                <div class="images-tabs" role="tablist" aria-label="Image type">
+                    <button type="button" class="@(activeTab == "docker" ? "active" : "")" @onclick="SwitchToDocker" aria-pressed="@(activeTab == "docker")">
+                        <i class="bi bi-box-fill"></i> Docker <span>@dockerImages.Count</span>
+                    </button>
+                    <button type="button" class="@(activeTab == "tart" ? "active" : "")" @onclick="SwitchToTart" aria-pressed="@(activeTab == "tart")">
+                        <i class="bi bi-apple"></i> Tart <span>@tartImages.Count</span>
+                    </button>
                 </div>
-            }
 
-            @* Tabs *@
-            <ul class="nav nav-tabs mb-0">
-                <li class="nav-item">
-                    <button class="nav-link @(activeTab == "docker" ? "active" : "")" @onclick="SwitchToDocker">
-                        <i class="bi bi-box-fill me-1"></i> Docker (@dockerImages.Count)
-                    </button>
-                </li>
-                <li class="nav-item">
-                    <button class="nav-link @(activeTab == "tart" ? "active" : "")" @onclick="SwitchToTart">
-                        <i class="bi bi-display me-1"></i> Tart (@tartImages.Count)
-                    </button>
-                </li>
-            </ul>
-
-            <div class="border border-top-0 rounded-bottom p-3 mb-3">
-                <div class="row mb-2">
-                    <div class="col-md-4">
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text"><i class="bi bi-search"></i></span>
-                            <input type="text" class="form-control" placeholder="Search images…" @bind="searchText" @bind:event="oninput" />
-                            @if (!string.IsNullOrEmpty(searchText))
-                            {
-                                <button class="btn btn-outline-secondary" @onclick="() => searchText = string.Empty">
-                                    <i class="bi bi-x-lg"></i>
-                                </button>
-                            }
-                        </div>
+                <div class="images-filter-row">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="bi bi-search"></i></span>
+                        <input type="text" class="form-control" placeholder="Search images..." @bind="searchText" @bind:event="oninput" />
+                        @if (!string.IsNullOrEmpty(searchText))
+                        {
+                            <button class="btn btn-outline-secondary" @onclick="() => searchText = string.Empty">
+                                <i class="bi bi-x-lg"></i>
+                            </button>
+                        }
                     </div>
                 </div>
 
@@ -172,43 +182,48 @@
 
                 @if (!displayImages.Any())
                 {
-                    <div class="alert alert-secondary mb-0">
+                    <div class="images-empty-state images-empty-state-compact">
+                        <span class="empty-state-icon"><i class="bi bi-box" aria-hidden="true"></i></span>
+                        <h3>No @activeTab images</h3>
+                        <p>
                         @if (!string.IsNullOrEmpty(searchText))
                         {
-                            <text>No @activeTab images matching "<strong>@searchText</strong>".</text>
+                            <text>No images match "<strong>@searchText</strong>" on this host.</text>
                         }
                         else
                         {
-                            <text>No @activeTab images on this host. Use Pull Image to download one.</text>
+                            <text>Use Pull Image to download one to this host.</text>
                         }
+                        </p>
                     </div>
                 }
                 else
                 {
+                    <div class="images-table-wrap">
                     @if (activeTab == "docker")
                     {
                         <div class="table-responsive">
                         <table class="table table-striped resizable-table mb-0">
                             <thead>
                                 <tr>
-                                    <th role="button" @onclick='() => ToggleSort("Repository")'>Repository @SortIndicator("Repository")</th>
-                                    <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
-                                    <th>Image ID</th>
-                                    <th role="button" @onclick='() => ToggleSort("Size")' style="min-width: 100px;">Size @SortIndicator("Size")</th>
-                                    <th role="button" @onclick='() => ToggleSort("Created")' style="min-width: 150px;">Created @SortIndicator("Created")</th>
-                                    <th>Actions</th>
+                                    <th role="button" data-col-kind="name" data-col-min="170" data-col-preferred="260" data-col-weight="3.5" @onclick='() => ToggleSort("Repository")'>Repository @SortIndicator("Repository")</th>
+                                    <th role="button" data-col-kind="compact" data-col-min="82" data-col-preferred="110" data-col-priority="2" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
+                                    <th data-col-kind="optional" data-col-min="108" data-col-preferred="132" data-col-priority="5">Image ID</th>
+                                    <th role="button" data-col-kind="compact" data-col-min="82" data-col-preferred="100" data-col-priority="3" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                                    <th role="button" data-col-kind="time" data-col-min="108" data-col-preferred="132" data-col-priority="4" @onclick='() => ToggleSort("Created")'>Created @SortIndicator("Created")</th>
+                                    <th class="actions-col" data-col-min="92" data-col-preferred="112">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 @foreach (var img in displayImages)
                                 {
                                     <tr>
-                                        <td>@img.Repository</td>
+                                        <td class="name-cell"><span class="primary-label">@img.Repository</span></td>
                                         <td><span class="badge bg-secondary">@img.Tag</span></td>
                                         <td><code>@(img.ImageId?[..Math.Min(12, img.ImageId?.Length ?? 0)])</code></td>
                                         <td>@FormatSize(img.SizeBytes)</td>
                                         <td>@FormatDate(img.ImageCreatedAt)</td>
-                                        <td>
+                                        <td class="actions-cell">
                                             <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndDeleteImage(img)">
                                                 <i class="bi bi-trash3"></i> Delete
                                             </button>
@@ -225,20 +240,20 @@
                         <table class="table table-striped resizable-table mb-0">
                             <thead>
                                 <tr>
-                                    <th role="button" @onclick='() => ToggleSort("Repository")'>Name @SortIndicator("Repository")</th>
-                                    <th role="button" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
-                                    <th role="button" @onclick='() => ToggleSort("Size")' style="min-width: 100px;">Size @SortIndicator("Size")</th>
-                                    <th>Actions</th>
+                                    <th role="button" data-col-kind="name" data-col-min="170" data-col-preferred="260" data-col-weight="3.5" @onclick='() => ToggleSort("Repository")'>Name @SortIndicator("Repository")</th>
+                                    <th role="button" data-col-kind="compact" data-col-min="82" data-col-preferred="110" data-col-priority="2" @onclick='() => ToggleSort("Tag")'>Tag @SortIndicator("Tag")</th>
+                                    <th role="button" data-col-kind="compact" data-col-min="82" data-col-preferred="100" data-col-priority="3" @onclick='() => ToggleSort("Size")'>Size @SortIndicator("Size")</th>
+                                    <th class="actions-col" data-col-min="92" data-col-preferred="112">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 @foreach (var img in displayImages)
                                 {
                                     <tr>
-                                        <td>@img.Repository</td>
+                                        <td class="name-cell"><span class="primary-label">@img.Repository</span></td>
                                         <td><span class="badge bg-secondary">@img.Tag</span></td>
                                         <td>@FormatSize(img.SizeBytes)</td>
-                                        <td>
+                                        <td class="actions-cell">
                                             <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndDeleteImage(img)">
                                                 <i class="bi bi-trash3"></i> Delete
                                             </button>
@@ -249,61 +264,87 @@
                         </table>
                         </div>
                     }
+                    </div>
                 }
             </div>
         }
-    </div>
+    </section>
 </div>
 
-<style>
-    .image-host-card {
-        padding: 0.5rem 0.75rem;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: background 0.15s;
-        border: 1px solid transparent;
-        margin-bottom: 2px;
-    }
-    .image-host-card:hover {
-        background: var(--bg-secondary, #f0f0f0);
-    }
-    .image-host-card.active {
-        background: var(--bg-tertiary, #e8e8e8);
-        border-color: var(--bs-primary);
-        box-shadow: inset 3px 0 0 var(--bs-primary);
-    }
-    .sidebar-section-header {
-        display: flex;
-        align-items: center;
-        padding: 0.35rem 0.75rem;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--text-muted, #6c757d);
-    }
-    .split-resize-handle {
-        width: 6px;
-        cursor: col-resize;
-        background: transparent;
-        transition: background 0.15s;
-        flex-shrink: 0;
-        border-radius: 3px;
-        margin: 0 2px;
-    }
-    .split-resize-handle:hover, .split-resize-handle:active {
-        background: var(--bs-primary);
-        opacity: 0.4;
-    }
-</style>
+@if (showPullForm)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="pull-image-title" @onclick="ClosePullForm">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="pull-image-title" class="modal-title">
+                            <i class="bi bi-cloud-arrow-down me-2"></i>Pull Image
+                        </h5>
+                        <div class="modal-kicker">Download a Docker image or Tart VM image onto the selected host.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="ClosePullForm" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    @if (showPullStatus && pullStatusIsError && !string.IsNullOrWhiteSpace(pullStatus))
+                    {
+                        <div class="alert alert-danger py-2">@pullStatus</div>
+                    }
+
+                    <div class="rr-form-section">
+                        <div class="rr-form-section-title"><i class="bi bi-box-seam"></i> Image reference</div>
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label">Type</label>
+                                <select class="form-select" @bind="pullType">
+                                    <option value="@ImageType.Docker">Docker</option>
+                                    <option value="@ImageType.Tart">Tart</option>
+                                </select>
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label">Registry</label>
+                                <select class="form-select" @bind="pullRegistryId">
+                                    <option value="">(default / no auth)</option>
+                                    @foreach (var r in registries)
+                                    {
+                                        <option value="@r.Id">@r.Name (@r.RegistryUrl)</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label">Image</label>
+                                <input class="form-control" @bind="pullImage" placeholder="org/image-name" />
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Tag</label>
+                                <input class="form-control" @bind="pullTag" placeholder="latest" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="ClosePullForm">Cancel</button>
+                    <button class="btn btn-primary" @onclick="StartPull">
+                        <i class="bi bi-download me-1"></i>Request pull
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
     private List<Host> hosts = [];
+    private List<AgentImage> allImages = [];
     private List<RegistryCredential> registries = [];
     private string selectedHostId = "";
+    private string hostFilter = "";
+    private bool hostPanelCollapsed;
     private string activeTab = "docker";
     private List<AgentImage> dockerImages = [];
     private List<AgentImage> tartImages = [];
+    private const string HostPanelPreferenceKey = "rr-images-hosts-collapsed-v2";
 
     // Search & sort
     private string searchText = "";
@@ -335,6 +376,7 @@
     protected override async Task OnInitializedAsync()
     {
         hosts = (await Store.Query<Host>().ToList()).ToList();
+        allImages = (await Store.Query<AgentImage>().ToList()).ToList();
         registries = (await Store.Query<RegistryCredential>().ToList()).ToList();
 
         StreamSubscriptionService.OnImageRefreshStatusReceived += HandleRefreshStatus;
@@ -345,8 +387,54 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-            await JS.InvokeVoidAsync("rrSplitPane.init", "images-resize-handle", "images-sidebar", "rr-images-sidebar-width", 180, 500);
+        if (!firstRender)
+            return;
+
+        await JS.InvokeVoidAsync("rrSplitPane.init", "images-resize-handle", "images-sidebar", "rr-images-sidebar-width-v2", 220, 420);
+        await InitializeResponsiveHostPanel();
+    }
+
+    private IEnumerable<Host> FilteredHosts =>
+        string.IsNullOrWhiteSpace(hostFilter)
+            ? hosts
+            : hosts.Where(h =>
+                h.Label.Contains(hostFilter.Trim(), StringComparison.OrdinalIgnoreCase)
+                || h.Name.Contains(hostFilter.Trim(), StringComparison.OrdinalIgnoreCase)
+                || h.Platform.ToString().Contains(hostFilter.Trim(), StringComparison.OrdinalIgnoreCase)
+                || h.AgentStatus.ToString().Contains(hostFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private Host? SelectedHost => hosts.FirstOrDefault(h => h.Id == selectedHostId);
+
+    private async Task ToggleHostPanel()
+    {
+        hostPanelCollapsed = !hostPanelCollapsed;
+        await JS.InvokeVoidAsync("rrViewport.setBooleanPreference", HostPanelPreferenceKey, hostPanelCollapsed);
+        StateHasChanged();
+    }
+
+    private async Task InitializeResponsiveHostPanel()
+    {
+        var savedCollapsed = await JS.InvokeAsync<string?>("rrViewport.getPreference", HostPanelPreferenceKey);
+        hostPanelCollapsed = bool.TryParse(savedCollapsed, out var collapsed)
+            ? collapsed
+            : await JS.InvokeAsync<bool>("rrViewport.isBelow", 720);
+        StateHasChanged();
+    }
+
+    private async Task SelectFirstHost()
+    {
+        var first = FilteredHosts
+            .OrderByDescending(h => h.AgentStatus == AgentStatus.Online)
+            .ThenBy(h => h.Label)
+            .FirstOrDefault();
+
+        if (first != null)
+            await SelectHost(first.Id);
+    }
+
+    private void ClearHostFilter()
+    {
+        hostFilter = "";
     }
 
     private async Task SelectHost(string hostId)
@@ -363,10 +451,10 @@
 
     private async Task LoadImages()
     {
-        var all = (await Store.Query<AgentImage>().ToList())
-            .Where(i => i.HostId == selectedHostId).ToList();
-        dockerImages = all.Where(i => i.ImageType == ImageType.Docker).ToList();
-        tartImages = all.Where(i => i.ImageType == ImageType.Tart).ToList();
+        allImages = (await Store.Query<AgentImage>().ToList()).ToList();
+        var selectedImages = allImages.Where(i => i.HostId == selectedHostId).ToList();
+        dockerImages = selectedImages.Where(i => i.ImageType == ImageType.Docker).ToList();
+        tartImages = selectedImages.Where(i => i.ImageType == ImageType.Tart).ToList();
     }
 
     private async Task RefreshImages()
@@ -403,7 +491,16 @@
             return;
         }
 
-        await HostCommandDispatcher.DispatchListImagesAsync(host.Id, new ListImagesCommand());
+        try
+        {
+            await HostCommandDispatcher.DispatchListImagesAsync(host.Id, new ListImagesCommand());
+        }
+        catch (InvalidOperationException ex)
+        {
+            refreshInProgress = false;
+            refreshStatusIsError = true;
+            refreshStatus = $"Unable to request image refresh from {host.Label}: {ex.Message}";
+        }
     }
 
     private async Task StartPull()
@@ -590,6 +687,11 @@
         showPullForm = true;
     }
 
+    private void ClosePullForm()
+    {
+        showPullForm = false;
+    }
+
     private void BeginPullStatus(string imageReference, string taskId)
     {
         activePullTaskId = taskId;
@@ -753,6 +855,38 @@
         AgentStatus.Connecting => "bg-warning",
         _ => "bg-secondary"
     };
+
+    private static int HostStatusOrder(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => 0,
+        AgentStatus.Connecting => 1,
+        _ => 2
+    };
+
+    private static string HostStatusGroupIcon(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => "bi-broadcast-pin",
+        AgentStatus.Connecting => "bi-arrow-repeat",
+        _ => "bi-power"
+    };
+
+    private static string HostStatusGroupTitle(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => "Online",
+        AgentStatus.Connecting => "Connecting",
+        _ => "Offline"
+    };
+
+    private string GetHostDescription(Host host)
+    {
+        if (!string.IsNullOrWhiteSpace(host.DisplayName))
+            return host.Name;
+
+        return $"{host.Platform} · {host.Architecture}";
+    }
+
+    private int GetHostImageCount(string hostId, ImageType imageType) =>
+        allImages.Count(image => image.HostId == hostId && image.ImageType == imageType);
 
     public void Dispose()
     {

@@ -71,14 +71,30 @@
 
 @if (capacitySnapshot.Hosts.Any())
 {
-    <div class="alert alert-light border small py-2 mb-3">
-        @foreach (var host in capacitySnapshot.Hosts.Values.OrderBy(h => h.HostLabel))
+    <div class="runner-capacity-overview mb-3" aria-label="Host backend capacity">
+        @foreach (var hostCapacity in capacitySnapshot.Hosts.Values.OrderBy(h => h.HostLabel))
         {
-            <div>
-                <strong>@host.HostLabel:</strong>
-                Docker @FormatBackendUsage(host, ExecutionBackend.Docker)
-                · Tart @FormatBackendUsage(host, ExecutionBackend.Tart)
-                · Native @FormatBackendUsage(host, ExecutionBackend.Native)
+            <div class="runner-host-capacity-card">
+                <div class="runner-host-capacity-title">
+                    <i class="bi bi-hdd-network"></i>
+                    <strong>@hostCapacity.HostLabel</strong>
+                </div>
+                <div class="backend-capacity-row">
+                    @foreach (var backendUsage in GetEnabledBackendUsage(hostCapacity))
+                    {
+                        var backend = backendUsage.Key;
+                        var counter = backendUsage.Value;
+                        <span class="backend-capacity-chip @GetBackendUsageClass(counter)"
+                              title="@GetBackendUsageTitle(backend, counter)">
+                            <span class="backend-capacity-meter" style="@GetBackendUsageStyle(counter)" aria-hidden="true">
+                                <span></span>
+                            </span>
+                            <i class="bi @GetBackendIcon(backend)"></i>
+                            <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
+                            <span class="backend-capacity-count">@counter.Summary</span>
+                        </span>
+                    }
+                </div>
             </div>
         }
     </div>
@@ -115,13 +131,13 @@ else
     <table class="table table-striped resizable-table">
         <thead>
             <tr>
-                <th role="button" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner Name @SortIndicator("RunnerName")</th>
-                <th role="button" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
-                <th role="button" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
-                <th role="button" @onclick='() => SetSort("Mode")' style="cursor:pointer; user-select:none;">Mode @SortIndicator("Mode")</th>
-                <th role="button" @onclick='() => SetSort("Started")' style="cursor:pointer; user-select:none;">Started @SortIndicator("Started")</th>
-                <th role="button" @onclick='() => SetSort("LastHealthCheck")' style="cursor:pointer; user-select:none;">Last Health Check @SortIndicator("LastHealthCheck")</th>
-                <th>Actions</th>
+                <th role="button" data-col-kind="name" data-col-min="170" data-col-preferred="250" data-col-weight="3.5" @onclick='() => SetSort("RunnerName")' style="cursor:pointer; user-select:none;">Runner Name @SortIndicator("RunnerName")</th>
+                <th role="button" data-col-kind="related" data-col-min="210" data-col-preferred="280" data-col-priority="3" data-col-weight="1.4" @onclick='() => SetSort("Profile")' style="cursor:pointer; user-select:none;">Profile @SortIndicator("Profile")</th>
+                <th role="button" data-col-kind="description" data-col-min="220" data-col-preferred="320" data-col-priority="2" data-col-weight="1.7" @onclick='() => SetSort("Status")' style="cursor:pointer; user-select:none;">Status @SortIndicator("Status")</th>
+                <th role="button" data-col-kind="compact" data-col-min="76" data-col-preferred="96" data-col-priority="4" @onclick='() => SetSort("Mode")' style="cursor:pointer; user-select:none;">Mode @SortIndicator("Mode")</th>
+                <th role="button" data-col-kind="time" data-col-min="108" data-col-preferred="130" data-col-priority="3" @onclick='() => SetSort("Started")' style="cursor:pointer; user-select:none;">Started @SortIndicator("Started")</th>
+                <th role="button" data-col-kind="time" data-col-min="104" data-col-preferred="126" data-col-priority="4" @onclick='() => SetSort("LastHealthCheck")' style="cursor:pointer; user-select:none;">Last Health Check @SortIndicator("LastHealthCheck")</th>
+                <th class="actions-col" data-col-min="154" data-col-preferred="184">Actions</th>
             </tr>
         </thead>
         <tbody>
@@ -129,29 +145,45 @@ else
             {
                 var hostId = group.Key;
                 var isOrphan = !validHostIds.Contains(hostId);
-                var hostLabel = isOrphan ? "⚠ Orphaned Runners" : hostNames.GetValueOrDefault(hostId, hostId);
+                var hostLabel = isOrphan ? "Orphaned Runners" : hostNames.GetValueOrDefault(hostId, hostId);
                 var isExpanded = expandedHosts.Contains(hostId);
                 var sorted = ApplySort(group).ToList();
 
                 <tr class="group-header @(isOrphan ? "group-orphaned" : "")" role="button" @onclick="() => ToggleHost(hostId)" style="cursor:pointer; user-select:none;">
                     <td colspan="7">
-                        <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right") me-2"></i>
-                        <strong>@hostLabel</strong>
-                        <span class="badge @(isOrphan ? "bg-danger" : "bg-primary") ms-2">@sorted.Count</span>
-                        @if (!isOrphan && capacitySnapshot.Hosts.TryGetValue(hostId, out var hostCapacity))
-                        {
-                            <span class="small text-muted ms-2">
-                                Docker @FormatBackendUsage(hostCapacity, ExecutionBackend.Docker)
-                                · Tart @FormatBackendUsage(hostCapacity, ExecutionBackend.Tart)
-                                · Native @FormatBackendUsage(hostCapacity, ExecutionBackend.Native)
+                        <div class="runner-group-header-content">
+                            <span class="runner-group-title">
+                                <i class="bi @(isExpanded ? "bi-chevron-down" : "bi-chevron-right")"></i>
+                                <i class="bi @(isOrphan ? "bi-exclamation-triangle-fill text-danger" : "bi-hdd-network")"></i>
+                                <strong>@hostLabel</strong>
+                                <span class="runner-group-count">@sorted.Count</span>
                             </span>
-                        }
-                        @if (isOrphan)
-                        {
-                            <button class="btn btn-sm btn-outline-danger ms-2" @onclick:stopPropagation="true" @onclick="() => ConfirmAndRemoveOrphans(sorted)">
-                                <i class="bi bi-trash3 me-1"></i>Remove All
-                            </button>
-                        }
+                            @if (!isOrphan && capacitySnapshot.Hosts.TryGetValue(hostId, out var hostCapacity))
+                            {
+                                <span class="runner-group-capacity">
+                                    @foreach (var backendUsage in GetEnabledBackendUsage(hostCapacity))
+                                    {
+                                        var backend = backendUsage.Key;
+                                        var counter = backendUsage.Value;
+                                        <span class="backend-capacity-chip @GetBackendUsageClass(counter)"
+                                              title="@GetBackendUsageTitle(backend, counter)">
+                                            <span class="backend-capacity-meter" style="@GetBackendUsageStyle(counter)" aria-hidden="true">
+                                                <span></span>
+                                            </span>
+                                            <i class="bi @GetBackendIcon(backend)"></i>
+                                            <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
+                                            <span class="backend-capacity-count">@counter.Summary</span>
+                                        </span>
+                                    }
+                                </span>
+                            }
+                            @if (isOrphan)
+                            {
+                                <button class="btn btn-sm btn-outline-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmAndRemoveOrphans(sorted)">
+                                    <i class="bi bi-trash3 me-1"></i>Remove All
+                                </button>
+                            }
+                        </div>
                     </td>
                 </tr>
                 @if (isExpanded)
@@ -159,26 +191,64 @@ else
                     @foreach (var inst in sorted)
                     {
                         <tr>
-                            <td>@inst.RunnerName</td>
+                            <td class="name-cell"><span class="primary-label">@inst.RunnerName</span></td>
                             <td>
-                                @(profileNames.GetValueOrDefault(inst.ProfileId, inst.ProfileId))
                                 @if (TryGetProfileUsage(inst, out var usage))
                                 {
-                                    <br/><small class="text-muted">Host usage: @usage.Used/@usage.Limit</small>
+                                    <div class="rule-profile-card @GetProfileUsageClass(usage)"
+                                         title="@GetProfileUsageTitle(inst, usage)">
+                                        <div class="rule-profile-main">
+                                            <span class="rule-profile-name">@GetProfileName(inst)</span>
+                                            <span class="rule-profile-count">@usage.Summary</span>
+                                        </div>
+                                        <span class="rule-profile-meter" aria-hidden="true">
+                                            <span style="@GetProfileUsageStyle(usage)"></span>
+                                        </span>
+                                        <div class="rule-profile-meta">
+                                            <span><i class="bi bi-hdd-network"></i>@usage.HostLabel</span>
+                                            <span><i class="bi bi-lightning-charge"></i>@usage.Remaining open</span>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <span class="rule-profile-empty">
+                                        <i class="bi bi-person-badge"></i>
+                                        @GetProfileName(inst)
+                                    </span>
                                 }
                             </td>
                             <td>
-                                <span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span>
-                                @if (!string.IsNullOrEmpty(inst.StatusMessage))
-                                {
-                                    <br/><small class="text-muted" style="font-size: 0.7rem;">@inst.StatusMessage</small>
-                                }
+                                <div class="event-status-card @GetRunnerStatusToneClass(inst)">
+                                    <div class="event-status-heading">
+                                        <span class="badge @GetStatusBadge(inst.Status)">@inst.Status</span>
+                                    </div>
+                                    @{
+                                        var statusSummary = GetRunnerStatusSummary(inst);
+                                        var statusMeta = GetRunnerStatusMeta(inst).ToList();
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(statusSummary))
+                                    {
+                                        <span class="event-status-summary" title="@statusSummary">@statusSummary</span>
+                                    }
+                                    @if (statusMeta.Any())
+                                    {
+                                        <div class="event-status-meta">
+                                            @foreach (var item in statusMeta)
+                                            {
+                                                <span title="@item.Title">
+                                                    <i class="bi @item.Icon"></i>@item.Text
+                                                </span>
+                                            }
+                                        </div>
+                                    }
+                                </div>
                             </td>
                             <td><span class="badge @(inst.ProvisioningMode == "dynamic" ? "bg-warning text-dark" : "bg-secondary")">@(inst.ProvisioningMode == "dynamic" ? "Dynamic" : "Static")</span></td>
                             <td>@(inst.StartedAt?.ToString("g") ?? "—")</td>
                             <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
-                            <td>
-                                <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
+                            <td class="actions-cell">
+                                <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary" title="View logs"><i class="bi bi-file-text"></i></a>
                                 @if (!isOrphan && inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
                                 {
                                     <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)"><i class="bi bi-stop-circle"></i> Stop</button>
@@ -196,30 +266,49 @@ else
 
 <style>
     tr.group-header td {
-        background: var(--bg-secondary, #f8f9fc);
-        border-bottom: 2px solid var(--border-color, #e5e7eb);
-        padding: 0.5rem 0.75rem;
+        background:
+            linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 42%),
+            color-mix(in srgb, var(--bg-tertiary) 82%, var(--bg-card));
+        border-top: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border-color));
+        border-bottom: 2px solid color-mix(in srgb, var(--accent) 22%, var(--border-color));
+        box-shadow: inset 4px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+        padding: 0.68rem 0.85rem;
         font-size: 0.95rem;
     }
     tr.group-header:hover td {
-        background: var(--bg-tertiary, #f0f2f5);
+        background:
+            linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
+            color-mix(in srgb, var(--bg-tertiary) 92%, var(--bg-card));
     }
     tr.group-orphaned td {
-        background: #fff3cd;
-        border-bottom-color: #ffc107;
+        background:
+            linear-gradient(90deg, color-mix(in srgb, var(--danger) 12%, transparent), transparent 42%),
+            var(--warning-soft);
+        border-bottom-color: color-mix(in srgb, var(--danger) 24%, var(--border-color));
+        box-shadow: inset 4px 0 0 var(--danger);
     }
     tr.group-orphaned:hover td {
-        background: #ffecb5;
+        background:
+            linear-gradient(90deg, color-mix(in srgb, var(--danger) 16%, transparent), transparent 42%),
+            var(--warning-soft);
     }
 </style>
 
 @code {
     private List<RunnerInstance> instances = [];
     private Dictionary<string, string> hostNames = new();
+    private Dictionary<string, Host> hostsById = new();
     private HashSet<string> validHostIds = new();
     private Dictionary<string, string> profileNames = new();
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private int unmanagedHiddenCount;
+    private static readonly ExecutionBackend[] BackendCapacityOrder =
+    [
+        ExecutionBackend.Docker,
+        ExecutionBackend.Tart,
+        ExecutionBackend.Native,
+        ExecutionBackend.HyperV
+    ];
 
     private string searchText = "";
     private string filterStatus = "active";
@@ -231,6 +320,7 @@ else
     private bool sortAscending = false;
 
     private HashSet<string> expandedHosts = new();
+    private sealed record RunnerStatusMeta(string Icon, string Text, string Title);
 
     protected override async Task OnInitializedAsync()
     {
@@ -269,6 +359,7 @@ else
         var hosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         validHostIds = hosts.Select(h => h.Id).ToHashSet();
+        hostsById = hosts.ToDictionary(h => h.Id);
         hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         capacitySnapshot = await CapacityService.GetSnapshotAsync();
@@ -370,6 +461,73 @@ else
         return counter.IsDisabled ? "off" : $"{counter.Used}/{counter.Limit}";
     }
 
+    private IEnumerable<KeyValuePair<ExecutionBackend, CapacityCounter>> GetEnabledBackendUsage(HostCapacityView capacity)
+    {
+        foreach (var backend in BackendCapacityOrder)
+        {
+            if (capacity.BackendUsage.TryGetValue(backend, out var counter) && IsBackendVisible(capacity.HostId, backend, counter))
+                yield return new KeyValuePair<ExecutionBackend, CapacityCounter>(backend, counter);
+        }
+    }
+
+    private bool IsBackendVisible(string hostId, ExecutionBackend backend, CapacityCounter counter)
+    {
+        if (counter.IsDisabled)
+            return false;
+
+        return backend != ExecutionBackend.Tart
+            || (hostsById.TryGetValue(hostId, out var host) && host.Platform == HostPlatform.MacOS);
+    }
+
+    private static string GetBackendIcon(ExecutionBackend backend) => backend switch
+    {
+        ExecutionBackend.Docker => "bi-box-seam",
+        ExecutionBackend.Tart => "bi-apple",
+        ExecutionBackend.Native => "bi-terminal",
+        ExecutionBackend.HyperV => "bi-windows",
+        _ => "bi-hdd-rack"
+    };
+
+    private static string GetBackendShortLabel(ExecutionBackend backend) => backend switch
+    {
+        ExecutionBackend.Docker => "Docker",
+        ExecutionBackend.Tart => "Tart",
+        ExecutionBackend.Native => "Native",
+        ExecutionBackend.HyperV => "Hyper-V",
+        _ => backend.ToString()
+    };
+
+    private static string GetBackendUsageClass(CapacityCounter counter)
+    {
+        if (counter.IsDisabled)
+            return "capacity-disabled";
+
+        var ratio = counter.Limit == 0 ? 0 : (double)counter.Used / counter.Limit;
+        return ratio switch
+        {
+            >= 1 => "capacity-full",
+            >= 0.75 => "capacity-warn",
+            _ => "capacity-good"
+        };
+    }
+
+    private static string GetBackendUsageStyle(CapacityCounter counter)
+    {
+        var percent = counter.IsDisabled || counter.Limit == 0
+            ? 0
+            : Math.Clamp((int)Math.Round((double)counter.Used / counter.Limit * 100), 0, 100);
+
+        return $"--usage-percent: {percent}%;";
+    }
+
+    private static string GetBackendUsageTitle(ExecutionBackend backend, CapacityCounter counter)
+    {
+        var label = GetBackendShortLabel(backend);
+        return counter.IsDisabled
+            ? $"{label}: disabled"
+            : $"{label}: {counter.Used} of {counter.Limit} used, {counter.Remaining} available";
+    }
+
     private bool TryGetProfileUsage(RunnerInstance instance, out ProfileHostUsage usage)
     {
         usage = default!;
@@ -384,6 +542,34 @@ else
         usage = match;
         return true;
     }
+
+    private string GetProfileName(RunnerInstance instance) =>
+        profileNames.GetValueOrDefault(instance.ProfileId, instance.ProfileId);
+
+    private static string GetProfileUsageClass(ProfileHostUsage usage)
+    {
+        if (usage.Limit <= 0)
+            return "availability-empty";
+
+        var ratio = (double)usage.Used / usage.Limit;
+        return ratio switch
+        {
+            >= 1 => "availability-full",
+            >= 0.75 => "availability-warn",
+            _ => "availability-good"
+        };
+    }
+
+    private static string GetProfileUsageStyle(ProfileHostUsage usage)
+    {
+        var percent = usage.Limit <= 0
+            ? 0
+            : Math.Clamp(usage.Used / (double)usage.Limit * 100, 0, 100);
+        return $"width: {percent:0.#}%";
+    }
+
+    private string GetProfileUsageTitle(RunnerInstance instance, ProfileHostUsage usage) =>
+        $"{GetProfileName(instance)} on {usage.HostLabel}: {usage.Used} of {usage.Limit} active, {usage.Remaining} open";
 
     private void ToggleHost(string hostId)
     {
@@ -440,6 +626,65 @@ else
         RunnerInstanceStatus.Crashed => "bg-danger",
         _ => "bg-secondary"
     };
+
+    private static string GetRunnerStatusToneClass(RunnerInstance instance) => instance.Status switch
+    {
+        RunnerInstanceStatus.Running or RunnerInstanceStatus.Stopped => "event-status-good",
+        RunnerInstanceStatus.Pending or RunnerInstanceStatus.Starting or RunnerInstanceStatus.Stopping => "event-status-info",
+        RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed => "event-status-danger",
+        _ => ""
+    };
+
+    private string? GetRunnerStatusSummary(RunnerInstance instance)
+    {
+        if (!string.IsNullOrWhiteSpace(instance.ErrorMessage))
+            return instance.ErrorMessage;
+        if (!string.IsNullOrWhiteSpace(instance.StatusMessage))
+            return instance.StatusMessage;
+
+        var hostName = hostNames.GetValueOrDefault(instance.HostId, instance.HostId);
+        return instance.Status switch
+        {
+            RunnerInstanceStatus.Pending => "Waiting for provisioning.",
+            RunnerInstanceStatus.Starting => $"Starting on {hostName}.",
+            RunnerInstanceStatus.Running => $"Active on {hostName}.",
+            RunnerInstanceStatus.Stopping => "Stop requested; waiting for shutdown.",
+            RunnerInstanceStatus.Stopped => "Runner stopped.",
+            RunnerInstanceStatus.Failed => "Runner failed.",
+            RunnerInstanceStatus.Crashed => "Runner crashed.",
+            _ => null
+        };
+    }
+
+    private IEnumerable<RunnerStatusMeta> GetRunnerStatusMeta(RunnerInstance instance)
+    {
+        if (instance.StartedAt.HasValue)
+            yield return new("bi-play-circle", instance.StartedAt.Value.ToLocalTime().ToString("t"), $"Started at {instance.StartedAt.Value.ToLocalTime():f}");
+        else if (instance.DeployedAt.HasValue)
+            yield return new("bi-box-arrow-in-down", instance.DeployedAt.Value.ToLocalTime().ToString("t"), $"Deployed at {instance.DeployedAt.Value.ToLocalTime():f}");
+        else
+            yield return new("bi-clock", instance.CreatedAt.ToLocalTime().ToString("t"), $"Created at {instance.CreatedAt.ToLocalTime():f}");
+
+        if (instance.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting or RunnerInstanceStatus.Stopping)
+        {
+            var since = instance.StartedAt ?? instance.DeployedAt ?? instance.CreatedAt;
+            yield return new("bi-stopwatch", FormatDuration(DateTime.UtcNow - since), $"Active for {FormatDuration(DateTime.UtcNow - since)}");
+        }
+
+        if (instance.LastHealthCheck.HasValue)
+            yield return new("bi-heart-pulse", instance.LastHealthCheck.Value.ToLocalTime().ToString("T"), $"Last health check at {instance.LastHealthCheck.Value.ToLocalTime():f}");
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalDays >= 1)
+            return $"{(int)duration.TotalDays}d {duration.Hours}h";
+        if (duration.TotalHours >= 1)
+            return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        if (duration.TotalMinutes >= 1)
+            return $"{(int)duration.TotalMinutes}m";
+        return $"{Math.Max(0, (int)duration.TotalSeconds)}s";
+    }
 
     private async Task<RunnerInstanceGrainState?> GetRunnerGrainState(string instanceId)
     {
