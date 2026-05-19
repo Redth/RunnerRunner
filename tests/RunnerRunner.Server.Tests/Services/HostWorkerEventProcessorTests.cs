@@ -166,6 +166,46 @@ public class HostWorkerEventProcessorTests
     }
 
     [Fact]
+    public async Task WorkerConnectedAsync_MarksRestartingUpdateCurrentWhenCommitMatches()
+    {
+        const string commitSha = "3bf419d5a5a9f21f24f69dfb44b13639a4137448";
+        var token = HostEnrollmentToken.Create();
+        var store = TestDocumentStore.Create();
+        await store.Insert(new Host
+        {
+            Name = "pending-host",
+            EnrollmentTokenHash = HostEnrollmentToken.Hash(token),
+            EnrollmentTokenCreatedAt = DateTime.UtcNow,
+            UpdateStatus = "Restarting",
+            LatestAvailableVersion = "v0.3.0",
+            LatestAvailableCommitSha = commitSha
+        });
+        var processor = CreateProcessor(store);
+
+        var hostId = await processor.WorkerConnectedAsync(
+            new AgentInfo
+            {
+                AgentId = "worker-1",
+                Name = "linux-ci-01",
+                Platform = HostPlatform.Linux,
+                Architecture = "x64",
+                AgentVersion = $"v0.3.0+{commitSha}",
+                AgentCommitSha = commitSha
+            },
+            "peer",
+            new Dictionary<string, string>(),
+            token,
+            CancellationToken.None);
+
+        var host = await store.Get<Host>(hostId);
+
+        Assert.NotNull(host);
+        Assert.Equal("Current", host.UpdateStatus);
+        Assert.Equal(commitSha, host.AgentCommitSha);
+        Assert.NotNull(host.LastUpdateCompletedAt);
+    }
+
+    [Fact]
     public async Task WorkerConnectedAsync_RejectsWrongTokenForKnownHost()
     {
         var token = HostEnrollmentToken.Create();

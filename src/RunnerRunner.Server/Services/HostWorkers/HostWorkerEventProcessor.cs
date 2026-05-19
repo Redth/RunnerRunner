@@ -191,6 +191,8 @@ public sealed class HostWorkerEventProcessor
         host.OsVersion = agentInfo.OsVersion;
         host.Architecture = agentInfo.Architecture;
         host.AgentVersion = agentInfo.AgentVersion;
+        host.AgentCommitSha = HostWorkerUpdateSelector.ResolveCommitSha(agentInfo.AgentCommitSha, agentInfo.AgentVersion);
+        host.AgentBuildTag = agentInfo.AgentBuildTag;
         host.IsContainerized = agentInfo.Runtime?.IsContainer ?? false;
         host.ContainerId = agentInfo.Runtime?.ContainerId;
         host.ContainerImage = agentInfo.Runtime?.ContainerImage;
@@ -206,6 +208,7 @@ public sealed class HostWorkerEventProcessor
         host.UpdatedAt = DateTime.UtcNow;
         foreach (var (key, value) in labels)
             host.Labels[key] = value;
+        MarkUpdateCurrentIfTargetMatches(host);
 
         await _store.Update(host);
         return host;
@@ -458,6 +461,15 @@ public sealed class HostWorkerEventProcessor
         host.UpdateStatus = evt.Success || !evt.IsComplete ? ToDisplayStage(evt.Stage) : "Failed";
         host.UpdateMessage = string.IsNullOrWhiteSpace(evt.Error) ? evt.Message : evt.Error;
         host.LatestAvailableVersion = evt.TargetVersion;
+        host.LatestAvailableCommitSha = HostWorkerUpdateSelector.ResolveCommitSha(evt.TargetCommitSha, evt.TargetVersion);
+        if (!string.IsNullOrWhiteSpace(evt.CurrentVersion))
+            host.AgentVersion = evt.CurrentVersion;
+        if (!string.IsNullOrWhiteSpace(evt.CurrentCommitSha))
+        {
+            var currentCommitSha = HostWorkerUpdateSelector.NormalizeCommitSha(evt.CurrentCommitSha);
+            if (currentCommitSha != null)
+                host.AgentCommitSha = currentCommitSha;
+        }
         host.LastUpdateStartedAt ??= DateTime.UtcNow;
         if (evt.IsComplete)
             host.LastUpdateCompletedAt = DateTime.UtcNow;
@@ -470,6 +482,28 @@ public sealed class HostWorkerEventProcessor
         => string.IsNullOrWhiteSpace(stage)
             ? "Updating"
             : char.ToUpperInvariant(stage[0]) + stage[1..];
+
+    private static void MarkUpdateCurrentIfTargetMatches(Host host)
+    {
+        if (string.IsNullOrWhiteSpace(host.LatestAvailableVersion) &&
+            string.IsNullOrWhiteSpace(host.LatestAvailableCommitSha))
+        {
+            return;
+        }
+
+        if (HostWorkerUpdateSelector.IsUpdateAvailable(
+                host.AgentVersion,
+                host.AgentCommitSha,
+                host.LatestAvailableVersion,
+                host.LatestAvailableCommitSha))
+        {
+            return;
+        }
+
+        host.UpdateStatus = "Current";
+        host.UpdateMessage = $"HostWorker is current at {HostWorkerUpdateSelector.FormatVersionWithCommit(host.AgentVersion, host.AgentCommitSha)}.";
+        host.LastUpdateCompletedAt ??= DateTime.UtcNow;
+    }
 
     private static ImageRefreshStatusEvent WithHost(string hostId, ImageRefreshStatusEvent evt)
     {

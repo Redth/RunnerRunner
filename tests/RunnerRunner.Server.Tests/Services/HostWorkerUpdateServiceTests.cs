@@ -263,6 +263,138 @@ public class HostWorkerUpdateServiceTests
         Assert.True(command.Force);
     }
 
+    [Fact]
+    public async Task RefreshHostUpdateStateAsync_MarksReleaseCurrentWhenCommitMatches()
+    {
+        const string commitSha = "3bf419d5a5a9f21f24f69dfb44b13639a4137448";
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Name = "unused",
+            Provider = RunnerProvider.GiteaActions
+        });
+        var host = new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = $"v0.3.0+{commitSha}",
+            AgentCommitSha = commitSha
+        };
+        await store.Insert(host);
+
+        using var fixture = CreateService(store, request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath.EndsWith("/repos/Redth/RunnerRunner/releases/latest", StringComparison.Ordinal))
+            {
+                return JsonResponse("""
+                    {
+                      "tag_name": "v0.3.0",
+                      "html_url": "https://github.com/Redth/RunnerRunner/releases/tag/v0.3.0",
+                      "published_at": "2026-05-16T00:00:00Z",
+                      "assets": [
+                        { "name": "release-manifest.json", "browser_download_url": "https://downloads.example.test/release-manifest.json" },
+                        { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "browser_download_url": "https://downloads.example.test/runnerrunner-hostworker-linux-x64.tar.gz" }
+                      ]
+                    }
+                    """);
+            }
+
+            if (uri.AbsoluteUri == "https://downloads.example.test/release-manifest.json")
+            {
+                return JsonResponse($$"""
+                    {
+                      "gitSha": "{{commitSha}}",
+                      "assets": [
+                        { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "sha256": "asset-sha" }
+                      ],
+                      "images": {}
+                    }
+                    """);
+            }
+
+            throw new InvalidOperationException($"Unexpected request {request.RequestUri}");
+        });
+
+        await fixture.Service.RefreshHostUpdateStateAsync(host, forceRefresh: true);
+        var updated = await store.Get<Host>("host-1");
+
+        Assert.NotNull(updated);
+        Assert.Equal("Current", updated.UpdateStatus);
+        Assert.Equal(commitSha, updated.LatestAvailableCommitSha);
+    }
+
+    [Fact]
+    public async Task RefreshHostUpdateStateAsync_UsesGitHubCompareForDifferentCommits()
+    {
+        const string currentSha = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string targetSha = "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Name = "unused",
+            Provider = RunnerProvider.GiteaActions
+        });
+        var host = new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = $"v0.3.0+{currentSha}",
+            AgentCommitSha = currentSha
+        };
+        await store.Insert(host);
+
+        using var fixture = CreateService(store, request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath.EndsWith("/repos/Redth/RunnerRunner/releases/latest", StringComparison.Ordinal))
+            {
+                return JsonResponse("""
+                    {
+                      "tag_name": "v0.3.0",
+                      "html_url": "https://github.com/Redth/RunnerRunner/releases/tag/v0.3.0",
+                      "published_at": "2026-05-16T00:00:00Z",
+                      "assets": [
+                        { "name": "release-manifest.json", "browser_download_url": "https://downloads.example.test/release-manifest.json" },
+                        { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "browser_download_url": "https://downloads.example.test/runnerrunner-hostworker-linux-x64.tar.gz" }
+                      ]
+                    }
+                    """);
+            }
+
+            if (uri.AbsoluteUri == "https://downloads.example.test/release-manifest.json")
+            {
+                return JsonResponse($$"""
+                    {
+                      "gitSha": "{{targetSha}}",
+                      "assets": [
+                        { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "sha256": "asset-sha" }
+                      ],
+                      "images": {}
+                    }
+                    """);
+            }
+
+            if (uri.AbsolutePath.EndsWith($"/repos/Redth/RunnerRunner/compare/{currentSha}...{targetSha}", StringComparison.Ordinal))
+                return JsonResponse("""{"status":"ahead","ahead_by":1}""");
+
+            throw new InvalidOperationException($"Unexpected request {request.RequestUri}");
+        });
+
+        await fixture.Service.RefreshHostUpdateStateAsync(host, forceRefresh: true);
+        var updated = await store.Get<Host>("host-1");
+
+        Assert.NotNull(updated);
+        Assert.Equal("UpdateAvailable", updated.UpdateStatus);
+        Assert.Equal(targetSha, updated.LatestAvailableCommitSha);
+    }
+
     private static ServiceFixture CreateService(
         Shiny.DocumentDb.IDocumentStore store,
         Func<HttpRequestMessage, HttpResponseMessage> handler)

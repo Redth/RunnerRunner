@@ -233,6 +233,10 @@ public class AgentInfo
     public List<RunningRunnerInfo> CurrentRunners { get; set; } = [];
     [Id(8)]
     public HostWorkerRuntimeInfo? Runtime { get; set; }
+    [Id(9)]
+    public string? AgentCommitSha { get; set; }
+    [Id(10)]
+    public string? AgentBuildTag { get; set; }
 }
 
 [GenerateSerializer]
@@ -564,6 +568,8 @@ public class HostWorkerUpdateCommand
     public bool Force { get; set; }
     [Id(5)]
     public string? ContainerImage { get; set; }
+    [Id(6)]
+    public string? TargetCommitSha { get; set; }
 }
 
 [GenerateSerializer]
@@ -585,4 +591,8 @@ public class HostWorkerUpdateStatusEvent
     public bool Success { get; set; }
     [Id(7)]
     public string? Error { get; set; }
+    [Id(8)]
+    public string? CurrentCommitSha { get; set; }
+    [Id(9)]
+    public string? TargetCommitSha { get; set; }
 }

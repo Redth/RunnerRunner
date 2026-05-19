@@ -2,6 +2,7 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Server.Grains.Events
 @using RunnerRunner.Server.Services
+@using RunnerRunner.Server.Services.HostWorkers
 @using Shiny.DocumentDb
 @using RunnerHost = RunnerRunner.Core.Models.Host
 @inject IDocumentStore Store
@@ -153,7 +154,10 @@
                 <h2><i class="bi bi-hourglass-bottom"></i> Queue risk</h2>
                 <p>Queued webhook jobs that are waiting on capacity, configuration, or host matching.</p>
             </div>
-            <a class="btn btn-outline-secondary btn-sm" href="/webhook-events">View events</a>
+            <a class="btn btn-outline-secondary btn-sm dashboard-header-action" href="/webhook-events">
+                <i class="bi bi-arrow-right-circle"></i>
+                <span>View events</span>
+            </a>
         </div>
 
         @if (!queuedEvents.Any())
@@ -188,7 +192,10 @@
                 <h2><i class="bi bi-arrow-up-circle"></i> Host updates</h2>
                 <p>HostWorkers with available updates or update activity.</p>
             </div>
-            <a class="btn btn-outline-secondary btn-sm" href="/hosts">Manage</a>
+            <a class="btn btn-outline-secondary btn-sm dashboard-header-action" href="/hosts">
+                <i class="bi bi-sliders2"></i>
+                <span>Manage</span>
+            </a>
         </div>
 
         @if (!hostsWithUpdates.Any())
@@ -422,13 +429,19 @@
 
     private static bool HasUpdateAvailable(RunnerHost host)
     {
-        if (!string.IsNullOrWhiteSpace(host.LatestAvailableVersion)
-            && !string.Equals(host.LatestAvailableVersion, host.AgentVersion, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(host.UpdateStatus, "UpdateAvailable", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        return host.UpdateStatus?.Contains("available", StringComparison.OrdinalIgnoreCase) == true;
+        if (string.Equals(host.UpdateStatus, "Current", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return HostWorkerUpdateSelector.IsUpdateAvailable(
+            host.AgentVersion,
+            host.AgentCommitSha,
+            host.LatestAvailableVersion,
+            host.LatestAvailableCommitSha);
     }
 
     private static bool IsOpenQueuedEvent(WebhookEvent evt) =>
@@ -478,9 +491,12 @@
 
     private static string GetUpdateSummary(RunnerHost host)
     {
-        var current = string.IsNullOrWhiteSpace(host.AgentVersion) ? "unknown" : host.AgentVersion;
-        var latest = string.IsNullOrWhiteSpace(host.LatestAvailableVersion) ? "available" : host.LatestAvailableVersion;
-        return $"{host.Label} · {current} -> {latest}{(string.IsNullOrWhiteSpace(host.UpdateMessage) ? "" : $" · {host.UpdateMessage}")}";
+        var current = HostWorkerUpdateSelector.FormatVersionWithCommit(host.AgentVersion, host.AgentCommitSha);
+        var latest = string.IsNullOrWhiteSpace(host.LatestAvailableVersion) && string.IsNullOrWhiteSpace(host.LatestAvailableCommitSha)
+            ? "available"
+            : HostWorkerUpdateSelector.FormatVersionWithCommit(host.LatestAvailableVersion, host.LatestAvailableCommitSha);
+        var message = HostWorkerUpdateSelector.ShortenKnownVersions(host.UpdateMessage, host.AgentVersion, host.LatestAvailableVersion);
+        return $"{host.Label} · {current} -> {latest}{(string.IsNullOrWhiteSpace(message) ? "" : $" · {message}")}";
     }
 
     private static string GetTaskIcon(LongRunningTaskKind kind) => kind switch

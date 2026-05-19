@@ -323,7 +323,7 @@
                                 }
                                 @if (ShouldShowLatestAvailableVersion(host))
                                 {
-                                    <code title="@host.LatestAvailableVersion">@FormatDisplayVersion(host.LatestAvailableVersion)</code>
+                                    <code title="@host.LatestAvailableVersion">@FormatDisplayVersion(host.LatestAvailableVersion, host.LatestAvailableCommitSha)</code>
                                 }
                                 @if (!IsCurrentUpdateStatus(host.UpdateStatus))
                                 {
@@ -662,6 +662,8 @@
         AgentStatus = host.AgentStatus,
         LastHeartbeat = host.LastHeartbeat,
         AgentVersion = host.AgentVersion,
+        AgentCommitSha = host.AgentCommitSha,
+        AgentBuildTag = host.AgentBuildTag,
         OsVersion = host.OsVersion,
         Architecture = host.Architecture,
         IsContainerized = host.IsContainerized,
@@ -675,6 +677,7 @@
         EnrolledAt = host.EnrolledAt,
         WorkerId = host.WorkerId,
         LatestAvailableVersion = host.LatestAvailableVersion,
+        LatestAvailableCommitSha = host.LatestAvailableCommitSha,
         LastUpdateCheckAt = host.LastUpdateCheckAt,
         UpdateStatus = host.UpdateStatus,
         UpdateMessage = host.UpdateMessage,
@@ -908,47 +911,13 @@
     }
 
     private static string FormatDisplayVersion(string? version)
-    {
-        if (string.IsNullOrWhiteSpace(version))
-            return "unknown";
+        => HostWorkerUpdateSelector.FormatDisplayVersion(version);
 
-        var value = version.Trim().Trim('\'');
-        var metadataIndex = value.IndexOf('+');
-        if (metadataIndex > 0)
-            return ShortenVersionSegment(value[..metadataIndex]);
-
-        if (metadataIndex == 0 && value.Length > 1)
-            return ShortenVersionSegment(value[(metadataIndex + 1)..]);
-
-        return ShortenVersionSegment(value);
-    }
+    private static string FormatDisplayVersion(string? version, string? commitSha)
+        => HostWorkerUpdateSelector.FormatVersionWithCommit(version, commitSha);
 
     private static string ShortenKnownVersions(string? message, params string?[] versions)
-    {
-        var result = message ?? "";
-        foreach (var version in versions)
-        {
-            if (string.IsNullOrWhiteSpace(version))
-                continue;
-
-            var shortened = FormatDisplayVersion(version);
-            if (!string.Equals(version, shortened, StringComparison.Ordinal))
-                result = result.Replace(version, shortened, StringComparison.Ordinal);
-        }
-
-        return result;
-    }
-
-    private static string ShortenVersionSegment(string value)
-    {
-        var trimmed = value.Trim();
-        if (trimmed.Length >= 10 && trimmed.All(Uri.IsHexDigit))
-            return trimmed[..8];
-
-        return trimmed.Length > 32
-            ? $"{trimmed[..12]}...{trimmed[^7..]}"
-            : trimmed;
-    }
+        => HostWorkerUpdateSelector.ShortenKnownVersions(message, versions);
 
     private static string GetUpdateBadge(string status)
         => status switch
