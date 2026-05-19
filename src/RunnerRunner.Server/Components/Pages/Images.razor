@@ -77,9 +77,8 @@
 
     @if (hostPanelCollapsed)
     {
-        <button type="button" class="source-panel-reveal" @onclick="ToggleHostPanel" aria-label="Show image hosts" title="Show hosts" aria-controls="images-sidebar" aria-expanded="false">
+        <button type="button" class="source-panel-reveal source-panel-reveal-icon-only" @onclick="ToggleHostPanel" aria-label="Show image hosts" title="Show hosts" aria-controls="images-sidebar" aria-expanded="false">
             <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
-            <span>Show hosts</span>
         </button>
     }
 
@@ -87,9 +86,6 @@
         @if (string.IsNullOrEmpty(selectedHostId))
         {
             <div class="images-empty-state">
-                <button type="button" class="console-icon-btn mb-3" @onclick="ToggleHostPanel" aria-label="Show image hosts" title="Show hosts" aria-controls="images-sidebar" aria-expanded="@(!hostPanelCollapsed)">
-                    <i class="bi bi-layout-sidebar"></i>
-                </button>
                 <span class="empty-state-icon"><i class="bi bi-box-seam" aria-hidden="true"></i></span>
                 <h3>Select a host</h3>
                 <p>Choose a host from the sidebar to manage its images.</p>
@@ -101,9 +97,6 @@
             <div class="images-toolbar">
                 <div class="images-toolbar-title">
                     <div class="images-toolbar-heading">
-                        <button type="button" class="console-icon-btn" @onclick="ToggleHostPanel" aria-label="Toggle image hosts" title="Toggle hosts" aria-controls="images-sidebar" aria-expanded="@(!hostPanelCollapsed)">
-                            <i class="bi bi-layout-sidebar"></i>
-                        </button>
                         <span class="source-dot @(selectedHost?.AgentStatus.ToString().ToLowerInvariant() ?? "")" aria-hidden="true"></span>
                         <strong>@(selectedHost?.Label ?? selectedHostId)</strong>
                         <span class="logs-console-meta">@dockerImages.Count Docker</span>
