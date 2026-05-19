@@ -16,6 +16,8 @@ public class Host
     public AgentStatus AgentStatus { get; set; } = AgentStatus.Offline;
     public DateTime? LastHeartbeat { get; set; }
     public string? AgentVersion { get; set; }
+    public string? AgentCommitSha { get; set; }
+    public string? AgentBuildTag { get; set; }
     public string? OsVersion { get; set; }
     public string? Architecture { get; set; }
     public bool IsContainerized { get; set; }
@@ -29,6 +31,7 @@ public class Host
     public DateTime? EnrolledAt { get; set; }
     public string? WorkerId { get; set; }
     public string? LatestAvailableVersion { get; set; }
+    public string? LatestAvailableCommitSha { get; set; }
     public DateTime? LastUpdateCheckAt { get; set; }
     public string? UpdateStatus { get; set; }
     public string? UpdateMessage { get; set; }

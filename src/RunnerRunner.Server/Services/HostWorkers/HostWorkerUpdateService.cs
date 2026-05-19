@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RunnerRunner.Core.Hub;
@@ -91,7 +92,7 @@ public sealed class HostWorkerUpdateService
                 return HostWorkerUpdateAvailability.Unavailable(reason);
 
             var containerUpdateAvailable = selection.Source == HostWorkerUpdateSourceKind.Release
-                ? HostWorkerUpdateSelector.IsUpdateAvailable(host.AgentVersion, release.Version)
+                ? await IsUpdateAvailableAsync(host.AgentVersion, host.AgentCommitSha, release, selection.Source, ct)
                 : true;
             return new HostWorkerUpdateAvailability(release, null, containerImage, containerUpdateAvailable, null);
         }
@@ -103,9 +104,36 @@ public sealed class HostWorkerUpdateService
             return HostWorkerUpdateAvailability.Unavailable("HostWorkerUpdates:PublicBaseUrl or a request base URL is required to queue this HostWorker update artifact.");
 
         var updateAvailable = selection.Source == HostWorkerUpdateSourceKind.Release
-            ? HostWorkerUpdateSelector.IsUpdateAvailable(host.AgentVersion, release.Version)
+            ? await IsUpdateAvailableAsync(host.AgentVersion, host.AgentCommitSha, release, selection.Source, ct)
             : true;
         return new HostWorkerUpdateAvailability(release, asset, null, updateAvailable, null);
+    }
+
+    public async Task<bool> IsUpdateAvailableAsync(
+        string? currentVersion,
+        string? currentCommitSha,
+        HostWorkerReleaseInfo release,
+        HostWorkerUpdateSourceKind source = HostWorkerUpdateSourceKind.Release,
+        CancellationToken ct = default)
+    {
+        if (source != HostWorkerUpdateSourceKind.Release)
+            return true;
+
+        var currentSha = HostWorkerUpdateSelector.ResolveCommitSha(currentCommitSha, currentVersion);
+        var targetSha = HostWorkerUpdateSelector.NormalizeCommitSha(release.CommitSha);
+        if (!string.IsNullOrWhiteSpace(currentSha) && !string.IsNullOrWhiteSpace(targetSha))
+        {
+            if (HostWorkerUpdateSelector.CommitShaEquals(currentSha, targetSha))
+                return false;
+
+            var comparison = await FetchCommitComparisonAsync(currentSha, targetSha, ct);
+            if (comparison != null)
+                return comparison.IsTargetNewerOrDifferent;
+
+            return true;
+        }
+
+        return HostWorkerUpdateSelector.IsUpdateAvailable(currentVersion, release.Version);
     }
 
     public async Task RefreshHostUpdateStateAsync(Host host, bool forceRefresh = false, CancellationToken ct = default)
@@ -120,6 +148,7 @@ public sealed class HostWorkerUpdateService
         var availability = await GetAvailabilityAsync(host, selection, forceRefresh, ct);
         host.LastUpdateCheckAt = DateTime.UtcNow;
         host.LatestAvailableVersion = availability.Release?.Version;
+        host.LatestAvailableCommitSha = availability.Release?.CommitSha;
         if (!availability.IsAvailable)
         {
             host.UpdateStatus = "Unavailable";
@@ -128,12 +157,12 @@ public sealed class HostWorkerUpdateService
         else if (!availability.UpdateAvailable)
         {
             host.UpdateStatus = "Current";
-            host.UpdateMessage = $"HostWorker is current at {host.AgentVersion ?? "unknown"}.";
+            host.UpdateMessage = $"HostWorker is current at {HostWorkerUpdateSelector.FormatVersionWithCommit(host.AgentVersion, host.AgentCommitSha)}.";
         }
         else
         {
             host.UpdateStatus = "UpdateAvailable";
-            host.UpdateMessage = $"HostWorker {availability.Release!.Version} is available from {selection.Source.ToDisplayName()}.";
+            host.UpdateMessage = $"HostWorker {HostWorkerUpdateSelector.FormatVersionWithCommit(availability.Release!.Version, availability.Release.CommitSha)} is available from {selection.Source.ToDisplayName()}.";
         }
 
         await _store.Update(host);
@@ -176,8 +205,9 @@ public sealed class HostWorkerUpdateService
             throw new InvalidOperationException($"HostWorker '{host.Label}' is already current.");
 
         host.UpdateStatus = "Queued";
-        host.UpdateMessage = $"Queued update to {availability.Release.Version} from {selection.Source.ToDisplayName()}.";
+        host.UpdateMessage = $"Queued update to {HostWorkerUpdateSelector.FormatVersionWithCommit(availability.Release.Version, availability.Release.CommitSha)} from {selection.Source.ToDisplayName()}.";
         host.LatestAvailableVersion = availability.Release.Version;
+        host.LatestAvailableCommitSha = availability.Release.CommitSha;
         host.LastUpdateStartedAt = DateTime.UtcNow;
         await _store.Update(host);
 
@@ -188,6 +218,7 @@ public sealed class HostWorkerUpdateService
             AssetUrl = availability.Asset?.DownloadUrl ?? "",
             Sha256 = availability.Asset?.Sha256 ?? "",
             ContainerImage = availability.ContainerImage,
+            TargetCommitSha = availability.Release.CommitSha,
             Force = selection.Force
         });
     }
@@ -225,7 +256,10 @@ public sealed class HostWorkerUpdateService
                 asset.Sha256))
             .ToArray();
 
-        return new HostWorkerReleaseInfo(version.Version, null, version.CreatedAt, assets);
+        return new HostWorkerReleaseInfo(version.Version, null, version.CreatedAt, assets)
+        {
+            CommitSha = HostWorkerUpdateSelector.ExtractCommitSha(version.Version)
+        };
     }
 
     public async Task ExtractGitHubActionsArtifactAssetAsync(
@@ -317,6 +351,7 @@ public sealed class HostWorkerUpdateService
 
         return new HostWorkerReleaseInfo(release.TagName, release.HtmlUrl, release.PublishedAt, assets)
         {
+            CommitSha = HostWorkerUpdateSelector.NormalizeCommitSha(manifest.GitSha),
             Images = NormalizeImages(manifest.Images)
         };
     }
@@ -375,6 +410,7 @@ public sealed class HostWorkerUpdateService
                 run.UpdatedAt ?? run.CreatedAt,
                 assets)
             {
+                CommitSha = HostWorkerUpdateSelector.NormalizeCommitSha(version),
                 Images = NormalizeImages(manifest.Images)
             };
         }
@@ -411,6 +447,25 @@ public sealed class HostWorkerUpdateService
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         return await JsonSerializer.DeserializeAsync<GitHubCommitResponse>(stream, JsonOptions, ct);
+    }
+
+    private async Task<GitHubCommitComparisonResponse?> FetchCommitComparisonAsync(
+        string currentCommitSha,
+        string targetCommitSha,
+        CancellationToken ct)
+    {
+        var repository = GetUpdateRepository();
+        var client = _httpClientFactory.CreateClient(nameof(HostWorkerUpdateService));
+        var requestUrl =
+            $"https://api.github.com/repos/{repository}/compare/{Uri.EscapeDataString(currentCommitSha)}...{Uri.EscapeDataString(targetCommitSha)}";
+        using var request = await CreateGitHubRequestAsync(HttpMethod.Get, requestUrl, repository, ct);
+        using var response = await client.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<GitHubCommitComparisonResponse>(stream, JsonOptions, ct);
     }
 
     private async Task<IReadOnlyList<GitHubWorkflowRunResponse>> FetchWorkflowRunsAsync(
@@ -639,6 +694,25 @@ public sealed class HostWorkerUpdateService
         public string? HtmlUrl { get; set; }
     }
 
+    private sealed class GitHubCommitComparisonResponse
+    {
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = "";
+
+        [JsonPropertyName("ahead_by")]
+        public int AheadBy { get; set; }
+
+        public bool IsTargetNewerOrDifferent
+            => Status switch
+            {
+                "identical" => false,
+                "behind" => false,
+                "ahead" => AheadBy > 0,
+                "diverged" => true,
+                _ => AheadBy > 0
+            };
+    }
+
     private sealed class GitHubWorkflowRunsResponse
     {
         [JsonPropertyName("workflow_runs")]
@@ -702,6 +776,8 @@ public sealed record HostWorkerReleaseInfo(
     DateTimeOffset? PublishedAt,
     IReadOnlyList<HostWorkerReleaseAsset> Assets)
 {
+    public string? CommitSha { get; init; }
+
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Images { get; init; }
         = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 }
@@ -736,6 +812,10 @@ public sealed record HostWorkerUpdateAvailability(
 
 public static class HostWorkerUpdateSelector
 {
+    private static readonly Regex CommitShaPattern = new(
+        @"(?<![0-9a-f])([0-9a-f]{7,64})(?![0-9a-f])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public static bool TrySelectAsset(
         Host host,
         HostWorkerReleaseInfo release,
@@ -828,6 +908,126 @@ public static class HostWorkerUpdateSelector
         return !string.Equals(current, latest, StringComparison.OrdinalIgnoreCase);
     }
 
+    public static bool IsUpdateAvailable(
+        string? currentVersion,
+        string? currentCommitSha,
+        string? latestVersion,
+        string? latestCommitSha)
+    {
+        var currentSha = ResolveCommitSha(currentCommitSha, currentVersion);
+        var targetSha = ResolveCommitSha(latestCommitSha, latestVersion);
+        if (!string.IsNullOrWhiteSpace(currentSha) && !string.IsNullOrWhiteSpace(targetSha))
+            return !CommitShaEquals(currentSha, targetSha);
+
+        if (string.IsNullOrWhiteSpace(latestVersion))
+            return false;
+
+        return IsUpdateAvailable(currentVersion, latestVersion);
+    }
+
+    public static bool IsUpdateAvailable(string? currentVersion, string? currentCommitSha, HostWorkerReleaseInfo release)
+        => IsUpdateAvailable(currentVersion, currentCommitSha, release.Version, release.CommitSha);
+
+    public static string? ResolveCommitSha(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            var commitSha = ExtractCommitSha(value);
+            if (!string.IsNullOrWhiteSpace(commitSha))
+                return commitSha;
+        }
+
+        return null;
+    }
+
+    public static string? ExtractCommitSha(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        foreach (Match match in CommitShaPattern.Matches(value.Trim()))
+        {
+            var candidate = NormalizeCommitSha(match.Value);
+            if (!string.IsNullOrWhiteSpace(candidate))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    public static string? NormalizeCommitSha(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim().Trim('\'').ToLowerInvariant();
+        return LooksLikeCommitSha(normalized) ? normalized : null;
+    }
+
+    public static bool CommitShaEquals(string? left, string? right)
+    {
+        var normalizedLeft = NormalizeCommitSha(left);
+        var normalizedRight = NormalizeCommitSha(right);
+        if (string.IsNullOrWhiteSpace(normalizedLeft) || string.IsNullOrWhiteSpace(normalizedRight))
+            return false;
+
+        return normalizedLeft.Length <= normalizedRight.Length
+            ? normalizedRight.StartsWith(normalizedLeft, StringComparison.OrdinalIgnoreCase)
+            : normalizedLeft.StartsWith(normalizedRight, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string FormatVersionWithCommit(string? version, string? commitSha)
+    {
+        var formattedVersion = FormatDisplayVersion(version);
+        var formattedCommit = FormatCommitSha(commitSha);
+        if (string.IsNullOrWhiteSpace(formattedCommit))
+            return formattedVersion;
+
+        if (string.Equals(formattedVersion, "unknown", StringComparison.OrdinalIgnoreCase))
+            return formattedCommit;
+
+        return ExtractCommitSha(formattedVersion) != null
+            ? formattedVersion
+            : $"{formattedVersion}+{formattedCommit}";
+    }
+
+    public static string FormatDisplayVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return "unknown";
+
+        return ShortenLongText(ShortenCommitHashes(version.Trim().Trim('\'')));
+    }
+
+    public static string? FormatCommitSha(string? commitSha)
+    {
+        var normalized = NormalizeCommitSha(commitSha);
+        return normalized == null ? null : normalized[..Math.Min(8, normalized.Length)];
+    }
+
+    public static string ShortenKnownVersions(string? message, params string?[] versions)
+    {
+        var result = ShortenCommitHashes(message ?? "");
+        foreach (var version in versions)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                continue;
+
+            var shortened = FormatDisplayVersion(version);
+            if (!string.Equals(version, shortened, StringComparison.Ordinal))
+                result = result.Replace(version, shortened, StringComparison.Ordinal);
+        }
+
+        return result;
+    }
+
+    public static string ShortenCommitHashes(string value)
+        => CommitShaPattern.Replace(value, match =>
+        {
+            var normalized = NormalizeCommitSha(match.Value);
+            return normalized == null ? match.Value : normalized[..Math.Min(8, normalized.Length)];
+        });
+
     public static string? GetRuntimeIdentifier(HostPlatform platform, string? architecture)
     {
         var arch = (architecture ?? "").ToLowerInvariant();
@@ -859,5 +1059,18 @@ public static class HostWorkerUpdateSelector
             2 => normalized + ".0",
             _ => normalized
         };
+    }
+
+    private static bool LooksLikeCommitSha(string value)
+        => value.Length is >= 7 and <= 64
+           && value.Any(static ch => ch is >= 'a' and <= 'f')
+           && value.All(Uri.IsHexDigit);
+
+    private static string ShortenLongText(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 32
+            ? $"{trimmed[..12]}...{trimmed[^7..]}"
+            : trimmed;
     }
 }

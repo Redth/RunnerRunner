@@ -205,6 +205,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
     internal HostWorkerMessage CreateHello()
     {
         var capabilities = DetectCapabilities();
+        var buildInfo = HostWorkerVersion.BuildInfo;
         var hello = new HostWorkerHello
         {
             Agent = new AgentInfo
@@ -213,7 +214,9 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
                 Name = _identity.HostName,
                 Platform = _identity.Platform,
                 Architecture = _identity.Architecture,
-                AgentVersion = HostWorkerVersion.Current,
+                AgentVersion = buildInfo.InformationalVersion,
+                AgentCommitSha = buildInfo.CommitSha,
+                AgentBuildTag = buildInfo.BuildTag,
                 Capabilities = capabilities.ToList(),
                 Runtime = HostWorkerRuntimeDetector.Detect(_configuration)
             },

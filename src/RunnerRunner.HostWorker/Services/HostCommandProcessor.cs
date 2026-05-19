@@ -565,7 +565,9 @@ internal sealed class HostCommandProcessor : BackgroundService
             {
                 HostId = _identity.HostId,
                 CurrentVersion = HostWorkerVersion.Current,
+                CurrentCommitSha = HostWorkerVersion.CommitSha,
                 TargetVersion = command.TargetVersion,
+                TargetCommitSha = command.TargetCommitSha,
                 Stage = "failed",
                 Message = ex.Message,
                 IsComplete = true,

@@ -41,11 +41,11 @@
                 <h5 class="card-title"><i class="bi bi-arrow-repeat me-2"></i>Server Version & Update</h5>
                 <dl class="row small mb-3">
                     <dt class="col-5">Version</dt>
-                    <dd class="col-7"><code>@serverBuildInfo.InformationalVersion</code></dd>
+                    <dd class="col-7"><code title="@serverBuildInfo.InformationalVersion">@HostWorkerUpdateSelector.FormatDisplayVersion(serverBuildInfo.InformationalVersion)</code></dd>
                     <dt class="col-5">Commit</dt>
-                    <dd class="col-7"><code>@serverBuildInfo.CommitSha</code></dd>
+                    <dd class="col-7"><code title="@serverBuildInfo.CommitSha">@(HostWorkerUpdateSelector.FormatCommitSha(serverBuildInfo.CommitSha) ?? "unknown")</code></dd>
                     <dt class="col-5">Build tag</dt>
-                    <dd class="col-7"><code>@serverBuildInfo.BuildTag</code></dd>
+                    <dd class="col-7"><code title="@serverBuildInfo.BuildTag">@HostWorkerUpdateSelector.FormatDisplayVersion(serverBuildInfo.BuildTag)</code></dd>
                     <dt class="col-5">Assembly</dt>
                     <dd class="col-7"><code>@serverBuildInfo.AssemblyVersion</code></dd>
                 </dl>
@@ -75,9 +75,9 @@
                         <span class="badge @GetServerUpdateBadge(serverUpdateTarget.UpdateAvailable)">
                             @(serverUpdateTarget.UpdateAvailable ? "Update available" : "Current")
                         </span>
-                        <span class="ms-1">Resolved <code>@serverUpdateTarget.Version</code></span>
+                        <span class="ms-1">Resolved <code title="@serverUpdateTarget.CommitSha">@HostWorkerUpdateSelector.FormatVersionWithCommit(serverUpdateTarget.Version, serverUpdateTarget.CommitSha)</code></span>
                     </div>
-                    <div class="small text-muted mt-1">Image: <code>@serverUpdateTarget.Image</code></div>
+                    <div class="small text-muted mt-1">Image: <code title="@serverUpdateTarget.Image">@HostWorkerUpdateSelector.ShortenCommitHashes(serverUpdateTarget.Image)</code></div>
                 }
             </div>
         </div>
@@ -118,8 +118,12 @@
 
             serverUpdateTarget = new ServerUpdateTarget(
                 release.Version,
+                release.CommitSha,
                 image!,
-                HostWorkerUpdateSelector.IsUpdateAvailable(serverBuildInfo.InformationalVersion, release.Version));
+                await HostWorkerUpdateService.IsUpdateAvailableAsync(
+                    serverBuildInfo.InformationalVersion,
+                    serverBuildInfo.CommitSha,
+                    release));
         }
         catch (Exception ex)
         {
@@ -137,5 +141,5 @@
     private static string GetServerUpdateBadge(bool updateAvailable)
         => updateAvailable ? "bg-warning text-dark" : "bg-success";
 
-    private sealed record ServerUpdateTarget(string Version, string Image, bool UpdateAvailable);
+    private sealed record ServerUpdateTarget(string Version, string? CommitSha, string Image, bool UpdateAvailable);
 }

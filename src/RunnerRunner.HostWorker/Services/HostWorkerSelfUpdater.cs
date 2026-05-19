@@ -197,17 +197,22 @@ internal sealed class HostWorkerSelfUpdater
         HostWorkerUpdateCommand command,
         Func<HostWorkerUpdateStatusEvent, CancellationToken, Task> publish,
         CancellationToken ct)
-        => publish(new HostWorkerUpdateStatusEvent
+    {
+        var buildInfo = HostWorkerVersion.BuildInfo;
+        return publish(new HostWorkerUpdateStatusEvent
         {
             HostId = _identity.HostId,
-            CurrentVersion = HostWorkerVersion.Current,
+            CurrentVersion = buildInfo.InformationalVersion,
+            CurrentCommitSha = buildInfo.CommitSha,
             TargetVersion = command.TargetVersion,
+            TargetCommitSha = command.TargetCommitSha,
             Stage = stage,
             Message = message,
             IsComplete = isComplete,
             Success = success,
             Error = error
         }, ct);
+    }
 
     private static string Sanitize(string value)
     {

@@ -1436,6 +1436,22 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     font-size: 0.76rem;
 }
 
+.dashboard-header-action {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.38rem;
+    min-height: 2rem;
+    border-radius: var(--radius-md);
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.dashboard-header-action .bi {
+    color: currentColor;
+    font-size: 0.95rem;
+}
+
 .dashboard-empty-state {
     display: grid;
     justify-items: center;

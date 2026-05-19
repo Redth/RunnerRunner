@@ -40,6 +40,29 @@ public class HostWorkerUpdateSelectorTests
         => Assert.Equal(expected, HostWorkerUpdateSelector.IsUpdateAvailable(current, latest));
 
     [Fact]
+    public void IsUpdateAvailable_TreatsMatchingReleaseCommitAsCurrent()
+    {
+        const string commitSha = "3bf419d5a5a9f21f24f69dfb44b13639a4137448";
+        var release = new HostWorkerReleaseInfo("v0.3.0", null, DateTimeOffset.UnixEpoch, [])
+        {
+            CommitSha = commitSha
+        };
+
+        var available = HostWorkerUpdateSelector.IsUpdateAvailable($"v0.3.0+{commitSha}", null, release);
+
+        Assert.False(available);
+    }
+
+    [Fact]
+    public void FormatDisplayVersion_TruncatesCommitShaMetadata()
+    {
+        var formatted = HostWorkerUpdateSelector.FormatDisplayVersion(
+            "v0.3.0+3bf419d5a5a9f21f24f69dfb44b13639a4137448");
+
+        Assert.Equal("v0.3.0+3bf419d5", formatted);
+    }
+
+    [Fact]
     public void TrySelectAsset_RequiresChecksum()
     {
         var release = new HostWorkerReleaseInfo(
