@@ -149,8 +149,40 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
         Assert.Contains("version='abc123def456'", command);
         Assert.Contains("asset_url='https://runner.example.test/asset.tar.gz?sha256=abc'", command);
         Assert.Contains("expected_sha256='abc'", command);
+        Assert.Contains("set -euo pipefail", command);
+        Assert.Contains("Authorization: Bearer ${enrollment_token}", command);
+        Assert.Contains("if ! curl \"${curl_args[@]}\" \"${asset_url}\" -o \"${archive}\"", command);
         Assert.Contains("tar -xzf", command);
         Assert.DoesNotContain("install-host-macos.sh", command);
+    }
+
+    [Fact]
+    public void BuildManualUpdate_ForWindowsService_UsesSelectedAssetWithExistingToken()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildManualUpdate(new HostWorkerManualUpdateRequest(
+            HostWorkerEnrollmentTarget.WindowsService,
+            "host-1",
+            "Windows Host",
+            "windows-host",
+            null,
+            new HostWorkerEnrollmentProxy(null, null, null),
+            new HostWorkerManualUpdatePackage(
+                HostWorkerUpdateSourceKind.Release,
+                "main",
+                "abc123def456",
+                "runnerrunner-hostworker-win-x64.zip",
+                "https://runner.example.test/asset.zip?sha256=abc",
+                "abc",
+                null)));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Equal(HostWorkerEnrollmentRemoteShell.PowerShell, instructions.RemoteShell);
+        Assert.Contains("$downloadHeaders['Authorization'] = \"Bearer $($existingSettings.HostWorker.EnrollmentToken)\"", command);
+        Assert.Contains("Invoke-WebRequest $assetUrl -OutFile $archive -Headers $downloadHeaders", command);
+        Assert.Contains("Failed to download HostWorker update asset", command);
+        Assert.Contains("Expand-Archive $archive", command);
     }
 
     [Fact]
