@@ -1,7 +1,7 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Server.Services.HostWorkers
 @using Shiny.DocumentDb
-@implements IDisposable
+@implements IAsyncDisposable
 @inject IDocumentStore Store
 @inject HostWorkerEnrollmentGuideBuilder GuideBuilder
 @inject HostWorkerUpdateService HostWorkerUpdateService
@@ -223,7 +223,7 @@
         if (IsOpen && !wasOpen)
             await StartWizardAsync();
         else if (!IsOpen && wasOpen)
-            StopPolling();
+            await StopWizardAsync(notifyChanged: true);
 
         wasOpen = IsOpen;
     }
@@ -990,6 +990,42 @@
         waitCts = null;
     }
 
+    private async Task StopWizardAsync(bool notifyChanged)
+    {
+        StopPolling();
+        if (await RemovePendingHostIfUnenrolledAsync() && notifyChanged)
+            await OnChanged.InvokeAsync();
+    }
+
+    private async Task<bool> RemovePendingHostIfUnenrolledAsync()
+    {
+        if (pendingHost == null || connectedHost != null)
+            return false;
+
+        var pendingHostId = pendingHost.Id;
+        var pendingTokenHash = pendingHost.EnrollmentTokenHash;
+        if (string.IsNullOrWhiteSpace(pendingTokenHash))
+            return false;
+
+        var host = await Store.Get<Host>(pendingHostId);
+        if (host == null)
+        {
+            pendingHost = null;
+            return false;
+        }
+
+        if (host.IsApproved || host.EnrolledAt != null ||
+            !string.Equals(host.EnrollmentTokenHash, pendingTokenHash, StringComparison.Ordinal))
+        {
+            pendingHost = null;
+            return false;
+        }
+
+        await Store.Remove<Host>(pendingHostId);
+        pendingHost = null;
+        return true;
+    }
+
     private async Task CopyToClipboard(string text, string key)
     {
         if (string.IsNullOrEmpty(text))
@@ -1008,13 +1044,20 @@
 
     private async Task CloseAsync()
     {
-        StopPolling();
-        await OnClose.InvokeAsync();
+        try
+        {
+            await StopWizardAsync(notifyChanged: true);
+            await OnClose.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            wizardError = $"Unable to close enrollment wizard: {ex.Message}";
+        }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        StopPolling();
+        await StopWizardAsync(notifyChanged: false);
     }
 
     private static HostWorkerEnrollmentTarget InferTarget(Host host)
