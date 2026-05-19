@@ -140,6 +140,8 @@ builder.Services.AddScoped<ObservedLogQueryService>();
 builder.Services.AddSingleton<HostWorkerLocalUpdateStore>();
 builder.Services.AddSingleton<HostWorkerUpdateService>();
 builder.Services.AddSingleton<HostWorkerEventProcessor>();
+builder.Services.AddSingleton<HostWorkerEnrollmentGuideBuilder>();
+builder.Services.AddSingleton<HostWorkerSshSetupService>();
 builder.Services.AddSingleton<LongRunningTaskService>();
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
 builder.Services.AddSingleton<ProvisioningRuleGrainSyncService>();

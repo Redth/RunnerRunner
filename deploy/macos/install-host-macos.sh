@@ -9,6 +9,10 @@ HOST_NAME="${HOST_NAME:-$(hostname -s)}"
 HOST_ID="${HOST_ID:-}"
 SERVER_URL="${SERVER_URL:-}"
 ENROLLMENT_TOKEN="${ENROLLMENT_TOKEN:-}"
+HOSTWORKER_HTTP_PROXY="${HOSTWORKER_HTTP_PROXY:-}"
+HOSTWORKER_HTTPS_PROXY="${HOSTWORKER_HTTPS_PROXY:-}"
+HOSTWORKER_NO_PROXY="${HOSTWORKER_NO_PROXY:-}"
+PRESERVE_CONFIG=0
 
 usage() {
     cat <<USAGE
@@ -21,6 +25,10 @@ Options:
   --host-name NAME                     Display name (default: hostname)
   --server-url URL                     RunnerRunner server URL, for example https://runner.example.com
   --enrollment-token TOKEN             Enrollment token created on the server
+  --http-proxy URL                     Optional HTTP proxy for HostWorker outbound connections
+  --https-proxy URL                    Optional HTTPS proxy for HostWorker outbound connections
+  --no-proxy LIST                      Optional comma-separated proxy bypass list
+  --preserve-config                    Preserve the existing appsettings.Production.json during update
 
 macOS hosts install as a LaunchAgent for the current interactive user so Tart,
 Xcode, Keychain, and user-session resources remain available.
@@ -35,18 +43,29 @@ while [[ $# -gt 0 ]]; do
         --host-name) HOST_NAME="$2"; shift 2 ;;
         --server-url) SERVER_URL="$2"; shift 2 ;;
         --enrollment-token) ENROLLMENT_TOKEN="$2"; shift 2 ;;
+        --http-proxy) HOSTWORKER_HTTP_PROXY="$2"; shift 2 ;;
+        --https-proxy) HOSTWORKER_HTTPS_PROXY="$2"; shift 2 ;;
+        --no-proxy) HOSTWORKER_NO_PROXY="$2"; shift 2 ;;
+        --preserve-config) PRESERVE_CONFIG=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
 done
 
-if [[ -z "${SERVER_URL}" ]]; then
+existing_settings="${INSTALL_ROOT}/current/appsettings.Production.json"
+
+if [[ "${PRESERVE_CONFIG}" != "1" && -z "${SERVER_URL}" ]]; then
     echo "--server-url is required." >&2
     exit 1
 fi
 
-if [[ -z "${ENROLLMENT_TOKEN}" ]]; then
+if [[ "${PRESERVE_CONFIG}" != "1" && -z "${ENROLLMENT_TOKEN}" ]]; then
     echo "--enrollment-token is required." >&2
+    exit 1
+fi
+
+if [[ "${PRESERVE_CONFIG}" == "1" && ! -f "${existing_settings}" ]]; then
+    echo "--preserve-config requires an existing ${existing_settings}." >&2
     exit 1
 fi
 
@@ -61,6 +80,16 @@ if [[ -z "${HOST_ID}" ]]; then
     HOST_ID="${HOST_NAME}"
 fi
 
+if [[ -n "${HOSTWORKER_HTTP_PROXY}" ]]; then
+    export HTTP_PROXY="${HOSTWORKER_HTTP_PROXY}"
+fi
+if [[ -n "${HOSTWORKER_HTTPS_PROXY}" ]]; then
+    export HTTPS_PROXY="${HOSTWORKER_HTTPS_PROXY}"
+fi
+if [[ -n "${HOSTWORKER_NO_PROXY}" ]]; then
+    export NO_PROXY="${HOSTWORKER_NO_PROXY}"
+fi
+
 version_dir="${INSTALL_ROOT}/versions/${VERSION}"
 archive="runnerrunner-hostworker-${rid}.tar.gz"
 tmp_dir="$(mktemp -d)"
@@ -72,7 +101,10 @@ tar -xzf "${tmp_dir}/${archive}" -C "${version_dir}"
 chmod +x "${version_dir}/RunnerRunner.HostWorker"
 codesign --force -s - "${version_dir}/RunnerRunner.HostWorker" >/dev/null 2>&1 || true
 
-cat > "${version_dir}/appsettings.Production.json" <<JSON
+if [[ "${PRESERVE_CONFIG}" == "1" ]]; then
+    cp "${existing_settings}" "${version_dir}/appsettings.Production.json"
+else
+    cat > "${version_dir}/appsettings.Production.json" <<JSON
 {
   "HostWorker": {
     "ServerUrl": "${SERVER_URL}",
@@ -81,10 +113,14 @@ cat > "${version_dir}/appsettings.Production.json" <<JSON
     "HostName": "${HOST_NAME}",
     "Platform": "MacOS",
     "DataRoot": "${INSTALL_ROOT}",
-    "LogRoot": "${INSTALL_ROOT}/logs"
+    "LogRoot": "${INSTALL_ROOT}/logs",
+    "HttpProxy": "${HOSTWORKER_HTTP_PROXY}",
+    "HttpsProxy": "${HOSTWORKER_HTTPS_PROXY}",
+    "NoProxy": "${HOSTWORKER_NO_PROXY}"
   }
 }
 JSON
+fi
 chmod 0600 "${version_dir}/appsettings.Production.json"
 
 ln -sfn "${version_dir}" "${INSTALL_ROOT}/current"
@@ -116,6 +152,12 @@ cat > "${plist_path}" <<PLIST
     <string>Production</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HTTP_PROXY</key>
+    <string>${HOSTWORKER_HTTP_PROXY}</string>
+    <key>HTTPS_PROXY</key>
+    <string>${HOSTWORKER_HTTPS_PROXY}</string>
+    <key>NO_PROXY</key>
+    <string>${HOSTWORKER_NO_PROXY}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>${INSTALL_ROOT}/logs/hostworker.out.log</string>

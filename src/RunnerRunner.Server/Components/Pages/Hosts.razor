@@ -3,6 +3,7 @@
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
+@using RunnerRunner.Server.Components.Hosts
 @using RunnerRunner.Server.Services
 @using RunnerRunner.Server.Services.HostWorkers
 @inject IDocumentStore Store
@@ -23,8 +24,8 @@
 </SectionContent>
 
 <div class="mb-3 d-flex flex-wrap gap-2">
-    <button class="btn btn-primary" @onclick="GenerateEnrollmentToken">
-        <i class="bi bi-key-fill me-1"></i> Generate Enrollment Token
+    <button class="btn btn-primary" @onclick="OpenEnrollmentWizard">
+        <i class="bi bi-hdd-network me-1"></i> Add HostWorker
     </button>
     <a class="btn btn-outline-primary" href="/provisioning-rules">
         <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
@@ -35,14 +36,9 @@
             @updateError
         </div>
     }
-    @if (!string.IsNullOrEmpty(newToken))
-    {
-        <div class="alert alert-success mt-2">
-            <strong>Enrollment Token:</strong> <code>@newToken</code>
-            <br /><small>Use this token when starting one new HostWorker. It is stored hashed and will not be shown again.</small>
-        </div>
-    }
 </div>
+
+<HostEnrollmentWizard IsOpen="@showEnrollmentWizard" UpdateHost="@manualUpdateHost" OnClose="CloseEnrollmentWizard" OnChanged="ReloadData" />
 
 <div class="card mb-3">
     <div class="card-body">
@@ -254,6 +250,9 @@
                             <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply build")
                         </button>
                     }
+                    <button class="btn btn-sm btn-outline-warning me-1" @onclick="() => OpenManualUpdateWizard(host)" title="Manual update guide / SSH recovery update">
+                        <i class="bi bi-tools"></i> Manual update
+                    </button>
                     <a class="btn btn-sm btn-outline-primary me-1" href="/provisioning-rules"><i class="bi bi-diagram-3"></i> Rules</a>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndRemoveHost(host)">  <i class="bi bi-trash3"></i> Remove</button>
                 </td>
@@ -349,7 +348,8 @@
     private List<Host> hosts = [];
     private List<ProvisioningRule> rules = [];
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
-    private string? newToken;
+    private bool showEnrollmentWizard;
+    private Host? manualUpdateHost;
     private bool checkingUpdates;
     private string? updateError;
     private readonly HashSet<string> updatingHosts = [];
@@ -644,18 +644,22 @@
             _ => "bg-secondary"
         };
 
-    private async Task GenerateEnrollmentToken()
+    private void OpenEnrollmentWizard()
     {
-        newToken = HostEnrollmentToken.Create();
-        var host = new Host
-        {
-            Name = $"pending-{newToken[..8]}",
-            EnrollmentTokenHash = HostEnrollmentToken.Hash(newToken),
-            EnrollmentTokenCreatedAt = DateTime.UtcNow,
-            IsApproved = false
-        };
-        await Store.Insert(host);
-        await ReloadData();
+        manualUpdateHost = null;
+        showEnrollmentWizard = true;
+    }
+
+    private void OpenManualUpdateWizard(Host host)
+    {
+        manualUpdateHost = host;
+        showEnrollmentWizard = true;
+    }
+
+    private void CloseEnrollmentWizard()
+    {
+        showEnrollmentWizard = false;
+        manualUpdateHost = null;
     }
 
     private async Task ConfirmAndRemoveHost(Host host)

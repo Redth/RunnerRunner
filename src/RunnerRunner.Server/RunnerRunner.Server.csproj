@@ -15,6 +15,7 @@
     <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.0.1" />
     <PackageReference Include="Npgsql" Version="10.0.2" />
     <PackageReference Include="Shiny.DocumentDb.PostgreSql" Version="3.2.0" />
+    <PackageReference Include="SSH.NET" Version="2025.1.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,806 @@
+@using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Services.HostWorkers
+@using Shiny.DocumentDb
+@implements IDisposable
+@inject IDocumentStore Store
+@inject HostWorkerEnrollmentGuideBuilder GuideBuilder
+@inject HostWorkerSshSetupService SshSetup
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+@if (IsOpen)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block enrollment-wizard-modal" tabindex="-1" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content enrollment-wizard">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="bi bi-hdd-network me-1"></i>@WizardTitle</h5>
+                        <div class="small text-muted">@WizardSubtitle</div>
+                    </div>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseAsync"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="enrollment-steps mb-4">
+                        @foreach (var stepInfo in CurrentWizardSteps)
+                        {
+                            <button type="button"
+                                    class="enrollment-step @(step == stepInfo.Number ? "active" : step > stepInfo.Number ? "done" : "")"
+                                    disabled="@(stepInfo.Number > step)"
+                                    @onclick="() => GoToStep(stepInfo.Number)">
+                                <span>@stepInfo.Number</span>
+                                <strong>@stepInfo.Title</strong>
+                            </button>
+                        }
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(wizardError))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle-fill"></i>@wizardError
+                        </div>
+                    }
+
+                    @switch (step)
+                    {
+                        case 1:
+                            @RenderConfigureStep()
+                            break;
+                        case 2:
+                            @RenderInstallStep()
+                            break;
+                        case 3:
+                            @RenderWaitStep()
+                            break;
+                        case 4:
+                            @RenderSuccessStep()
+                            break;
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                    @if (step > 1 && step < 4)
+                    {
+                        <button type="button" class="btn btn-outline-secondary" @onclick="Back">Back</button>
+                    }
+                    @if (step == 1)
+                    {
+                        <button type="button" class="btn btn-primary" @onclick="() => step = 2" disabled="@(!CanContinue)">
+                            @(IsUpdateMode ? "Show update steps" : "Show install steps")
+                        </button>
+                    }
+                    else if (step == 2)
+                    {
+                        <button type="button" class="btn btn-primary" @onclick="MoveToWaitStep">
+                            @(IsUpdateMode ? "I ran the update" : "I started the HostWorker")
+                        </button>
+                    }
+                    else if (step == 3)
+                    {
+                        <button type="button" class="btn btn-outline-primary" @onclick="CheckEnrollmentOnce">
+                            Check now
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public Host? UpdateHost { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private static readonly WizardStep[] WizardSteps =
+    [
+        new(1, "Configure"),
+        new(2, "Install"),
+        new(3, "Wait"),
+        new(4, "Success")
+    ];
+
+    private static readonly WizardStep[] UpdateWizardSteps =
+    [
+        new(1, "Configure"),
+        new(2, "Update"),
+        new(3, "Wait"),
+        new(4, "Success")
+    ];
+
+    private static readonly TargetChoice[] TargetChoices =
+    [
+        new(HostWorkerEnrollmentTarget.LinuxDocker, "Linux", "Docker worker", "Best for Linux hosts and Linux container runners.", "bi-ubuntu"),
+        new(HostWorkerEnrollmentTarget.MacOSNative, "macOS", "Native LaunchAgent", "Best for Tart, Xcode, Keychain, and native macOS runners.", "bi-apple"),
+        new(HostWorkerEnrollmentTarget.MacOSDocker, "macOS", "Docker Linux worker", "Use Docker Desktop to provide Linux container runner capacity.", "bi-box"),
+        new(HostWorkerEnrollmentTarget.WindowsService, "Windows", "Native service", "Best for native Windows work and Windows Docker runners.", "bi-windows"),
+        new(HostWorkerEnrollmentTarget.WindowsDockerWindows, "Windows", "Windows container", "Run the HostWorker itself as a Windows container.", "bi-box"),
+        new(HostWorkerEnrollmentTarget.WindowsDockerLinux, "Windows", "WSL/Linux Docker", "Run the Linux worker from WSL or Docker Desktop's Linux engine.", "bi-terminal")
+    ];
+
+    private bool wasOpen;
+    private int step = 1;
+    private string? wizardError;
+    private Host? pendingHost;
+    private Host? connectedHost;
+    private string? enrollmentToken;
+    private HostWorkerEnrollmentTarget target = HostWorkerEnrollmentTarget.LinuxDocker;
+    private string serverUrl = "";
+    private string hostName = "";
+    private string hostId = "";
+    private string httpProxy = "";
+    private string httpsProxy = "";
+    private string noProxy = "";
+    private string? copiedKey;
+    private CancellationTokenSource? waitCts;
+
+    private string sshTarget = "";
+    private int sshPort = 22;
+    private string sshUser = "";
+    private bool sshUsePassword = true;
+    private string sshPassword = "";
+    private string sshKeyPath = "";
+    private string sshKeyPassphrase = "";
+    private bool autoSetupRunning;
+    private string? autoSetupError;
+    private HostWorkerSshSetupResult? autoSetupResult;
+    private DateTime? manualOperationStartedAt;
+
+    private bool IsUpdateMode => UpdateHost != null;
+    private IReadOnlyList<WizardStep> CurrentWizardSteps => IsUpdateMode ? UpdateWizardSteps : WizardSteps;
+    private string WizardTitle => IsUpdateMode ? $"Manually update {UpdateHost!.Label}" : "Add a HostWorker";
+    private string WizardSubtitle => IsUpdateMode
+        ? "Copy or run recovery update commands over SSH, then wait for the existing host to reconnect."
+        : "Generate a one-time enrollment token, install the worker, and wait for the host to connect.";
+    private string AutoSetupButtonText => autoSetupRunning
+        ? (IsUpdateMode ? "Running update..." : "Running setup...")
+        : (IsUpdateMode ? "Run update" : "Run setup");
+    private string WaitingSinceText => manualOperationStartedAt.HasValue
+        ? manualOperationStartedAt.Value.ToLocalTime().ToString("g")
+        : "now";
+
+    private bool CanContinue =>
+        (IsUpdateMode || !string.IsNullOrWhiteSpace(enrollmentToken)) &&
+        !string.IsNullOrWhiteSpace(serverUrl) &&
+        !string.IsNullOrWhiteSpace(EffectiveHostName);
+
+    private string EffectiveHostName =>
+        string.IsNullOrWhiteSpace(hostName)
+            ? IsUpdateMode && UpdateHost != null
+                ? UpdateHost.Label
+                : HostWorkerEnrollmentGuideBuilder.GetDefaultHostName(target, enrollmentToken ?? "")
+            : hostName.Trim();
+
+    private string EffectiveHostId =>
+        string.IsNullOrWhiteSpace(hostId) ? EffectiveHostName : hostId.Trim();
+
+    private HostWorkerEnrollmentInstructions? CurrentInstructions =>
+        IsUpdateMode && UpdateHost != null
+            ? GuideBuilder.BuildManualUpdate(new HostWorkerManualUpdateRequest(
+                target,
+                UpdateHost.Id,
+                EffectiveHostName,
+                UpdateHost.WorkerId,
+                UpdateHost.ContainerId,
+                new HostWorkerEnrollmentProxy(
+                    string.IsNullOrWhiteSpace(httpProxy) ? null : httpProxy.Trim(),
+                    string.IsNullOrWhiteSpace(httpsProxy) ? null : httpsProxy.Trim(),
+                    string.IsNullOrWhiteSpace(noProxy) ? null : noProxy.Trim())))
+            : string.IsNullOrWhiteSpace(enrollmentToken) || string.IsNullOrWhiteSpace(serverUrl)
+                ? null
+                : GuideBuilder.Build(new HostWorkerEnrollmentRequest(
+                target,
+                serverUrl.Trim(),
+                enrollmentToken,
+                EffectiveHostId,
+                EffectiveHostName,
+                new HostWorkerEnrollmentProxy(
+                    string.IsNullOrWhiteSpace(httpProxy) ? null : httpProxy.Trim(),
+                    string.IsNullOrWhiteSpace(httpsProxy) ? null : httpsProxy.Trim(),
+                    string.IsNullOrWhiteSpace(noProxy) ? null : noProxy.Trim())));
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsOpen && !wasOpen)
+            await StartWizardAsync();
+        else if (!IsOpen && wasOpen)
+            StopPolling();
+
+        wasOpen = IsOpen;
+    }
+
+    private async Task StartWizardAsync()
+    {
+        StopPolling();
+        ResetState();
+
+        try
+        {
+            var options = GuideBuilder.GetOptions();
+            serverUrl = GuideBuilder.ResolveServerUrl(Navigation.BaseUri);
+            httpProxy = options.HttpProxy ?? "";
+            httpsProxy = options.HttpsProxy ?? "";
+            noProxy = options.NoProxy ?? "";
+
+            if (IsUpdateMode && UpdateHost != null)
+            {
+                target = InferTarget(UpdateHost);
+                hostName = UpdateHost.Label;
+                hostId = UpdateHost.WorkerId ?? UpdateHost.Id;
+                return;
+            }
+
+            enrollmentToken = HostEnrollmentToken.Create();
+            pendingHost = new Host
+            {
+                Name = $"pending-{enrollmentToken[..8]}",
+                EnrollmentTokenHash = HostEnrollmentToken.Hash(enrollmentToken),
+                EnrollmentTokenCreatedAt = DateTime.UtcNow,
+                IsApproved = false
+            };
+
+            await Store.Insert(pendingHost);
+
+            hostName = HostWorkerEnrollmentGuideBuilder.GetDefaultHostName(target, enrollmentToken);
+            hostId = hostName;
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            wizardError = $"Unable to create enrollment token: {ex.Message}";
+        }
+    }
+
+    private void ResetState()
+    {
+        step = 1;
+        wizardError = null;
+        pendingHost = null;
+        connectedHost = null;
+        enrollmentToken = null;
+        target = HostWorkerEnrollmentTarget.LinuxDocker;
+        serverUrl = "";
+        hostName = "";
+        hostId = "";
+        httpProxy = "";
+        httpsProxy = "";
+        noProxy = "";
+        copiedKey = null;
+        sshTarget = "";
+        sshPort = 22;
+        sshUser = "";
+        sshUsePassword = true;
+        sshPassword = "";
+        sshKeyPath = "";
+        sshKeyPassphrase = "";
+        autoSetupRunning = false;
+        autoSetupError = null;
+        autoSetupResult = null;
+        manualOperationStartedAt = null;
+    }
+
+    private RenderFragment RenderConfigureStep() => @<div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h6><i class="bi bi-pc-display-horizontal me-1"></i>@(IsUpdateMode ? "Choose manual update path" : "Choose host OS and worker mode")</h6>
+                    <div class="enrollment-target-grid">
+                        @foreach (var choice in TargetChoices)
+                        {
+                            <button type="button"
+                                    class="enrollment-target-card @(target == choice.Target ? "active" : "")"
+                                    @onclick="() => SelectTarget(choice.Target)">
+                                <i class="bi @choice.Icon"></i>
+                                <span>@choice.Platform</span>
+                                <strong>@choice.Title</strong>
+                                <small>@choice.Description</small>
+                            </button>
+                        }
+                    </div>
+
+                    <div class="row g-3 mt-2">
+                        <div class="col-md-6">
+                            <label class="form-label">Host name</label>
+                            <input class="form-control" @bind="hostName" @bind:event="oninput" readonly="@IsUpdateMode" />
+                            <div class="form-text">@(IsUpdateMode ? "Existing host label used in the update guide." : "Shown in RunnerRunner after the worker connects.")</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Host ID</label>
+                            <input class="form-control" @bind="hostId" @bind:event="oninput" readonly="@IsUpdateMode" />
+                            <div class="form-text">@(IsUpdateMode ? "Existing host identity. Manual commands preserve this value." : "Stable worker identity. Defaults to the host name.")</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    @if (IsUpdateMode && UpdateHost != null)
+                    {
+                        <h6><i class="bi bi-arrow-up-circle me-1"></i>Manual update target</h6>
+                        <p class="small">This mode does not create a new token. It preserves the existing worker configuration from disk or the current container environment.</p>
+                        <div class="small">
+                            <div><strong>Status:</strong> <span class="badge @GetStatusBadge(UpdateHost.AgentStatus)">@UpdateHost.AgentStatus</span></div>
+                            <div><strong>Current version:</strong> @(UpdateHost.AgentVersion ?? "unknown")</div>
+                            <div><strong>Platform:</strong> @UpdateHost.Platform</div>
+                            @if (!string.IsNullOrWhiteSpace(UpdateHost.ContainerId))
+                            {
+                                <div><strong>Container:</strong> <code>@UpdateHost.ContainerId</code></div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <h6><i class="bi bi-key-fill me-1"></i>Enrollment token</h6>
+                        <p class="small">This token is shown once and stored hashed. Use it only for this one HostWorker.</p>
+                        <div class="input-group input-group-sm mb-3">
+                            <input class="form-control enrollment-token-input" readonly value="@enrollmentToken" />
+                            <button type="button" class="btn btn-outline-secondary" @onclick='() => CopyToClipboard(enrollmentToken ?? "", "token")'>
+                                @(copiedKey == "token" ? "Copied" : "Copy")
+                            </button>
+                        </div>
+                    }
+
+                    <label class="form-label">Advertised HostWorker URL</label>
+                    <input class="form-control" @bind="serverUrl" @bind:event="oninput" placeholder="http://runner.example.com:4780" />
+                    <div class="form-text">
+                        This is the URL workers connect to over gRPC. Set <code>HostWorkerEnrollment:PublicServerUrl</code> on the server when using a proxy, DNS name, or custom port.
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <h6><i class="bi bi-diagram-3 me-1"></i>Optional proxy settings</h6>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">HTTP proxy</label>
+                            <input class="form-control" @bind="httpProxy" @bind:event="oninput" placeholder="http://proxy.example.com:8080" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">HTTPS proxy</label>
+                            <input class="form-control" @bind="httpsProxy" @bind:event="oninput" placeholder="http://proxy.example.com:8080" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">No proxy</label>
+                            <input class="form-control" @bind="noProxy" @bind:event="oninput" placeholder="localhost,127.0.0.1,.example.com" />
+                        </div>
+                    </div>
+                    <div class="form-text mt-2">
+                        Defaults can come from <code>HostWorkerEnrollment:HttpProxy</code>, <code>HttpsProxy</code>, and <code>NoProxy</code>. Generated Docker commands include these environment variables automatically.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>;
+
+    private RenderFragment RenderInstallStep() => @<div>
+        @if (CurrentInstructions is { } instructions)
+        {
+            <div class="row g-3">
+                <div class="col-lg-8">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h5>@instructions.Title</h5>
+                            <p>@instructions.Summary</p>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h6>Prerequisites</h6>
+                                    <ul class="small">
+                                        @foreach (var prerequisite in instructions.Prerequisites)
+                                        {
+                                            <li>@prerequisite</li>
+                                        }
+                                    </ul>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6>What this configures</h6>
+                                    <ul class="small">
+                                        <li><strong>Server URL:</strong> <code>@serverUrl</code></li>
+                                        <li><strong>Host ID:</strong> <code>@EffectiveHostId</code></li>
+                                        <li><strong>Host name:</strong> <code>@EffectiveHostName</code></li>
+                                        <li><strong>@(IsUpdateMode ? "Update platform" : "Detected platform"):</strong> @instructions.HostPlatform</li>
+                                        @if (IsUpdateMode && UpdateHost != null)
+                                        {
+                                            <li><strong>Current version:</strong> @(UpdateHost.AgentVersion ?? "unknown")</li>
+                                        }
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    @foreach (var block in instructions.CommandBlocks)
+                    {
+                        <div class="card mb-3">
+                            <div class="card-body">
+                                <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+                                    <div>
+                                        <h6 class="mb-1">@block.Title</h6>
+                                        <div class="small text-muted">@block.Description</div>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick='() => CopyToClipboard(block.Command, block.Title)'>
+                                        @(copiedKey == block.Title ? "Copied" : "Copy")
+                                    </button>
+                                </div>
+                                <pre class="enrollment-command"><code>@block.Command</code></pre>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="col-lg-4">
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <h6><i class="bi bi-robot me-1"></i>@(IsUpdateMode ? "Auto update over SSH" : "Auto setup over SSH")</h6>
+                            <p class="small">Use this when the server can reach the target by SSH. Credentials are used once for this request and are not stored.</p>
+                            @if (instructions.RemoteShell == HostWorkerEnrollmentRemoteShell.Unsupported)
+                            {
+                                <div class="alert alert-secondary">Automatic SSH setup is not available for this target.</div>
+                            }
+                            else
+                            {
+                                <div class="mb-2">
+                                    <label class="form-label">Target address</label>
+                                    <input class="form-control form-control-sm" @bind="sshTarget" @bind:event="oninput" placeholder="192.168.2.20 or host.example.com" />
+                                </div>
+                                <div class="row g-2">
+                                    <div class="col-5">
+                                        <label class="form-label">SSH port</label>
+                                        <input type="number" class="form-control form-control-sm" @bind="sshPort" min="1" max="65535" />
+                                    </div>
+                                    <div class="col-7">
+                                        <label class="form-label">SSH user</label>
+                                        <input class="form-control form-control-sm" @bind="sshUser" @bind:event="oninput" placeholder="runneradmin" />
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="sshAuthMode" checked="@sshUsePassword" @onchange="@(() => sshUsePassword = true)" />
+                                        <label class="form-check-label">Password</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="sshAuthMode" checked="@(!sshUsePassword)" @onchange="@(() => sshUsePassword = false)" />
+                                        <label class="form-check-label">Private key</label>
+                                    </div>
+                                </div>
+                                @if (sshUsePassword)
+                                {
+                                    <div class="mt-2">
+                                        <label class="form-label">SSH password</label>
+                                        <input type="password" class="form-control form-control-sm" @bind="sshPassword" @bind:event="oninput" autocomplete="new-password" />
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="mt-2">
+                                        <label class="form-label">Private key path on the server</label>
+                                        <input class="form-control form-control-sm" @bind="sshKeyPath" @bind:event="oninput" placeholder="/home/runnerrunner/.ssh/id_ed25519" />
+                                        <div class="form-text">The key must be readable by the RunnerRunner server process.</div>
+                                    </div>
+                                    <div class="mt-2">
+                                        <label class="form-label">Key passphrase</label>
+                                        <input type="password" class="form-control form-control-sm" @bind="sshKeyPassphrase" @bind:event="oninput" autocomplete="new-password" />
+                                    </div>
+                                }
+                                <button type="button" class="btn btn-primary btn-sm mt-3 w-100" @onclick="RunAutoSetup" disabled="@autoSetupRunning">
+                                    <i class="bi bi-terminal"></i> @AutoSetupButtonText
+                                </button>
+
+                                @if (!string.IsNullOrWhiteSpace(autoSetupError))
+                                {
+                                    <div class="alert alert-danger mt-3">@autoSetupError</div>
+                                }
+                                @if (autoSetupResult != null)
+                                {
+                                    <div class="alert @(autoSetupResult.Success ? "alert-success" : "alert-danger") mt-3">
+                                        SSH command exited with status @autoSetupResult.ExitStatus.
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(autoSetupResult.Output))
+                                    {
+                                        <pre class="enrollment-output">@autoSetupResult.Output</pre>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(autoSetupResult.Error))
+                                    {
+                                        <pre class="enrollment-output text-danger">@autoSetupResult.Error</pre>
+                                    }
+                                }
+                            }
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-body">
+                            <h6>Notes</h6>
+                            <ul class="small mb-0">
+                                @foreach (var note in instructions.Notes)
+                                {
+                                    <li>@note</li>
+                                }
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>;
+
+    private RenderFragment RenderWaitStep() => @<div class="card">
+        <div class="card-body text-center py-5">
+            @if (connectedHost == null)
+            {
+                <div class="spinner-border text-primary mb-3" role="status" aria-label="Waiting for HostWorker"></div>
+                <h5>@(IsUpdateMode ? "Waiting for the HostWorker to reconnect..." : "Waiting for the HostWorker to connect...")</h5>
+                <p class="mb-3">@(IsUpdateMode ? "Keep this dialog open. The wizard checks for a fresh heartbeat from the existing host after the manual update." : "Keep this dialog open. The wizard checks the pending token every few seconds and will continue when the worker enrolls.")</p>
+                <div class="enrollment-wait-details">
+                    <div><strong>Host name:</strong> <code>@EffectiveHostName</code></div>
+                    @if (IsUpdateMode)
+                    {
+                        <div><strong>Waiting since:</strong> <code>@WaitingSinceText</code></div>
+                    }
+                    else
+                    {
+                        <div><strong>Server URL:</strong> <code>@serverUrl</code></div>
+                        <div><strong>Pending host:</strong> <code>@pendingHost?.Name</code></div>
+                    }
+                </div>
+            }
+            else
+            {
+                @RenderSuccessStep()
+            }
+        </div>
+    </div>;
+
+    private RenderFragment RenderSuccessStep() => @<div class="card">
+        <div class="card-body text-center py-5">
+            <div class="enrollment-success-icon mb-3">
+                <i class="bi bi-check-lg"></i>
+            </div>
+            <h4>@(IsUpdateMode ? "HostWorker updated and reconnected" : "HostWorker connected")</h4>
+            @if (connectedHost != null)
+            {
+                <p>@(IsUpdateMode ? "The host sent a fresh heartbeat after the manual update." : "The host is enrolled and ready for provisioning rules.")</p>
+                <div class="d-flex flex-wrap justify-content-center gap-2 mt-3">
+                    <span class="host-chip platform-chip"><i class="bi bi-pc-display me-1"></i>@connectedHost.Platform</span>
+                    @if (!string.IsNullOrWhiteSpace(connectedHost.Architecture))
+                    {
+                        <span class="host-chip arch-chip"><i class="bi bi-cpu me-1"></i>@connectedHost.Architecture</span>
+                    }
+                    @foreach (var capability in connectedHost.Capabilities)
+                    {
+                        <span class="host-chip cap-chip">@capability</span>
+                    }
+                </div>
+                <div class="small text-muted mt-3">
+                    <strong>@connectedHost.Label</strong> connected as <code>@connectedHost.WorkerId</code>@(IsUpdateMode ? $" on version {connectedHost.AgentVersion ?? "unknown"}" : "").
+                </div>
+            }
+            else
+            {
+                <p>The worker connected successfully.</p>
+            }
+        </div>
+    </div>;
+
+    private void SelectTarget(HostWorkerEnrollmentTarget selectedTarget)
+    {
+        target = selectedTarget;
+        if (!string.IsNullOrWhiteSpace(enrollmentToken))
+        {
+            hostName = HostWorkerEnrollmentGuideBuilder.GetDefaultHostName(target, enrollmentToken);
+            hostId = hostName;
+        }
+        autoSetupError = null;
+        autoSetupResult = null;
+    }
+
+    private void GoToStep(int targetStep)
+    {
+        if (targetStep < step)
+        {
+            step = targetStep;
+            if (step < 3)
+                StopPolling();
+        }
+    }
+
+    private void Back()
+    {
+        if (step <= 1)
+            return;
+
+        step--;
+        if (step < 3)
+            StopPolling();
+    }
+
+    private async Task MoveToWaitStep()
+    {
+        step = 3;
+        manualOperationStartedAt = DateTime.UtcNow.AddSeconds(-2);
+        await CheckEnrollmentOnce();
+        if (connectedHost == null)
+            StartPolling();
+    }
+
+    private async Task RunAutoSetup()
+    {
+        if (CurrentInstructions is not { } instructions)
+            return;
+
+        autoSetupRunning = true;
+        autoSetupError = null;
+        autoSetupResult = null;
+        try
+        {
+            autoSetupResult = await SshSetup.RunAsync(
+                new HostWorkerSshSetupRequest(
+                    sshTarget.Trim(),
+                    sshPort,
+                    sshUser.Trim(),
+                    sshUsePassword ? sshPassword : null,
+                    sshUsePassword ? null : sshKeyPath.Trim(),
+                    sshUsePassword ? null : sshKeyPassphrase,
+                    instructions.RemoteShell,
+                    instructions.RemoteSetupScript),
+                CancellationToken.None);
+
+            if (autoSetupResult.Success)
+                await MoveToWaitStep();
+        }
+        catch (Exception ex)
+        {
+            autoSetupError = ex.Message;
+        }
+        finally
+        {
+            autoSetupRunning = false;
+            sshPassword = "";
+            sshKeyPassphrase = "";
+        }
+    }
+
+    private async Task CheckEnrollmentOnce()
+    {
+        if (IsUpdateMode && UpdateHost != null)
+        {
+            var refreshedHost = await Store.Get<Host>(UpdateHost.Id);
+            if (refreshedHost is { AgentStatus: AgentStatus.Online } &&
+                (manualOperationStartedAt == null ||
+                 (refreshedHost.LastHeartbeat != null && refreshedHost.LastHeartbeat >= manualOperationStartedAt)))
+            {
+                connectedHost = refreshedHost;
+                step = 4;
+                StopPolling();
+                await OnChanged.InvokeAsync();
+            }
+
+            return;
+        }
+
+        if (pendingHost == null)
+            return;
+
+        var host = await Store.Get<Host>(pendingHost.Id);
+        if (host is { IsApproved: true } && host.EnrolledAt != null)
+        {
+            connectedHost = host;
+            step = 4;
+            StopPolling();
+            await OnChanged.InvokeAsync();
+        }
+    }
+
+    private void StartPolling()
+    {
+        StopPolling();
+        waitCts = new CancellationTokenSource();
+        _ = PollForEnrollmentAsync(waitCts.Token);
+    }
+
+    private async Task PollForEnrollmentAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested && connectedHost == null)
+        {
+            try
+            {
+                await InvokeAsync(async () =>
+                {
+                    await CheckEnrollmentOnce();
+                    StateHasChanged();
+                });
+                if (connectedHost != null)
+                    break;
+                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                await InvokeAsync(() =>
+                {
+                    wizardError = $"Unable to check {(IsUpdateMode ? "update" : "enrollment")} status: {ex.Message}";
+                    StateHasChanged();
+                });
+                break;
+            }
+        }
+    }
+
+    private void StopPolling()
+    {
+        if (waitCts == null)
+            return;
+
+        waitCts.Cancel();
+        waitCts.Dispose();
+        waitCts = null;
+    }
+
+    private async Task CopyToClipboard(string text, string key)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            copiedKey = key;
+        }
+        catch (Exception ex)
+        {
+            wizardError = $"Unable to copy to clipboard: {ex.Message}";
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        StopPolling();
+        await OnClose.InvokeAsync();
+    }
+
+    public void Dispose()
+    {
+        StopPolling();
+    }
+
+    private static HostWorkerEnrollmentTarget InferTarget(Host host)
+    {
+        if (host.IsContainerized)
+        {
+            if (host.Platform == HostPlatform.Windows)
+                return HostWorkerEnrollmentTarget.WindowsDockerWindows;
+
+            return HostWorkerEnrollmentTarget.LinuxDocker;
+        }
+
+        return host.Platform switch
+        {
+            HostPlatform.MacOS => HostWorkerEnrollmentTarget.MacOSNative,
+            HostPlatform.Windows => HostWorkerEnrollmentTarget.WindowsService,
+            _ => HostWorkerEnrollmentTarget.LinuxDocker
+        };
+    }
+
+    private static string GetStatusBadge(AgentStatus status) => status switch
+    {
+        AgentStatus.Online => "bg-success",
+        AgentStatus.Connecting => "bg-warning",
+        AgentStatus.Offline => "bg-secondary",
+        _ => "bg-secondary"
+    };
+
+    private sealed record WizardStep(int Number, string Title);
+    private sealed record TargetChoice(
+        HostWorkerEnrollmentTarget Target,
+        string Platform,
+        string Title,
+        string Description,
+        string Icon);
+}

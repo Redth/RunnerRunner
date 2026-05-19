@@ -41,6 +41,10 @@ services:
       - Kestrel__Endpoints__HostWorkerGrpc__Url=http://+:4780
       - Kestrel__Endpoints__HostWorkerGrpc__Protocols=Http2
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP:-}
+      - HostWorkerEnrollment__PublicServerUrl=${HOSTWORKER_PUBLIC_SERVER_URL:-}
+      - HostWorkerEnrollment__HttpProxy=${HOSTWORKER_HTTP_PROXY:-}
+      - HostWorkerEnrollment__HttpsProxy=${HOSTWORKER_HTTPS_PROXY:-}
+      - HostWorkerEnrollment__NoProxy=${HOSTWORKER_NO_PROXY:-}
       - DOTNET_ENVIRONMENT=Production
       - Logging__Console__FormatterName=${LOGGING_CONSOLE_FORMATTER_NAME:-simple}
       - Logging__Console__IncludeScopes=${LOGGING_CONSOLE_INCLUDE_SCOPES:-false}
