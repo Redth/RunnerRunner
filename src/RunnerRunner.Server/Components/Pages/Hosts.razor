@@ -138,12 +138,11 @@
     <thead>
         <tr>
             <th role="button" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
-            <th role="button" style="width: 7rem;" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
-            <th style="width: 15rem;">Worker</th>
+            <th role="button" style="width: 10rem;" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
+            <th style="width: 12rem;">Worker</th>
             <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
-            <th>Provisioning</th>
-            <th role="button" @onclick='() => ToggleSort("LastHeartbeat")'>Last Heartbeat @SortIndicator("LastHeartbeat")</th>
-            <th style="width: 11rem;">Actions</th>
+            <th style="width: 13rem;">Provisioning</th>
+            <th style="width: 14rem;">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -171,7 +170,13 @@
                     }
                 </td>
                 <td>
-                    <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
+                    <div class="host-status-stack">
+                        <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
+                        <span class="host-heartbeat @GetHeartbeatClass(host.LastHeartbeat)" title="@FormatHeartbeatTitle(host.LastHeartbeat)">
+                            <i class="bi bi-heart-pulse-fill"></i>
+                            <span>@FormatHeartbeat(host.LastHeartbeat)</span>
+                        </span>
+                    </div>
                 </td>
                 <td>
                     <div class="host-worker-version">
@@ -190,12 +195,27 @@
                         @if (!string.IsNullOrWhiteSpace(host.UpdateStatus))
                         {
                             <div class="host-update-summary mt-2">
-                                <span class="badge @GetUpdateBadge(host.UpdateStatus)">@FormatUpdateStatus(host.UpdateStatus)</span>
-                                @if (!string.IsNullOrWhiteSpace(host.LatestAvailableVersion))
+                                @if (IsCurrentUpdateStatus(host.UpdateStatus))
+                                {
+                                    <span class="host-update-chip update-current" title="@GetWorkerUpdateSummary(host)">
+                                        <i class="bi bi-check-lg"></i>
+                                        <span class="visually-hidden">Up to date</span>
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="badge @GetUpdateBadge(host.UpdateStatus)">
+                                        <i class="bi @GetUpdateIcon(host.UpdateStatus) me-1"></i>@FormatUpdateStatus(host.UpdateStatus)
+                                    </span>
+                                }
+                                @if (ShouldShowLatestAvailableVersion(host))
                                 {
                                     <code title="@host.LatestAvailableVersion">@FormatDisplayVersion(host.LatestAvailableVersion)</code>
                                 }
-                                <div class="small text-muted">@GetWorkerUpdateSummary(host)</div>
+                                @if (!IsCurrentUpdateStatus(host.UpdateStatus))
+                                {
+                                    <div class="small text-muted">@GetWorkerUpdateSummary(host)</div>
+                                }
                             </div>
                         }
                     }
@@ -227,22 +247,36 @@
                     }
                     @if (capacitySnapshot.Hosts.TryGetValue(host.Id, out var capacity))
                     {
-                        <div class="small text-muted mt-2">
-                            <span class="me-2">Docker @FormatBackendUsage(capacity, ExecutionBackend.Docker)</span>
-                            <span class="me-2">Tart @FormatBackendUsage(capacity, ExecutionBackend.Tart)</span>
-                            <span>Native @FormatBackendUsage(capacity, ExecutionBackend.Native)</span>
+                        <div class="backend-capacity-row mt-2" aria-label="Backend capacity">
+                            @foreach (var backend in BackendCapacityOrder)
+                            {
+                                if (capacity.BackendUsage.TryGetValue(backend, out var counter))
+                                {
+                                    <span class="backend-capacity-chip @GetBackendUsageClass(counter)"
+                                          title="@GetBackendUsageTitle(backend, counter)">
+                                        <i class="bi @GetBackendIcon(backend)"></i>
+                                        <span class="backend-capacity-meter" style="@GetBackendUsageStyle(counter)" aria-hidden="true">
+                                            <span></span>
+                                        </span>
+                                        <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
+                                    </span>
+                                }
+                            }
                         </div>
                         @if (GetAutoLabels(host).TryGetValue("docker_os", out var dockerOs))
                         {
-                            <div class="small text-muted mt-1">
-                                Docker mode: <strong>@dockerOs</strong> containers
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                <span class="host-chip cap-chip" title="Docker container mode">
+                                    <i class="bi bi-boxes me-1"></i>@dockerOs containers
+                                </span>
                             </div>
                         }
                         @if (capacity.ProfileUsage.Any(p => p.IsSaturated))
                         {
-                            <div class="small text-warning mt-1">
-                                Saturated profiles:
-                                @string.Join(", ", capacity.ProfileUsage.Where(p => p.IsSaturated).Take(2).Select(p => $"{p.ProfileName} {p.Summary}"))
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                <span class="host-chip saturated-chip" title="@FormatSaturatedProfiles(capacity)">
+                                    <i class="bi bi-exclamation-triangle-fill me-1"></i>Saturated
+                                </span>
                             </div>
                         }
                     }
@@ -250,26 +284,37 @@
                 <td>
                     @if (hostRules.Any())
                     {
-                        @foreach (var rule in hostRules)
-                        {
-                            <span class="badge @GetRuleBadge(rule.Type) me-1">@rule.Name</span>
-                        }
+                        <div class="provisioning-chips">
+                            @foreach (var rule in hostRules)
+                            {
+                                <span class="provisioning-chip @GetProvisioningChipClass(rule)"
+                                      title="@GetProvisioningRuleTitle(rule)">
+                                    <i class="bi @GetProvisioningIcon(rule.Type)"></i>
+                                    <span>@rule.Name</span>
+                                </span>
+                            }
+                        </div>
                     }
                     else
                     {
-                        <span class="text-muted">Use provisioning rules</span>
+                        <a class="provisioning-chip provisioning-chip-empty" href="/provisioning-rules"
+                           title="No provisioning rules target this host. Open provisioning rules.">
+                            <i class="bi bi-diagram-3"></i>
+                            <span>Rules</span>
+                        </a>
                     }
                 </td>
-                <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
                 <td class="host-actions-cell">
                     <div class="host-actions">
                         <a href="/logs?source=host:@host.Id" class="btn btn-sm btn-outline-secondary" title="View logs">
-                            <i class="bi bi-file-text"></i><span class="d-none d-xl-inline">Logs</span>
+                            <i class="bi bi-file-text"></i><span class="host-action-label">Logs</span>
                         </a>
                         @if (CanUpdate(host))
                         {
-                            <button class="btn btn-sm btn-outline-success" @onclick="() => QueueHostWorkerUpdate(host)" disabled="@updatingHosts.Contains(host.Id)">
-                                <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply build")
+                            <button class="btn btn-sm btn-outline-success" title="@GetUpdateActionLabel(host)"
+                                    @onclick="() => QueueHostWorkerUpdate(host)" disabled="@updatingHosts.Contains(host.Id)">
+                                <i class="bi bi-arrow-up-circle"></i>
+                                <span class="host-action-label host-update-action-label">@GetUpdateActionLabel(host)</span>
                             </button>
                         }
                         <div class="host-action-menu">
@@ -297,7 +342,7 @@
             @if (configureHostId == host.Id)
             {
                 <tr>
-                    <td colspan="7" class="p-0">
+                    <td colspan="6" class="p-0">
                         <div class="card m-2">
                             <div class="card-body">
                                 <div class="row">
@@ -395,6 +440,8 @@
     private IReadOnlyList<HostWorkerUpdateVersion> availableUpdateVersions = [];
     private bool showUpdateOptions;
     private string? openActionsMenuHostId;
+    private static readonly ExecutionBackend[] BackendCapacityOrder =
+        new[] { ExecutionBackend.Docker, ExecutionBackend.Tart, ExecutionBackend.Native };
 
     private string SelectedUpdateTargetLabel =>
         selectedUpdateSource == HostWorkerUpdateSourceKind.Release
@@ -706,6 +753,26 @@
             _ => status
         };
 
+    private static bool IsCurrentUpdateStatus(string? status)
+        => string.Equals(status, "Current", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldShowLatestAvailableVersion(Host host)
+        => !IsCurrentUpdateStatus(host.UpdateStatus)
+           && !string.IsNullOrWhiteSpace(host.LatestAvailableVersion);
+
+    private static string GetUpdateIcon(string status)
+        => status switch
+        {
+            "UpdateAvailable" => "bi-arrow-up-circle",
+            "Queued" => "bi-hourglass-split",
+            "Downloading" => "bi-cloud-download",
+            "Verifying" => "bi-shield-check",
+            "Staged" => "bi-box-arrow-down",
+            "Restarting" => "bi-arrow-clockwise",
+            "Failed" or "Unavailable" => "bi-exclamation-triangle-fill",
+            _ => "bi-info-circle"
+        };
+
     private static string GetWorkerUpdateSummary(Host host)
     {
         if (string.IsNullOrWhiteSpace(host.UpdateStatus))
@@ -726,17 +793,20 @@
         if (string.IsNullOrWhiteSpace(version))
             return "unknown";
 
-        var value = version.Trim();
+        var value = version.Trim().Trim('\'');
         var metadataIndex = value.IndexOf('+');
-        if (metadataIndex >= 0 && metadataIndex < value.Length - 1)
+        if (metadataIndex >= 0)
         {
-            var metadata = value[(metadataIndex + 1)..].Trim('\'');
-            var shortenedMetadata = ShortenCommitLike(metadata);
-            if (!string.Equals(metadata, shortenedMetadata, StringComparison.Ordinal))
-                return value[..(metadataIndex + 1)] + shortenedMetadata;
+            var baseVersion = value[..metadataIndex];
+            var metadata = metadataIndex < value.Length - 1
+                ? value[(metadataIndex + 1)..]
+                : "";
+            return string.IsNullOrWhiteSpace(metadata)
+                ? ShortenVersionSegment(baseVersion)
+                : $"{ShortenVersionSegment(baseVersion)}+{ShortenVersionSegment(metadata)}";
         }
 
-        return ShortenCommitLike(value);
+        return ShortenVersionSegment(value);
     }
 
     private static string ShortenKnownVersions(string? message, params string?[] versions)
@@ -755,10 +825,10 @@
         return result;
     }
 
-    private static string ShortenCommitLike(string value)
+    private static string ShortenVersionSegment(string value)
     {
         var trimmed = value.Trim();
-        if (trimmed.Length >= 12 && trimmed.All(Uri.IsHexDigit))
+        if (trimmed.Length >= 10 && trimmed.All(Uri.IsHexDigit))
             return trimmed[..8];
 
         return trimmed.Length > 32
@@ -775,6 +845,14 @@
             "Failed" or "Unavailable" => "bg-danger",
             _ => "bg-secondary"
         };
+
+    private string GetUpdateActionLabel(Host host)
+    {
+        if (updatingHosts.Contains(host.Id))
+            return "Queuing...";
+
+        return selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply";
+    }
 
     private void OpenEnrollmentWizard()
     {
@@ -874,14 +952,32 @@
             .OrderBy(r => r.Name)
             .ToList();
 
-    private string GetRuleBadge(ProvisioningType type) => type switch
+    private static string GetProvisioningIcon(ProvisioningType type) => type switch
     {
-        ProvisioningType.Static => "bg-secondary",
-        ProvisioningType.ScaleSet => "bg-primary",
-        ProvisioningType.Webhook => "bg-warning text-dark",
-        ProvisioningType.Scheduled => "bg-info",
-        _ => "bg-secondary"
+        ProvisioningType.Static => "bi-pin-angle-fill",
+        ProvisioningType.ScaleSet => "bi-layers-fill",
+        ProvisioningType.Webhook => "bi-lightning-charge-fill",
+        ProvisioningType.Scheduled => "bi-calendar2-week-fill",
+        _ => "bi-diagram-3-fill"
     };
+
+    private static string GetProvisioningChipClass(ProvisioningRule rule)
+        => rule.Enabled
+            ? rule.Type switch
+            {
+                ProvisioningType.Static => "provisioning-static",
+                ProvisioningType.ScaleSet => "provisioning-scale",
+                ProvisioningType.Webhook => "provisioning-webhook",
+                ProvisioningType.Scheduled => "provisioning-scheduled",
+                _ => "provisioning-static"
+            }
+            : "provisioning-disabled";
+
+    private static string GetProvisioningRuleTitle(ProvisioningRule rule)
+    {
+        var state = rule.Enabled ? "enabled" : "disabled";
+        return $"{rule.Type} rule: {rule.Name} ({state})";
+    }
 
     private async Task<HostGrainState?> GetHostGrainState(string hostId)
     {
@@ -893,13 +989,105 @@
         catch { return null; }
     }
 
-    private static string FormatBackendUsage(HostCapacityView capacity, ExecutionBackend backend)
+    private static string GetBackendIcon(ExecutionBackend backend) => backend switch
     {
-        if (!capacity.BackendUsage.TryGetValue(backend, out var counter))
-            return "0/0";
+        ExecutionBackend.Docker => "bi-box-seam",
+        ExecutionBackend.Tart => "bi-apple",
+        ExecutionBackend.Native => "bi-terminal",
+        ExecutionBackend.HyperV => "bi-windows",
+        _ => "bi-hdd-rack"
+    };
 
-        return counter.IsDisabled ? "off" : $"{counter.Used}/{counter.Limit}";
+    private static string GetBackendShortLabel(ExecutionBackend backend) => backend switch
+    {
+        ExecutionBackend.Docker => "Docker",
+        ExecutionBackend.Tart => "Tart",
+        ExecutionBackend.Native => "Native",
+        ExecutionBackend.HyperV => "Hyper-V",
+        _ => backend.ToString()
+    };
+
+    private static string GetBackendUsageClass(CapacityCounter counter)
+    {
+        if (counter.IsDisabled)
+            return "capacity-disabled";
+
+        var ratio = counter.Limit == 0 ? 0 : (double)counter.Used / counter.Limit;
+        return ratio switch
+        {
+            >= 1 => "capacity-full",
+            >= 0.75 => "capacity-warn",
+            _ => "capacity-good"
+        };
     }
+
+    private static string GetBackendUsageStyle(CapacityCounter counter)
+    {
+        var percent = counter.IsDisabled || counter.Limit == 0
+            ? 0
+            : Math.Clamp((int)Math.Round((double)counter.Used / counter.Limit * 100), 0, 100);
+
+        return $"--usage-percent: {percent}%;";
+    }
+
+    private static string GetBackendUsageTitle(ExecutionBackend backend, CapacityCounter counter)
+    {
+        var label = GetBackendShortLabel(backend);
+        return counter.IsDisabled
+            ? $"{label}: disabled"
+            : $"{label}: {counter.Used} of {counter.Limit} used, {counter.Remaining} available";
+    }
+
+    private static string FormatSaturatedProfiles(HostCapacityView capacity)
+        => "Saturated profiles: " + string.Join(
+            ", ",
+            capacity.ProfileUsage
+                .Where(p => p.IsSaturated)
+                .Select(p => $"{p.ProfileName} {p.Summary}"));
+
+    private static string FormatHeartbeat(DateTime? heartbeat)
+    {
+        if (!heartbeat.HasValue)
+            return "Never";
+
+        var utc = NormalizeUtc(heartbeat.Value);
+        var elapsed = DateTime.UtcNow - utc;
+        if (elapsed < TimeSpan.Zero || elapsed < TimeSpan.FromMinutes(1))
+            return "just now";
+        if (elapsed < TimeSpan.FromHours(1))
+            return $"{(int)elapsed.TotalMinutes}m ago";
+        if (elapsed < TimeSpan.FromDays(1))
+            return $"{(int)elapsed.TotalHours}h ago";
+        if (elapsed < TimeSpan.FromDays(7))
+            return $"{(int)elapsed.TotalDays}d ago";
+
+        return utc.ToLocalTime().ToString("MMM d, h:mm tt");
+    }
+
+    private static string FormatHeartbeatTitle(DateTime? heartbeat)
+    {
+        if (!heartbeat.HasValue)
+            return "No heartbeat received";
+
+        return $"Last heartbeat: {NormalizeUtc(heartbeat.Value).ToLocalTime():MMM d, yyyy h:mm tt}";
+    }
+
+    private static string GetHeartbeatClass(DateTime? heartbeat)
+    {
+        if (!heartbeat.HasValue)
+            return "heartbeat-muted";
+
+        var elapsed = DateTime.UtcNow - NormalizeUtc(heartbeat.Value);
+        if (elapsed < TimeSpan.FromMinutes(5))
+            return "heartbeat-fresh";
+        if (elapsed < TimeSpan.FromHours(1))
+            return "heartbeat-warm";
+
+        return "heartbeat-muted";
+    }
+
+    private static DateTime NormalizeUtc(DateTime value)
+        => value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 }
 
 @* Chip styles are in app.css *@

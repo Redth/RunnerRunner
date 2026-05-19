@@ -76,7 +76,10 @@ public static class HostWorkerUpdateEndpoints
             string version,
             string assetName,
             string? sha256,
+            HttpRequest request,
             HttpResponse response,
+            IDocumentStore store,
+            IConfiguration configuration,
             HostWorkerLocalUpdateStore localUpdateStore,
             CancellationToken ct) =>
         {
@@ -90,7 +93,11 @@ public static class HostWorkerUpdateEndpoints
             if (artifact == null)
                 return Results.NotFound();
 
-            if (!HostEnrollmentToken.FixedTimeEquals(artifact.Sha256, sha256))
+            var authorization = await TryAuthorizeAsync(request, store, configuration, ct);
+            if (authorization == false)
+                return Results.Unauthorized();
+
+            if (authorization != true && !HostEnrollmentToken.FixedTimeEquals(artifact.Sha256, sha256))
                 return Results.Unauthorized();
 
             response.ContentType = artifact.AssetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
@@ -108,11 +115,18 @@ public static class HostWorkerUpdateEndpoints
             string artifactName,
             string assetName,
             string? sha256,
+            HttpRequest request,
             HttpResponse response,
+            IDocumentStore store,
+            IConfiguration configuration,
             HostWorkerUpdateService updateService,
             CancellationToken ct) =>
         {
-            if (string.IsNullOrWhiteSpace(sha256))
+            var authorization = await TryAuthorizeAsync(request, store, configuration, ct);
+            if (authorization == false)
+                return Results.Unauthorized();
+
+            if (authorization != true && string.IsNullOrWhiteSpace(sha256))
                 return Results.Unauthorized();
 
             if (!HostWorkerUpdateSelector.IsHostWorkerAssetName(assetName))
@@ -126,7 +140,7 @@ public static class HostWorkerUpdateEndpoints
                 await using (var hashStream = File.OpenRead(tempPath))
                 {
                     var actualSha256 = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, ct)).ToLowerInvariant();
-                    if (!HostEnrollmentToken.FixedTimeEquals(actualSha256, sha256))
+                    if (authorization != true && !HostEnrollmentToken.FixedTimeEquals(actualSha256, sha256))
                         return Results.Unauthorized();
                 }
 
@@ -157,6 +171,18 @@ public static class HostWorkerUpdateEndpoints
         });
 
         return endpoints;
+    }
+
+    private static async Task<bool?> TryAuthorizeAsync(
+        HttpRequest request,
+        IDocumentStore store,
+        IConfiguration configuration,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(GetEnrollmentToken(request)))
+            return null;
+
+        return await IsAuthorizedAsync(request, store, configuration, ct);
     }
 
     private static async Task<bool> IsAuthorizedAsync(
