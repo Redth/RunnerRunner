@@ -153,7 +153,7 @@ public sealed class HostWorkerLocalUpdateStore
 
         var baseUri = publicBaseUrl.EndsWith("/", StringComparison.Ordinal) ? publicBaseUrl : publicBaseUrl + "/";
         var relative = $"api/hostworker-updates/artifacts/{Uri.EscapeDataString(artifact.Source.ToSourceId())}/{Uri.EscapeDataString(artifact.Version)}/{Uri.EscapeDataString(artifact.AssetName)}?sha256={Uri.EscapeDataString(artifact.Sha256)}";
-        return new Uri(new Uri(baseUri), relative).ToString();
+        return new Uri(new Uri(baseUri), relative).AbsoluteUri;
     }
 
     private IEnumerable<HostWorkerUpdateArtifact> EnumerateArtifacts(HostWorkerUpdateSourceKind source)

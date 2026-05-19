@@ -7,6 +7,35 @@ namespace RunnerRunner.Server.Tests.Services;
 
 public class HostWorkerLocalUpdateStoreTests
 {
+    [Theory]
+    [InlineData(null, true, HostWorkerUpdateSourceKind.Release)]
+    [InlineData("", true, HostWorkerUpdateSourceKind.Release)]
+    [InlineData("github_releases", true, HostWorkerUpdateSourceKind.Release)]
+    [InlineData(" LOCAL ", true, HostWorkerUpdateSourceKind.LocalFolder)]
+    [InlineData("ssh-local-folder", true, HostWorkerUpdateSourceKind.LocalFolder)]
+    [InlineData("unknown", false, HostWorkerUpdateSourceKind.Release)]
+    public void SourceKinds_TryParse_HandlesKnownAliases(
+        string? value,
+        bool expectedResult,
+        HostWorkerUpdateSourceKind expectedSource)
+    {
+        var result = HostWorkerUpdateSourceKinds.TryParse(value, out var source);
+
+        Assert.Equal(expectedResult, result);
+        Assert.Equal(expectedSource, source);
+    }
+
+    [Fact]
+    public void SourceKinds_DisplayValues_AreStable()
+    {
+        Assert.Equal("release", HostWorkerUpdateSourceKind.Release.ToSourceId());
+        Assert.Equal("GitHub ref", HostWorkerUpdateSourceKind.Release.ToDisplayName());
+        Assert.Equal("local-folder", HostWorkerUpdateSourceKind.LocalFolder.ToSourceId());
+        Assert.Equal("Local folder", HostWorkerUpdateSourceKind.LocalFolder.ToDisplayName());
+        Assert.Equal("999", ((HostWorkerUpdateSourceKind)999).ToSourceId());
+        Assert.Equal("999", ((HostWorkerUpdateSourceKind)999).ToDisplayName());
+    }
+
     [Fact]
     public void ListVersions_DiscoversLocalFolderArtifacts()
     {
@@ -20,6 +49,97 @@ public class HostWorkerLocalUpdateStoreTests
         Assert.Single(versions);
         Assert.Equal("dev-local", versions[0].Version);
         Assert.Equal("win-x64", versions[0].Assets[0].RuntimeIdentifier);
+    }
+
+    [Fact]
+    public void ListVersions_DiscoversRootArtifactsAsLocalVersion()
+    {
+        using var fixture = StoreFixture.Create();
+        File.WriteAllBytes(Path.Combine(fixture.LocalRoot, "runnerrunner-hostworker-linux-x64.tar.gz"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(fixture.LocalRoot, "runnerrunner-hostworker-win-x64.tar.gz"), [4, 5, 6]);
+        File.WriteAllBytes(Path.Combine(fixture.LocalRoot, "runnerrunner-hostworker-linux-x64.zip"), [7, 8, 9]);
+
+        var version = Assert.Single(fixture.Store.ListVersions(HostWorkerUpdateSourceKind.LocalFolder));
+
+        Assert.Equal("local", version.Version);
+        var artifact = Assert.Single(version.Assets);
+        Assert.Equal("linux-x64", artifact.RuntimeIdentifier);
+        Assert.Equal("runnerrunner-hostworker-linux-x64.tar.gz", artifact.AssetName);
+    }
+
+    [Fact]
+    public void GetVersion_ReturnsLatestVersionForEmptyVersion()
+    {
+        using var fixture = StoreFixture.Create();
+        var olderDirectory = Path.Combine(fixture.LocalRoot, "older");
+        var newerDirectory = Path.Combine(fixture.LocalRoot, "newer");
+        Directory.CreateDirectory(olderDirectory);
+        Directory.CreateDirectory(newerDirectory);
+        var olderArtifact = Path.Combine(olderDirectory, "runnerrunner-hostworker-win-x64.zip");
+        var newerArtifact = Path.Combine(newerDirectory, "runnerrunner-hostworker-win-x64.zip");
+        File.WriteAllBytes(olderArtifact, [1]);
+        File.WriteAllBytes(newerArtifact, [2]);
+        File.SetLastWriteTimeUtc(olderArtifact, DateTime.UtcNow.AddMinutes(-10));
+        File.SetLastWriteTimeUtc(newerArtifact, DateTime.UtcNow);
+
+        var version = fixture.Store.GetVersion(HostWorkerUpdateSourceKind.LocalFolder, " ");
+
+        Assert.NotNull(version);
+        Assert.Equal("newer", version.Version);
+    }
+
+    [Fact]
+    public async Task GetArtifactAsync_ReturnsLocalArtifactWithNormalizedAssetName()
+    {
+        using var fixture = StoreFixture.Create();
+        File.WriteAllBytes(Path.Combine(fixture.LocalRoot, "runnerrunner-hostworker-win-x64.zip"), [1, 2, 3]);
+
+        var artifact = await fixture.Store.GetArtifactAsync(
+            HostWorkerUpdateSourceKind.LocalFolder,
+            "local",
+            "RUNNERRUNNER-HOSTWORKER-WIN-X64.ZIP");
+
+        Assert.NotNull(artifact);
+        Assert.Equal("win-x64", artifact.RuntimeIdentifier);
+        Assert.Equal("runnerrunner-hostworker-win-x64.zip", artifact.AssetName);
+        Assert.Equal(3, artifact.SizeBytes);
+    }
+
+    [Fact]
+    public async Task WriteArtifactAsync_CopiesArtifactContents()
+    {
+        using var fixture = StoreFixture.Create();
+        File.WriteAllBytes(Path.Combine(fixture.LocalRoot, "runnerrunner-hostworker-win-x64.zip"), [1, 2, 3]);
+        var artifact = await fixture.Store.GetArtifactAsync(
+            HostWorkerUpdateSourceKind.LocalFolder,
+            "local",
+            "runnerrunner-hostworker-win-x64.zip");
+        Assert.NotNull(artifact);
+        using var output = new MemoryStream();
+
+        await fixture.Store.WriteArtifactAsync(artifact, output);
+
+        Assert.Equal([1, 2, 3], output.ToArray());
+    }
+
+    [Fact]
+    public void BuildDownloadUrl_CombinesEscapedArtifactPathAndHash()
+    {
+        using var fixture = StoreFixture.Create();
+        var artifact = new HostWorkerUpdateArtifact(
+            HostWorkerUpdateSourceKind.LocalFolder,
+            "dev build",
+            "win-x64",
+            "runnerrunner-hostworker-win-x64.zip",
+            "abc+123",
+            10,
+            DateTimeOffset.UtcNow);
+
+        var url = fixture.Store.BuildDownloadUrl(artifact, "https://example.test/base");
+
+        Assert.Equal(
+            "https://example.test/base/api/hostworker-updates/artifacts/local-folder/dev%20build/runnerrunner-hostworker-win-x64.zip?sha256=abc%2B123",
+            url);
     }
 
     [Fact]
