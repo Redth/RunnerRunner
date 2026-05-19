@@ -27,6 +27,10 @@
     <button class="btn btn-primary" @onclick="OpenEnrollmentWizard">
         <i class="bi bi-hdd-network me-1"></i> Add HostWorker
     </button>
+    <button class="btn btn-outline-secondary" @onclick="ToggleUpdateOptions">
+        <i class="bi bi-arrow-up-circle me-1"></i> HostWorker updates
+        <span class="badge bg-secondary ms-1">@SelectedUpdateTargetLabel</span>
+    </button>
     <a class="btn btn-outline-primary" href="/provisioning-rules">
         <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
     </a>
@@ -38,54 +42,62 @@
     }
 </div>
 
-<HostEnrollmentWizard IsOpen="@showEnrollmentWizard" UpdateHost="@manualUpdateHost" OnClose="CloseEnrollmentWizard" OnChanged="ReloadData" />
+<HostEnrollmentWizard IsOpen="@showEnrollmentWizard"
+                      UpdateHost="@manualUpdateHost"
+                      UpdateSource="@selectedUpdateSource"
+                      UpdateVersion="@selectedUpdateVersion"
+                      OnClose="CloseEnrollmentWizard"
+                      OnChanged="ReloadData" />
 
-<div class="card mb-3">
-    <div class="card-body">
-        <div class="d-flex flex-wrap align-items-end gap-2">
-            <div>
-                <label class="form-label form-label-sm mb-1">HostWorker update source</label>
-                <select class="form-select form-select-sm" value="@selectedUpdateSource.ToSourceId()" @onchange="OnUpdateSourceChanged">
-                    <option value="release">GitHub ref</option>
-                    <option value="local-folder">SSH/local folder</option>
-                </select>
-            </div>
-            <div style="min-width: 220px;">
-                <label class="form-label form-label-sm mb-1">@(selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Ref" : "Version")</label>
-                @if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
-                {
-                    <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest, tag, branch, or commit" />
-                }
-                else
-                {
-                    <select class="form-select form-select-sm" @bind="selectedUpdateVersion">
-                        @if (availableUpdateVersions.Count == 0)
-                        {
-                            <option value="">No builds found</option>
-                        }
-                        @foreach (var version in availableUpdateVersions)
-                        {
-                            <option value="@version.Version">@version.Version (@version.Assets.Count assets)</option>
-                        }
+@if (showUpdateOptions)
+{
+    <div class="card host-update-options mb-3">
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-end gap-2">
+                <div>
+                    <label class="form-label form-label-sm mb-1">Update source</label>
+                    <select class="form-select form-select-sm" value="@selectedUpdateSource.ToSourceId()" @onchange="OnUpdateSourceChanged">
+                        <option value="release">GitHub ref</option>
+                        <option value="local-folder">SSH/local folder</option>
                     </select>
+                </div>
+                <div style="min-width: 260px;">
+                    <label class="form-label form-label-sm mb-1">@(selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Ref" : "Version")</label>
+                    @if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
+                    {
+                        <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest, tag, branch, or commit" />
+                    }
+                    else
+                    {
+                        <select class="form-select form-select-sm" @bind="selectedUpdateVersion">
+                            @if (availableUpdateVersions.Count == 0)
+                            {
+                                <option value="">No builds found</option>
+                            }
+                            @foreach (var version in availableUpdateVersions)
+                            {
+                                <option value="@version.Version">@version.Version (@version.Assets.Count assets)</option>
+                            }
+                        </select>
+                    }
+                </div>
+                <button class="btn btn-outline-secondary btn-sm" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
+                    <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check hosts")
+                </button>
+                @if (selectedUpdateSource != HostWorkerUpdateSourceKind.Release)
+                {
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="LoadUpdateVersions">
+                        <i class="bi bi-arrow-clockwise me-1"></i> Refresh builds
+                    </button>
                 }
             </div>
-            <button class="btn btn-outline-secondary btn-sm" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
-                <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check")
-            </button>
-            @if (selectedUpdateSource != HostWorkerUpdateSourceKind.Release)
-            {
-                <button class="btn btn-outline-secondary btn-sm" @onclick="LoadUpdateVersions">
-                    <i class="bi bi-arrow-clockwise me-1"></i> Refresh builds
-                </button>
-            }
-        </div>
-        <div class="small text-muted mt-2">
-            GitHub refs resolve to a release tag first, then to matching workflow artifacts for a branch or commit. Containerized HostWorkers use the matching GHCR image. SSH/local folder builds are read from
-            <code>@HostWorkerUpdateStore.LocalFolderRoot</code> with artifacts under version folders.
+            <div class="small text-muted mt-2">
+                GitHub refs resolve to a release tag first, then matching workflow artifacts for a branch or commit. SSH/local builds are read from
+                <code>@HostWorkerUpdateStore.LocalFolderRoot</code>.
+            </div>
         </div>
     </div>
-</div>
+}
 
 <div class="row g-2 mb-3 align-items-end">
     <div class="col-auto flex-grow-1">
@@ -126,11 +138,12 @@
     <thead>
         <tr>
             <th role="button" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
-            <th role="button" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
+            <th role="button" style="width: 7rem;" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
+            <th style="width: 15rem;">Worker</th>
             <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
             <th>Provisioning</th>
             <th role="button" @onclick='() => ToggleSort("LastHeartbeat")'>Last Heartbeat @SortIndicator("LastHeartbeat")</th>
-            <th>Actions</th>
+            <th style="width: 11rem;">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -159,22 +172,31 @@
                 </td>
                 <td>
                     <span class="badge @GetStatusBadge(host.AgentStatus)">@host.AgentStatus</span>
+                </td>
+                <td>
+                    <div class="host-worker-version">
+                        <span class="worker-version-label">Version</span>
+                        @if (!string.IsNullOrWhiteSpace(host.AgentVersion))
+                        {
+                            <code title="@host.AgentVersion">@FormatDisplayVersion(host.AgentVersion)</code>
+                        }
+                        else
+                        {
+                            <span class="text-muted">unknown</span>
+                        }
+                    </div>
                     @if (!string.IsNullOrWhiteSpace(host.AgentVersion))
                     {
-                        <div class="small text-muted mt-1">Worker @host.AgentVersion</div>
-                    }
-                    @if (!string.IsNullOrWhiteSpace(host.UpdateStatus))
-                    {
-                        <div class="small mt-1">
-                            <span class="badge @GetUpdateBadge(host.UpdateStatus)">@FormatUpdateStatus(host.UpdateStatus)</span>
-                            @if (!string.IsNullOrWhiteSpace(host.LatestAvailableVersion))
-                            {
-                                <span class="text-muted ms-1">@host.LatestAvailableVersion</span>
-                            }
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(host.UpdateMessage))
+                        @if (!string.IsNullOrWhiteSpace(host.UpdateStatus))
                         {
-                            <div class="small text-muted">@host.UpdateMessage</div>
+                            <div class="host-update-summary mt-2">
+                                <span class="badge @GetUpdateBadge(host.UpdateStatus)">@FormatUpdateStatus(host.UpdateStatus)</span>
+                                @if (!string.IsNullOrWhiteSpace(host.LatestAvailableVersion))
+                                {
+                                    <code title="@host.LatestAvailableVersion">@FormatDisplayVersion(host.LatestAvailableVersion)</code>
+                                }
+                                <div class="small text-muted">@GetWorkerUpdateSummary(host)</div>
+                            </div>
                         }
                     }
                 </td>
@@ -239,28 +261,43 @@
                     }
                 </td>
                 <td>@(host.LastHeartbeat?.ToString("g") ?? "Never")</td>
-                <td>
-                    <a href="/logs?source=host:@host.Id" class="btn btn-sm btn-outline-secondary me-1" title="View logs"><i class="bi bi-file-text"></i></a>
-                    <button class="btn btn-sm btn-outline-info me-1" @onclick="() => ToggleConfigure(host)" title="Configure capabilities & resources">
-                        <i class="bi bi-gear"></i> Configure
-                    </button>
-                    @if (CanUpdate(host))
-                    {
-                        <button class="btn btn-sm btn-outline-success me-1" @onclick="() => QueueHostWorkerUpdate(host)" disabled="@updatingHosts.Contains(host.Id)">
-                            <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply build")
-                        </button>
-                    }
-                    <button class="btn btn-sm btn-outline-warning me-1" @onclick="() => OpenManualUpdateWizard(host)" title="Manual update guide / SSH recovery update">
-                        <i class="bi bi-tools"></i> Manual update
-                    </button>
-                    <a class="btn btn-sm btn-outline-primary me-1" href="/provisioning-rules"><i class="bi bi-diagram-3"></i> Rules</a>
-                    <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndRemoveHost(host)">  <i class="bi bi-trash3"></i> Remove</button>
+                <td class="host-actions-cell">
+                    <div class="host-actions">
+                        <a href="/logs?source=host:@host.Id" class="btn btn-sm btn-outline-secondary" title="View logs">
+                            <i class="bi bi-file-text"></i><span class="d-none d-xl-inline">Logs</span>
+                        </a>
+                        @if (CanUpdate(host))
+                        {
+                            <button class="btn btn-sm btn-outline-success" @onclick="() => QueueHostWorkerUpdate(host)" disabled="@updatingHosts.Contains(host.Id)">
+                                <i class="bi bi-arrow-up-circle"></i> @(updatingHosts.Contains(host.Id) ? "Queuing..." : selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply build")
+                            </button>
+                        }
+                        <div class="host-action-menu">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleActionsMenu(host.Id)" title="More actions">
+                                <i class="bi bi-three-dots"></i><span class="visually-hidden">More actions</span>
+                            </button>
+                            @if (openActionsMenuHostId == host.Id)
+                            {
+                                <div class="host-action-dropdown">
+                                    <button type="button" class="host-action-dropdown-item" @onclick="() => ConfigureHostFromMenu(host)">
+                                        <i class="bi bi-gear"></i> Configure
+                                    </button>
+                                    <button type="button" class="host-action-dropdown-item" @onclick="() => OpenManualUpdateWizardFromMenu(host)">
+                                        <i class="bi bi-tools"></i> Manual update
+                                    </button>
+                                    <button type="button" class="host-action-dropdown-item text-danger" @onclick="() => ConfirmAndRemoveHostFromMenu(host)">
+                                        <i class="bi bi-trash3"></i> Remove
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    </div>
                 </td>
             </tr>
             @if (configureHostId == host.Id)
             {
                 <tr>
-                    <td colspan="6" class="p-0">
+                    <td colspan="7" class="p-0">
                         <div class="card m-2">
                             <div class="card-body">
                                 <div class="row">
@@ -356,6 +393,18 @@
     private HostWorkerUpdateSourceKind selectedUpdateSource = HostWorkerUpdateSourceKind.Release;
     private string? selectedUpdateVersion;
     private IReadOnlyList<HostWorkerUpdateVersion> availableUpdateVersions = [];
+    private bool showUpdateOptions;
+    private string? openActionsMenuHostId;
+
+    private string SelectedUpdateTargetLabel =>
+        selectedUpdateSource == HostWorkerUpdateSourceKind.Release
+            ? $"GitHub: {SelectedUpdateVersionLabel}"
+            : $"Local: {SelectedUpdateVersionLabel}";
+
+    private string SelectedUpdateVersionLabel =>
+        string.IsNullOrWhiteSpace(selectedUpdateVersion)
+            ? selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "latest" : "no build"
+            : FormatDisplayVersion(selectedUpdateVersion);
 
     // Filter & sort state
     private string searchText = "";
@@ -433,9 +482,31 @@
 
     private void ToggleConfigure(Host host)
     {
+        openActionsMenuHostId = null;
         configureHostId = configureHostId == host.Id ? null : host.Id;
         newLabelKey = "";
         newLabelValue = "";
+    }
+
+    private void ToggleUpdateOptions()
+        => showUpdateOptions = !showUpdateOptions;
+
+    private void ToggleActionsMenu(string hostId)
+        => openActionsMenuHostId = openActionsMenuHostId == hostId ? null : hostId;
+
+    private void ConfigureHostFromMenu(Host host)
+        => ToggleConfigure(host);
+
+    private void OpenManualUpdateWizardFromMenu(Host host)
+    {
+        openActionsMenuHostId = null;
+        OpenManualUpdateWizard(host);
+    }
+
+    private async Task ConfirmAndRemoveHostFromMenu(Host host)
+    {
+        openActionsMenuHostId = null;
+        await ConfirmAndRemoveHost(host);
     }
 
     private Dictionary<string, string> GetAutoLabels(Host host)
@@ -546,6 +617,7 @@
         if (!CanCheckSelectedUpdateSource())
             return;
 
+        openActionsMenuHostId = null;
         updatingHosts.Add(host.Id);
         updateError = null;
         try
@@ -633,6 +705,66 @@
             "UpdateAvailable" => "Update available",
             _ => status
         };
+
+    private static string GetWorkerUpdateSummary(Host host)
+    {
+        if (string.IsNullOrWhiteSpace(host.UpdateStatus))
+            return "";
+
+        return host.UpdateStatus switch
+        {
+            "Current" => "No newer update found.",
+            "UpdateAvailable" => "Ready to update.",
+            "Queued" => "Queued for this worker.",
+            "Downloading" or "Verifying" or "Staged" or "Restarting" => "Update in progress.",
+            _ => ShortenKnownVersions(host.UpdateMessage, host.AgentVersion, host.LatestAvailableVersion)
+        };
+    }
+
+    private static string FormatDisplayVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return "unknown";
+
+        var value = version.Trim();
+        var metadataIndex = value.IndexOf('+');
+        if (metadataIndex >= 0 && metadataIndex < value.Length - 1)
+        {
+            var metadata = value[(metadataIndex + 1)..].Trim('\'');
+            var shortenedMetadata = ShortenCommitLike(metadata);
+            if (!string.Equals(metadata, shortenedMetadata, StringComparison.Ordinal))
+                return value[..(metadataIndex + 1)] + shortenedMetadata;
+        }
+
+        return ShortenCommitLike(value);
+    }
+
+    private static string ShortenKnownVersions(string? message, params string?[] versions)
+    {
+        var result = message ?? "";
+        foreach (var version in versions)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                continue;
+
+            var shortened = FormatDisplayVersion(version);
+            if (!string.Equals(version, shortened, StringComparison.Ordinal))
+                result = result.Replace(version, shortened, StringComparison.Ordinal);
+        }
+
+        return result;
+    }
+
+    private static string ShortenCommitLike(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length >= 12 && trimmed.All(Uri.IsHexDigit))
+            return trimmed[..8];
+
+        return trimmed.Length > 32
+            ? $"{trimmed[..12]}...{trimmed[^7..]}"
+            : trimmed;
+    }
 
     private static string GetUpdateBadge(string status)
         => status switch

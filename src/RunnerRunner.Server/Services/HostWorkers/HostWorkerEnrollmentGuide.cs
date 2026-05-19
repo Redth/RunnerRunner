@@ -53,7 +53,17 @@ public sealed record HostWorkerManualUpdateRequest(
     string HostName,
     string? WorkerId,
     string? ContainerId,
-    HostWorkerEnrollmentProxy Proxy);
+    HostWorkerEnrollmentProxy Proxy,
+    HostWorkerManualUpdatePackage? Package = null);
+
+public sealed record HostWorkerManualUpdatePackage(
+    HostWorkerUpdateSourceKind Source,
+    string? RequestedVersion,
+    string Version,
+    string? AssetName,
+    string? AssetUrl,
+    string? Sha256,
+    string? ContainerImage);
 
 public sealed record HostWorkerEnrollmentCommandBlock(
     string Title,
@@ -468,6 +478,9 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         string image,
         HostPlatform platform)
     {
+        var targetImage = string.IsNullOrWhiteSpace(request.Package?.ContainerImage)
+            ? image
+            : request.Package!.ContainerImage!;
         var container = string.IsNullOrWhiteSpace(request.ContainerId)
             ? "runnerrunner-host-worker"
             : request.ContainerId;
@@ -526,7 +539,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         docker logs -f "$container_name"
         """)
             .Replace("__CONTAINER__", ShellQuote(container))
-            .Replace("__IMAGE__", ShellQuote(image))
+            .Replace("__IMAGE__", ShellQuote(targetImage))
             .Replace("__HOST_ID__", ShellQuote(request.WorkerId ?? request.HostId))
             .Replace("__HOST_NAME__", ShellQuote(request.HostName));
 
@@ -558,6 +571,9 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         HostWorkerManualUpdateRequest request,
         HostWorkerEnrollmentOptions options)
     {
+        if (request.Package != null && !string.IsNullOrWhiteSpace(request.Package.AssetUrl))
+            return BuildMacOSAssetManualUpdate(request, request.Package);
+
         var command = $$"""
         curl -fsSL {{ShellQuote(options.ReleaseBaseUrl + "/install-host-macos.sh")}} -o install-host-macos.sh
         chmod +x install-host-macos.sh
@@ -588,10 +604,88 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             BuildManualUpdateNotes(request));
     }
 
+    private HostWorkerEnrollmentInstructions BuildMacOSAssetManualUpdate(
+        HostWorkerManualUpdateRequest request,
+        HostWorkerManualUpdatePackage package)
+    {
+        var command = NormalizeCommand("""
+        install_root="${INSTALL_ROOT:-${HOME}/.runnerrunner}"
+        service_label='com.runnerrunner.hostworker'
+        version=__VERSION__
+        asset_url=__ASSET_URL__
+        expected_sha256=__SHA256__
+        tmp_dir="$(mktemp -d)"
+        trap 'rm -rf "${tmp_dir}"' EXIT
+
+        existing_settings="${install_root}/current/appsettings.Production.json"
+        if [ ! -f "${existing_settings}" ]; then
+          echo "Manual update requires an existing ${existing_settings}." >&2
+          exit 1
+        fi
+
+        settings_backup="${tmp_dir}/appsettings.Production.json"
+        cp "${existing_settings}" "${settings_backup}"
+
+        archive="${tmp_dir}/hostworker.tar.gz"
+        curl -fsSL "${asset_url}" -o "${archive}"
+        if [ -n "${expected_sha256}" ]; then
+          actual_sha256="$(shasum -a 256 "${archive}" | awk '{print $1}')"
+          if [ "${actual_sha256}" != "${expected_sha256}" ]; then
+            echo "Checksum mismatch for ${asset_url}. Expected ${expected_sha256}, got ${actual_sha256}." >&2
+            exit 1
+          fi
+        fi
+
+        version_dir="${install_root}/versions/${version}"
+        rm -rf "${version_dir}"
+        mkdir -p "${version_dir}" "${install_root}/logs"
+        tar -xzf "${archive}" -C "${version_dir}"
+        chmod +x "${version_dir}/RunnerRunner.HostWorker"
+        codesign --force -s - "${version_dir}/RunnerRunner.HostWorker" >/dev/null 2>&1 || true
+        cp "${settings_backup}" "${version_dir}/appsettings.Production.json"
+        chmod 0600 "${version_dir}/appsettings.Production.json"
+
+        ln -sfn "${version_dir}" "${install_root}/current"
+        launchctl kickstart -k "gui/$(id -u)/${service_label}"
+        "${install_root}/runnerrunner-host" status
+        """)
+            .Replace("__VERSION__", ShellQuote(package.Version))
+            .Replace("__ASSET_URL__", ShellQuote(package.AssetUrl ?? ""))
+            .Replace("__SHA256__", ShellQuote(package.Sha256 ?? ""));
+
+        var summary = package.Source == HostWorkerUpdateSourceKind.Release
+            ? "Download the selected HostWorker asset and update the LaunchAgent install while preserving the existing appsettings.Production.json."
+            : "Download the selected HostWorker artifact from RunnerRunner and update the LaunchAgent install while preserving the existing appsettings.Production.json.";
+
+        return new HostWorkerEnrollmentInstructions(
+            request.Target,
+            HostPlatform.MacOS,
+            $"Manual update - {GetTargetDisplayName(request.Target)}",
+            summary,
+            [
+                "Run from the same macOS user account that owns the existing LaunchAgent.",
+                "The existing install has ~/.runnerrunner/current/appsettings.Production.json.",
+                "Stop or drain active runners before restarting the worker."
+            ],
+            [
+                new(
+                    "Run the selected macOS HostWorker updater",
+                    "Run this in Terminal or use SSH auto setup.",
+                    "bash",
+                    command)
+            ],
+            command,
+            HostWorkerEnrollmentRemoteShell.Bash,
+            BuildManualUpdateNotes(request));
+    }
+
     private HostWorkerEnrollmentInstructions BuildWindowsServiceManualUpdate(
         HostWorkerManualUpdateRequest request,
         HostWorkerEnrollmentOptions options)
     {
+        if (request.Package != null && !string.IsNullOrWhiteSpace(request.Package.AssetUrl))
+            return BuildWindowsServiceAssetManualUpdate(request, request.Package);
+
         var command = $$"""
         $ErrorActionPreference = 'Stop'
         $ProgressPreference = 'SilentlyContinue'
@@ -634,10 +728,90 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             BuildManualUpdateNotes(request));
     }
 
+    private HostWorkerEnrollmentInstructions BuildWindowsServiceAssetManualUpdate(
+        HostWorkerManualUpdateRequest request,
+        HostWorkerManualUpdatePackage package)
+    {
+        var command = NormalizeCommand("""
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        $deployDir = 'C:\Program Files\RunnerRunner'
+        $serviceName = 'RunnerRunnerHostWorker'
+        $version = __VERSION__
+        $assetUrl = __ASSET_URL__
+        $expectedSha256 = __SHA256__
+        $settingsPath = Join-Path $deployDir 'appsettings.Production.json'
+
+        if (-not (Test-Path $settingsPath)) {
+          throw "Manual update requires an existing $settingsPath."
+        }
+
+        $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ('runnerrunner-hostworker-update-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+        try {
+          $archive = Join-Path $tmpDir 'hostworker.zip'
+          $settingsBackup = Join-Path $tmpDir 'appsettings.Production.json'
+          Copy-Item -Path $settingsPath -Destination $settingsBackup -Force
+          Invoke-WebRequest $assetUrl -OutFile $archive
+
+          if (-not [string]::IsNullOrWhiteSpace($expectedSha256)) {
+            $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+            if ($actualSha256 -ne $expectedSha256.ToLowerInvariant()) {
+              throw "Checksum mismatch for $assetUrl. Expected $expectedSha256, got $actualSha256."
+            }
+          }
+
+          $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+          if ($null -eq $service) {
+            throw "Service '$serviceName' was not found."
+          }
+
+          if ($service.Status -ne 'Stopped') {
+            Stop-Service -Name $serviceName -Force
+            $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+          }
+
+          Expand-Archive $archive -DestinationPath $deployDir -Force
+          Copy-Item -Path $settingsBackup -Destination $settingsPath -Force
+          Start-Service -Name $serviceName
+          Get-Service -Name $serviceName
+        }
+        finally {
+          Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        """)
+            .Replace("__VERSION__", PowerShellQuote(package.Version))
+            .Replace("__ASSET_URL__", PowerShellQuote(package.AssetUrl ?? ""))
+            .Replace("__SHA256__", PowerShellQuote(package.Sha256 ?? ""));
+        return new HostWorkerEnrollmentInstructions(
+            request.Target,
+            HostPlatform.Windows,
+            $"Manual update - {GetTargetDisplayName(request.Target)}",
+            "Download the selected Windows HostWorker package, replace the service binaries, and preserve the existing appsettings.Production.json.",
+            [
+                "Run PowerShell as Administrator.",
+                "The existing install has C:\\Program Files\\RunnerRunner\\appsettings.Production.json.",
+                "Stop or drain active runners before restarting the worker service."
+            ],
+            [
+                new(
+                    "Update the Windows HostWorker service to the selected build",
+                    "Run this in an elevated PowerShell session or use SSH auto setup.",
+                    "powershell",
+                    command)
+            ],
+            command,
+            HostWorkerEnrollmentRemoteShell.PowerShell,
+            BuildManualUpdateNotes(request));
+    }
+
     private HostWorkerEnrollmentInstructions BuildWindowsDockerManualUpdate(
         HostWorkerManualUpdateRequest request,
         HostWorkerEnrollmentOptions options)
     {
+        var targetImage = string.IsNullOrWhiteSpace(request.Package?.ContainerImage)
+            ? options.WindowsHostWorkerImage
+            : request.Package!.ContainerImage!;
         var container = string.IsNullOrWhiteSpace(request.ContainerId)
             ? "runnerrunner-host-worker-windows"
             : request.ContainerId;
@@ -701,7 +875,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         docker logs -f $containerName
         """)
             .Replace("__CONTAINER__", PowerShellQuote(container))
-            .Replace("__IMAGE__", PowerShellQuote(options.WindowsHostWorkerImage))
+            .Replace("__IMAGE__", PowerShellQuote(targetImage))
             .Replace("__HOST_ID__", PowerShellQuote(request.WorkerId ?? request.HostId))
             .Replace("__HOST_NAME__", PowerShellQuote(request.HostName));
         var remote = command.Replace("docker logs -f $containerName", "docker ps --filter name=$containerName; docker logs --tail=80 $containerName");
@@ -736,6 +910,14 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             "Manual updates bypass the web UI command channel and are intended for recovery when an old worker can no longer self-update.",
             "The wizard waits for a fresh heartbeat from the existing host after you run the update."
         };
+
+        if (request.Package != null)
+        {
+            var requested = string.IsNullOrWhiteSpace(request.Package.RequestedVersion)
+                ? request.Package.Version
+                : request.Package.RequestedVersion;
+            notes.Add($"Target update: {request.Package.Source.ToDisplayName()} {requested}.");
+        }
 
         if (request.Proxy.HasAny)
             notes.Add("Proxy settings from server configuration are included when the manual update command can persist them.");

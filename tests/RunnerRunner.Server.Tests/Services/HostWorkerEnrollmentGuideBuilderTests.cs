@@ -125,6 +125,35 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
     }
 
     [Fact]
+    public void BuildManualUpdate_ForMacOSNative_UsesSelectedAsset()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildManualUpdate(new HostWorkerManualUpdateRequest(
+            HostWorkerEnrollmentTarget.MacOSNative,
+            "host-1",
+            "Mac Mini",
+            "mac-mini",
+            null,
+            new HostWorkerEnrollmentProxy(null, null, null),
+            new HostWorkerManualUpdatePackage(
+                HostWorkerUpdateSourceKind.Release,
+                "main",
+                "abc123def456",
+                "runnerrunner-hostworker-osx-arm64.tar.gz",
+                "https://runner.example.test/asset.tar.gz?sha256=abc",
+                "abc",
+                null)));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Contains("version='abc123def456'", command);
+        Assert.Contains("asset_url='https://runner.example.test/asset.tar.gz?sha256=abc'", command);
+        Assert.Contains("expected_sha256='abc'", command);
+        Assert.Contains("tar -xzf", command);
+        Assert.DoesNotContain("install-host-macos.sh", command);
+    }
+
+    [Fact]
     public void BuildManualUpdate_ForDocker_PreservesExistingContainerIdentity()
     {
         var builder = CreateBuilder(new Dictionary<string, string?>
@@ -146,6 +175,35 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
         Assert.Contains("HostWorker__EnrollmentToken=$enrollment_token", command);
         Assert.Contains("HostWorker__ServerUrl=$server_url", command);
         Assert.Contains("docker pull \"$image\"", command);
+    }
+
+    [Fact]
+    public void BuildManualUpdate_ForDocker_UsesSelectedImage()
+    {
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["HostWorkerEnrollment:HostWorkerImage"] = "ghcr.io/example/worker:latest"
+        });
+
+        var instructions = builder.BuildManualUpdate(new HostWorkerManualUpdateRequest(
+            HostWorkerEnrollmentTarget.LinuxDocker,
+            "host-1",
+            "Linux Host",
+            "worker-1",
+            "abcdef123456",
+            new HostWorkerEnrollmentProxy(null, null, null),
+            new HostWorkerManualUpdatePackage(
+                HostWorkerUpdateSourceKind.Release,
+                "main",
+                "abc123def456",
+                null,
+                null,
+                null,
+                "ghcr.io/example/worker:abc123def456")));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Contains("image='ghcr.io/example/worker:abc123def456'", command);
+        Assert.DoesNotContain("image='ghcr.io/example/worker:latest'", command);
     }
 
     private static HostWorkerEnrollmentGuideBuilder CreateBuilder(Dictionary<string, string?>? values = null)
