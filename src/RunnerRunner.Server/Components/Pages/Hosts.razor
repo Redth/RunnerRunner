@@ -19,7 +19,7 @@
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-hdd-rack-fill"></i> Hosts</h1>
-        <span class="page-desc">Manage host machines and their capabilities. Provisioning is defined through rules.</span>
+        <span class="page-desc">Manage host machines and their capabilities.</span>
     </div>
 </SectionContent>
 
@@ -29,11 +29,8 @@
     </button>
     <button class="btn btn-outline-secondary" @onclick="ToggleUpdateOptions">
         <i class="bi bi-arrow-up-circle me-1"></i> HostWorker updates
-        <span class="badge bg-secondary ms-1">@SelectedUpdateTargetLabel</span>
+        <span class="badge bg-secondary ms-1" title="@SelectedUpdateTargetTitle">@SelectedUpdateTargetLabel</span>
     </button>
-    <a class="btn btn-outline-primary" href="/provisioning-rules">
-        <i class="bi bi-diagram-3 me-1"></i> Manage Provisioning Rules
-    </a>
     @if (!string.IsNullOrWhiteSpace(updateError))
     {
         <div class="alert alert-warning mt-2 mb-0">
@@ -489,6 +486,11 @@
             ? $"GitHub: {SelectedUpdateVersionLabel}"
             : $"Local: {SelectedUpdateVersionLabel}";
 
+    private string SelectedUpdateTargetTitle =>
+        string.IsNullOrWhiteSpace(selectedUpdateVersion)
+            ? SelectedUpdateTargetLabel
+            : selectedUpdateVersion.Trim();
+
     private string SelectedUpdateVersionLabel =>
         string.IsNullOrWhiteSpace(selectedUpdateVersion)
             ? selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "latest" : "no build"
@@ -912,16 +914,11 @@
 
         var value = version.Trim().Trim('\'');
         var metadataIndex = value.IndexOf('+');
-        if (metadataIndex >= 0)
-        {
-            var baseVersion = value[..metadataIndex];
-            var metadata = metadataIndex < value.Length - 1
-                ? value[(metadataIndex + 1)..]
-                : "";
-            return string.IsNullOrWhiteSpace(metadata)
-                ? ShortenVersionSegment(baseVersion)
-                : $"{ShortenVersionSegment(baseVersion)}+{ShortenVersionSegment(metadata)}";
-        }
+        if (metadataIndex > 0)
+            return ShortenVersionSegment(value[..metadataIndex]);
+
+        if (metadataIndex == 0 && value.Length > 1)
+            return ShortenVersionSegment(value[(metadataIndex + 1)..]);
 
         return ShortenVersionSegment(value);
     }

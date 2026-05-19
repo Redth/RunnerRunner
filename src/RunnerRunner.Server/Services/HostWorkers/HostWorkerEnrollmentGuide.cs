@@ -626,15 +626,15 @@ public sealed class HostWorkerEnrollmentGuideBuilder
 
         settings_backup="${tmp_dir}/appsettings.Production.json"
         cp "${existing_settings}" "${settings_backup}"
-        enrollment_token="$(sed -n 's/.*"EnrollmentToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${existing_settings}" | head -n 1)"
-        curl_args=(-fsSL)
-        if [ -n "${enrollment_token}" ]; then
-          curl_args+=(-H "Authorization: Bearer ${enrollment_token}")
-        fi
+        enrollment_token="$(awk -F'"' '/"EnrollmentToken"[[:space:]]*:/ { print $4; exit }' "${existing_settings}")"
 
         archive="${tmp_dir}/hostworker.tar.gz"
-        if ! curl "${curl_args[@]}" "${asset_url}" -o "${archive}"; then
-          echo "Failed to download HostWorker update asset from ${asset_url}." >&2
+        curl_args=(-fsSL "${asset_url}" -o "${archive}")
+        if [[ "${asset_url}" == *"/api/hostworker-updates/"* && -n "${enrollment_token}" ]]; then
+          curl_args=(-H "Authorization: Bearer ${enrollment_token}" "${curl_args[@]}")
+        fi
+        if ! curl "${curl_args[@]}"; then
+          echo "Failed to download HostWorker update asset from ${asset_url}" >&2
           exit 1
         fi
         if [ -n "${expected_sha256}" ]; then
@@ -754,10 +754,11 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         if (-not (Test-Path $settingsPath)) {
           throw "Manual update requires an existing $settingsPath."
         }
-        $existingSettings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
+        $settings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
+        $enrollmentToken = $settings.HostWorker.EnrollmentToken
         $downloadHeaders = @{}
-        if ($existingSettings.HostWorker -and -not [string]::IsNullOrWhiteSpace($existingSettings.HostWorker.EnrollmentToken)) {
-          $downloadHeaders['Authorization'] = "Bearer $($existingSettings.HostWorker.EnrollmentToken)"
+        if ($assetUrl -like '*/api/hostworker-updates/*' -and -not [string]::IsNullOrWhiteSpace($enrollmentToken)) {
+          $downloadHeaders['Authorization'] = "Bearer $enrollmentToken"
         }
 
         $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ('runnerrunner-hostworker-update-' + [guid]::NewGuid().ToString('N'))
@@ -767,10 +768,15 @@ public sealed class HostWorkerEnrollmentGuideBuilder
           $settingsBackup = Join-Path $tmpDir 'appsettings.Production.json'
           Copy-Item -Path $settingsPath -Destination $settingsBackup -Force
           try {
-            Invoke-WebRequest $assetUrl -OutFile $archive -Headers $downloadHeaders
+            if ($downloadHeaders.Count -gt 0) {
+              Invoke-WebRequest $assetUrl -OutFile $archive -Headers $downloadHeaders
+            }
+            else {
+              Invoke-WebRequest $assetUrl -OutFile $archive
+            }
           }
           catch {
-            throw "Failed to download HostWorker update asset from $assetUrl. $($_.Exception.Message)"
+            throw "Failed to download HostWorker update asset from ${assetUrl}: $($_.Exception.Message)"
           }
 
           if (-not [string]::IsNullOrWhiteSpace($expectedSha256)) {
