@@ -550,7 +550,7 @@
                                 {
                                     <div class="mt-2">
                                         <label class="form-label">SSH password</label>
-                                        <input type="password" class="form-control form-control-sm" @bind="sshPassword" @bind:event="oninput" autocomplete="new-password" />
+                                        <input type="password" class="form-control form-control-sm" @bind="sshPassword" @bind:event="oninput" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                                     </div>
                                 }
                                 else
@@ -562,7 +562,7 @@
                                     </div>
                                     <div class="mt-2">
                                         <label class="form-label">Key passphrase</label>
-                                        <input type="password" class="form-control form-control-sm" @bind="sshKeyPassphrase" @bind:event="oninput" autocomplete="new-password" />
+                                        <input type="password" class="form-control form-control-sm" @bind="sshKeyPassphrase" @bind:event="oninput" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                                     </div>
                                 }
                                 <button type="button" class="btn btn-primary btn-sm mt-3 w-100" @onclick="RunAutoSetup" disabled="@autoSetupRunning">
