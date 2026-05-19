@@ -94,10 +94,7 @@ public static class HostWorkerUpdateEndpoints
                 return Results.NotFound();
 
             var authorization = await TryAuthorizeAsync(request, store, configuration, ct);
-            if (authorization == false)
-                return Results.Unauthorized();
-
-            if (authorization != true && !HostEnrollmentToken.FixedTimeEquals(artifact.Sha256, sha256))
+            if (!IsArtifactDownloadAuthorized(authorization, artifact.Sha256, sha256))
                 return Results.Unauthorized();
 
             response.ContentType = artifact.AssetName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
@@ -123,9 +120,6 @@ public static class HostWorkerUpdateEndpoints
             CancellationToken ct) =>
         {
             var authorization = await TryAuthorizeAsync(request, store, configuration, ct);
-            if (authorization == false)
-                return Results.Unauthorized();
-
             if (authorization != true && string.IsNullOrWhiteSpace(sha256))
                 return Results.Unauthorized();
 
@@ -140,7 +134,7 @@ public static class HostWorkerUpdateEndpoints
                 await using (var hashStream = File.OpenRead(tempPath))
                 {
                     var actualSha256 = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, ct)).ToLowerInvariant();
-                    if (authorization != true && !HostEnrollmentToken.FixedTimeEquals(actualSha256, sha256))
+                    if (!IsArtifactDownloadAuthorized(authorization, actualSha256, sha256))
                         return Results.Unauthorized();
                 }
 
@@ -184,6 +178,9 @@ public static class HostWorkerUpdateEndpoints
 
         return await IsAuthorizedAsync(request, store, configuration, ct);
     }
+
+    internal static bool IsArtifactDownloadAuthorized(bool? enrollmentTokenAuthorized, string? assetSha256, string? providedSha256)
+        => enrollmentTokenAuthorized == true || HostEnrollmentToken.FixedTimeEquals(assetSha256, providedSha256);
 
     private static async Task<bool> IsAuthorizedAsync(
         HttpRequest request,
