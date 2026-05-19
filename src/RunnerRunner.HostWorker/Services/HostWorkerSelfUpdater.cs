@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using Docker.DotNet;
@@ -109,13 +110,28 @@ internal sealed class HostWorkerSelfUpdater
     private async Task DownloadAsync(string url, string outputPath, CancellationToken ct)
     {
         using var client = new HttpClient();
-        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        AddEnrollmentTokenAuthorization(request, url);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
         await using var input = await response.Content.ReadAsStreamAsync(ct);
         await using var output = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
         await input.CopyToAsync(output, ct);
     }
+
+    private void AddEnrollmentTokenAuthorization(HttpRequestMessage request, string url)
+    {
+        var enrollmentToken = _configuration["HostWorker:EnrollmentToken"];
+        if (string.IsNullOrWhiteSpace(enrollmentToken) || !IsRunnerRunnerUpdateAssetUrl(url))
+            return;
+
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", enrollmentToken.Trim());
+    }
+
+    internal static bool IsRunnerRunnerUpdateAssetUrl(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+           uri.AbsolutePath.Contains("/api/hostworker-updates/", StringComparison.OrdinalIgnoreCase);
 
     private static async Task VerifySha256Async(string path, string expectedSha256, CancellationToken ct)
     {
