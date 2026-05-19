@@ -127,6 +127,75 @@ public class HostWorkerUpdateServiceTests
     }
 
     [Fact]
+    public async Task QueueUpdateAsync_UsesConfiguredBaseUrlForGitHubArtifactDownloads()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Id = "github-cred",
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubOrg = "Redth",
+            GitHubToken = "stored-token"
+        });
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = "1.0.0"
+        });
+
+        using var fixture = CreateService(store, request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+
+            if (path.EndsWith("/repos/Redth/RunnerRunner/releases/tags/feature", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            if (path.EndsWith("/repos/Redth/RunnerRunner/commits/feature", StringComparison.Ordinal))
+                return JsonResponse("""{"sha":"abc123","html_url":"https://github.com/Redth/RunnerRunner/commit/abc123"}""");
+
+            if (path.EndsWith("/repos/Redth/RunnerRunner/actions/runs", StringComparison.Ordinal))
+                return JsonResponse("""{"workflow_runs":[{"id":123,"html_url":"https://github.com/Redth/RunnerRunner/actions/runs/123","conclusion":"success","created_at":"2026-05-16T00:00:00Z","updated_at":"2026-05-16T00:05:00Z"}]}""");
+
+            if (path.EndsWith("/repos/Redth/RunnerRunner/actions/runs/123/artifacts", StringComparison.Ordinal))
+            {
+                return JsonResponse("""
+                    {"artifacts":[
+                      {"name":"runnerrunner-hostworker-manifest","archive_download_url":"https://api.github.com/repos/Redth/RunnerRunner/actions/artifacts/1/zip","expired":false},
+                      {"name":"runnerrunner-hostworker-assets","archive_download_url":"https://api.github.com/repos/Redth/RunnerRunner/actions/artifacts/2/zip","expired":false}
+                    ]}
+                    """);
+            }
+
+            if (path.EndsWith("/repos/Redth/RunnerRunner/actions/artifacts/1/zip", StringComparison.Ordinal))
+            {
+                return ZipResponse(
+                    "release-manifest.json",
+                    """{"gitSha":"abc123","assets":[{"name":"runnerrunner-hostworker-linux-x64.tar.gz","sha256":"asset-sha"}],"images":{}}""");
+            }
+
+            throw new InvalidOperationException($"Unexpected request {request.RequestUri}");
+        });
+
+        await fixture.Service.QueueUpdateAsync(
+            "host-1",
+            new HostWorkerUpdateSelection(
+                HostWorkerUpdateSourceKind.Release,
+                "feature",
+                Force: true,
+                PublicBaseUrl: "https://proxy.example.test/"));
+
+        var dispatched = Assert.Single(fixture.Dispatcher.Commands);
+        var command = Assert.IsType<HostWorkerUpdateCommand>(dispatched.Command);
+        Assert.StartsWith("https://runner.example.test/api/hostworker-updates/github-artifacts/123/", command.AssetUrl);
+        Assert.DoesNotContain("proxy.example.test", command.AssetUrl);
+    }
+
+    [Fact]
     public async Task QueueUpdateAsync_DispatchesSelectedAssetUpdateCommand()
     {
         var store = TestDocumentStore.Create();

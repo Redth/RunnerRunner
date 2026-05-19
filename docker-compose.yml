@@ -42,6 +42,7 @@ services:
       - Kestrel__Endpoints__HostWorkerGrpc__Protocols=Http2
       - Orleans__AdvertisedIPAddress=${ORLEANS_ADVERTISED_IP:-}
       - HostWorkerEnrollment__PublicServerUrl=${HOSTWORKER_PUBLIC_SERVER_URL:-}
+      - HostWorkerUpdates__PublicBaseUrl=${HOSTWORKER_UPDATE_PUBLIC_BASE_URL:-}
       - HostWorkerEnrollment__HttpProxy=${HOSTWORKER_HTTP_PROXY:-}
       - HostWorkerEnrollment__HttpsProxy=${HOSTWORKER_HTTPS_PROXY:-}
       - HostWorkerEnrollment__NoProxy=${HOSTWORKER_NO_PROXY:-}

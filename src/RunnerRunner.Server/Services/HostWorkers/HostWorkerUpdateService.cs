@@ -217,7 +217,7 @@ public sealed class HostWorkerUpdateService
         if (version == null)
             return null;
 
-        var publicBaseUrl = selection.PublicBaseUrl ?? _configuration["HostWorkerUpdates:PublicBaseUrl"];
+        var publicBaseUrl = ResolveArtifactPublicBaseUrl(selection.PublicBaseUrl);
         var assets = version.Assets
             .Select(asset => new HostWorkerReleaseAsset(
                 asset.AssetName,
@@ -354,7 +354,7 @@ public sealed class HostWorkerUpdateService
                 continue;
 
             var manifest = await FetchManifestFromArtifactAsync(manifestArtifact.ArchiveDownloadUrl, repository, ct);
-            var publicBaseUrl = selection.PublicBaseUrl ?? _configuration["HostWorkerUpdates:PublicBaseUrl"];
+            var publicBaseUrl = ResolveArtifactPublicBaseUrl(selection.PublicBaseUrl);
             var assets = manifest.Assets
                 .Where(asset => HostWorkerUpdateSelector.IsHostWorkerAssetName(asset.Name))
                 .Select(asset => new HostWorkerReleaseAsset(
@@ -487,6 +487,15 @@ public sealed class HostWorkerUpdateService
         var baseUri = publicBaseUrl.EndsWith("/", StringComparison.Ordinal) ? publicBaseUrl : publicBaseUrl + "/";
         var relative = $"api/hostworker-updates/github-artifacts/{runId}/{Uri.EscapeDataString(artifactName)}/{Uri.EscapeDataString(asset.Name)}?sha256={Uri.EscapeDataString(asset.Sha256)}";
         return new Uri(new Uri(baseUri), relative).ToString();
+    }
+
+    private string? ResolveArtifactPublicBaseUrl(string? requestBaseUrl)
+    {
+        var configured = _configuration["HostWorkerUpdates:PublicBaseUrl"];
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured.Trim();
+
+        return string.IsNullOrWhiteSpace(requestBaseUrl) ? null : requestBaseUrl.Trim();
     }
 
     private static IReadOnlyDictionary<string, IReadOnlyList<string>> NormalizeImages(Dictionary<string, List<string>> images)
