@@ -29,9 +29,20 @@
 
 @if (showForm)
 {
-    <div class="card mb-4">
-        <div class="card-body">
-            <h5 class="card-title">@(isEditing ? "Edit" : "Create") Provisioning Rule</h5>
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="provisioning-rule-title" @onclick="CancelEdit">
+        <div class="modal-dialog modal-xxl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="provisioning-rule-title" class="modal-title">
+                            <i class="bi bi-diagram-3-fill me-2"></i>@(isEditing ? "Edit" : "Create") Provisioning Rule
+                        </h5>
+                        <div class="modal-kicker">Configure static, scale-set, or webhook-triggered runner provisioning without leaving the rule list.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CancelEdit" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
 
             <div class="row">
                 <div class="col-md-4 mb-3">
@@ -219,7 +230,7 @@
                             <th>Required Job Labels</th>
                             <th>Profile</th>
                             <th style="width:100px;">Priority</th>
-                            <th style="width:80px;"></th>
+                            <th class="actions-col"></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -256,7 +267,7 @@
                                 <td>
                                     <input type="number" class="form-control form-control-sm" @bind="editMappings[idx].Priority" />
                                 </td>
-                                <td>
+                                <td class="actions-cell">
                                     <button class="btn btn-sm btn-danger" @onclick="() => RemoveMapping(idx)"><i class="bi bi-trash3"></i></button>
                                 </td>
                             </tr>
@@ -316,65 +327,138 @@
                 </div>
             </div>
 
-            <div>
-                <button class="btn btn-success me-2" @onclick="SaveRule">Save</button>
-                <button class="btn btn-secondary" @onclick="CancelEdit">Cancel</button>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="CancelEdit">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveRule">
+                        <i class="bi bi-check2 me-1"></i>Save rule
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 }
 
-@if (!showForm)
-{
-    <div class="table-responsive">
+<div class="table-responsive">
     <table class="table table-striped resizable-table">
         <thead>
             <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Profile(s)</th>
-                <th>Scale</th>
-                <th>Target</th>
-                <th>Status</th>
-                <th>Actions</th>
+                <th data-col-kind="name" data-col-min="180" data-col-preferred="280" data-col-weight="3.5">Name</th>
+                <th data-col-kind="compact" data-col-min="78" data-col-preferred="96" data-col-priority="2">Type</th>
+                <th data-col-kind="related" data-col-min="210" data-col-preferred="280" data-col-priority="3" data-col-weight="1.5">Profile(s)</th>
+                <th data-col-kind="related" data-col-min="150" data-col-preferred="190" data-col-priority="4">Scale</th>
+                <th data-col-kind="related" data-col-min="190" data-col-preferred="250" data-col-priority="4" data-col-weight="1.3">Target</th>
+                <th data-col-kind="compact" data-col-min="86" data-col-preferred="108" data-col-priority="2">Status</th>
+                <th class="actions-col" data-col-min="132" data-col-preferred="154">Actions</th>
             </tr>
         </thead>
         <tbody>
             @foreach (var rule in rules)
             {
                 <tr>
-                    <td>
-                        <strong>@rule.Name</strong>
+                    <td class="name-cell">
+                        <span class="primary-label">@rule.Name</span>
                         @if (!string.IsNullOrWhiteSpace(rule.Description))
                         {
-                            <br /><small class="text-muted">@rule.Description</small>
+                            <small class="secondary-label">@rule.Description</small>
                         }
                     </td>
                     <td>
                         <span class="badge @GetTypeBadgeClass(rule.Type)">@rule.Type</span>
                     </td>
                     <td>
-                        @GetProfileDisplay(rule)
                         @if (capacitySnapshot.Rules.TryGetValue(rule.Id, out var ruleCapacity) && ruleCapacity.MappedProfiles.Any())
                         {
-                            <div class="small text-muted mt-1">
-                                @foreach (var mapped in ruleCapacity.MappedProfiles.Take(2))
+                            <div class="rule-profile-stack">
+                                @foreach (var mapped in ruleCapacity.MappedProfiles.Take(3))
                                 {
-                                    <div>@mapped.ProfileName: @mapped.ActiveNow active · @mapped.AvailableNow/@mapped.EffectivePoolLimit available now</div>
+                                    <div class="rule-profile-card @GetProfileAvailabilityClass(mapped)"
+                                         title="@GetProfileAvailabilityTitle(mapped)">
+                                        <div class="rule-profile-main">
+                                            <span class="rule-profile-name">@mapped.ProfileName</span>
+                                            <span class="rule-profile-count">@mapped.AvailableNow/@mapped.EffectivePoolLimit</span>
+                                        </div>
+                                        <span class="rule-profile-meter" aria-hidden="true">
+                                            <span style="@GetProfileAvailabilityStyle(mapped)"></span>
+                                        </span>
+                                        <div class="rule-profile-meta">
+                                            <span><i class="bi bi-activity"></i>@mapped.ActiveNow active</span>
+                                            <span><i class="bi bi-hdd-network"></i>@mapped.MatchingHosts @(mapped.MatchingHosts == 1 ? "host" : "hosts")</span>
+                                            @if (mapped.SaturatedHosts > 0)
+                                            {
+                                                <span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i>@mapped.SaturatedHosts capped</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                @if (ruleCapacity.MappedProfiles.Count > 3)
+                                {
+                                    var remainingProfiles = ruleCapacity.MappedProfiles.Count - 3;
+                                    <span class="rule-profile-more">+@remainingProfiles more @(remainingProfiles == 1 ? "profile" : "profiles")</span>
                                 }
                             </div>
                         }
-                    </td>
-                    <td>
-                        @GetScaleDisplay(rule)
-                        @if (capacitySnapshot.Rules.TryGetValue(rule.Id, out var liveCapacity))
+                        else
                         {
-                            <div class="small text-muted mt-1">
-                                Live: @liveCapacity.ActiveCount/@liveCapacity.ConfiguredLimit active · @liveCapacity.RemainingSlots slot(s) open
-                            </div>
+                            <span class="rule-profile-empty">
+                                <i class="bi bi-person-badge"></i>
+                                @GetProfileDisplay(rule)
+                            </span>
                         }
                     </td>
-                    <td>@GetTargetDisplay(rule)</td>
+                    <td>
+                        <div class="rule-scale-card @GetRuleScaleClass(rule)">
+                            <div class="rule-scale-heading">
+                                <i class="bi @GetProvisioningTypeIcon(rule.Type)"></i>
+                                <span>@GetScaleHeadline(rule)</span>
+                            </div>
+                            <div class="rule-scale-metrics">
+                                @foreach (var metric in GetScaleMetrics(rule))
+                                {
+                                    <span>
+                                        <strong>@metric.Value</strong>
+                                        <small>@metric.Label</small>
+                                    </span>
+                                }
+                            </div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="rule-target-stack">
+                            @if (!string.IsNullOrWhiteSpace(rule.TargetHostId))
+                            {
+                                <span class="rule-target-chip rule-target-primary" title="Target host">
+                                    <i class="bi bi-hdd-network"></i>
+                                    <span>Host</span>
+                                    <strong>@GetTargetHostLabel(rule)</strong>
+                                </span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(rule.TargetGroupId))
+                            {
+                                <span class="rule-target-chip rule-target-primary" title="Target host group">
+                                    <i class="bi bi-diagram-3"></i>
+                                    <span>Group</span>
+                                    <strong>@rule.TargetGroupId</strong>
+                                </span>
+                            }
+                            @foreach (var requirement in rule.RequiredHostLabels.OrderBy(kvp => kvp.Key))
+                            {
+                                <span class="rule-target-chip" title="Required host label">
+                                    <i class="bi bi-tag"></i>
+                                    <span>@requirement.Key</span>
+                                    <strong>@requirement.Value</strong>
+                                </span>
+                            }
+                            @if (!HasRuleTarget(rule))
+                            {
+                                <span class="rule-target-chip rule-target-auto" title="Any eligible host can be selected">
+                                    <i class="bi bi-stars"></i>
+                                    <span>Auto</span>
+                                    <strong>Any eligible host</strong>
+                                </span>
+                            }
+                        </div>
+                    </td>
                     <td>
                         @if (rule.Enabled)
                         {
@@ -385,16 +469,15 @@
                             <span class="badge bg-danger">Disabled</span>
                         }
                     </td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditRule(rule)"><i class="bi bi-pencil-square"></i> Edit</button>
+                    <td class="actions-cell">
+                        <button class="btn btn-sm btn-outline-primary" @onclick="() => EditRule(rule)"><i class="bi bi-pencil-square"></i> Edit</button>
                         <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteRule(rule)"><i class="bi bi-trash3"></i> Delete</button>
                     </td>
                 </tr>
             }
         </tbody>
-    </table>
-    </div>
-}
+</table>
+</div>
 
 @code {
     private List<ProvisioningRule> rules = [];
@@ -729,6 +812,84 @@
         _ => "—"
     };
 
+    private static string GetProvisioningTypeIcon(ProvisioningType type) => type switch
+    {
+        ProvisioningType.Static => "bi-pin-angle-fill",
+        ProvisioningType.ScaleSet => "bi-layers-fill",
+        ProvisioningType.Webhook => "bi-lightning-charge-fill",
+        ProvisioningType.Scheduled => "bi-calendar2-week-fill",
+        _ => "bi-diagram-3-fill"
+    };
+
+    private static string GetRuleScaleClass(ProvisioningRule rule) => rule.Type switch
+    {
+        ProvisioningType.Static => "rule-scale-static",
+        ProvisioningType.ScaleSet => "rule-scale-scale-set",
+        ProvisioningType.Webhook => "rule-scale-webhook",
+        ProvisioningType.Scheduled => "rule-scale-scheduled",
+        _ => ""
+    };
+
+    private static string GetScaleHeadline(ProvisioningRule rule) => rule.Type switch
+    {
+        ProvisioningType.Static => "Fixed pool",
+        ProvisioningType.ScaleSet => "Elastic pool",
+        ProvisioningType.Webhook => "Event driven",
+        ProvisioningType.Scheduled => "Scheduled pool",
+        _ => "Provisioning"
+    };
+
+    private static IEnumerable<(string Label, string Value)> GetScaleMetrics(ProvisioningRule rule)
+    {
+        return rule.Type switch
+        {
+            ProvisioningType.Static =>
+            [
+                ("desired", $"x{rule.DesiredCount}")
+            ],
+            ProvisioningType.ScaleSet =>
+            [
+                ("warm", rule.MinReady.ToString()),
+                ("max", rule.MaxInstances.ToString())
+            ],
+            ProvisioningType.Webhook =>
+            [
+                ("cap", rule.MaxConcurrent.ToString()),
+                ("warm", rule.MinReady.ToString())
+            ],
+            ProvisioningType.Scheduled =>
+            [
+                ("desired", $"x{rule.DesiredCount}")
+            ],
+            _ => []
+        };
+    }
+
+    private static string GetProfileAvailabilityClass(RuleProfileCapacityView mapped)
+    {
+        if (mapped.EffectivePoolLimit <= 0)
+            return "availability-empty";
+
+        if (mapped.AvailableNow <= 0)
+            return "availability-full";
+
+        if (mapped.SaturatedHosts > 0 || mapped.AvailableNow <= Math.Max(1, mapped.EffectivePoolLimit / 4))
+            return "availability-warn";
+
+        return "availability-good";
+    }
+
+    private static string GetProfileAvailabilityTitle(RuleProfileCapacityView mapped) =>
+        $"{mapped.ProfileName}: {mapped.ActiveNow} active, {mapped.AvailableNow} of {mapped.EffectivePoolLimit} available across {mapped.MatchingHosts} matching host(s).";
+
+    private static string GetProfileAvailabilityStyle(RuleProfileCapacityView mapped)
+    {
+        var pct = mapped.EffectivePoolLimit <= 0
+            ? 0
+            : Math.Clamp(mapped.AvailableNow / (double)mapped.EffectivePoolLimit * 100, 0, 100);
+        return $"width: {pct:0.#}%";
+    }
+
     private string GetTargetDisplay(ProvisioningRule rule)
     {
         var targetParts = new List<string>();
@@ -746,6 +907,20 @@
             targetParts.Add(string.Join(", ", rule.RequiredHostLabels.Select(kvp => $"{kvp.Key}={kvp.Value}")));
 
         return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Auto";
+    }
+
+    private bool HasRuleTarget(ProvisioningRule rule) =>
+        !string.IsNullOrWhiteSpace(rule.TargetHostId)
+        || !string.IsNullOrWhiteSpace(rule.TargetGroupId)
+        || rule.RequiredHostLabels.Count > 0;
+
+    private string GetTargetHostLabel(ProvisioningRule rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule.TargetHostId))
+            return "Any host";
+
+        var host = hosts.FirstOrDefault(h => h.Id == rule.TargetHostId);
+        return host?.Label ?? rule.TargetHostId;
     }
 
     private static ProvisioningRule CloneRule(ProvisioningRule rule) => new()

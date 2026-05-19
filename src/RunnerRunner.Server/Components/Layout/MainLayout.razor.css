@@ -11,7 +11,7 @@ main {
 }
 
 .sidebar {
-    width: 260px;
+    width: var(--sidebar-width);
     background: var(--bg-sidebar);
     border-right: 1px solid var(--bg-sidebar-border);
     flex-shrink: 0;
@@ -28,13 +28,14 @@ main {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.5rem 2rem;
-    background: var(--bg-primary);
+    padding: 0.55rem 1.25rem;
+    background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
     border-bottom: 1px solid var(--border-color);
     position: sticky;
     top: 0;
     z-index: 10;
-    min-height: 3.25rem;
+    min-height: 3.15rem;
+    backdrop-filter: blur(14px);
 }
 
 .top-bar-left {
@@ -50,12 +51,12 @@ main {
 ::deep .page-header {
     display: flex;
     align-items: baseline;
-    gap: 0.75rem;
+    gap: 0.65rem;
     min-width: 0;
 }
 ::deep .page-header h1 {
-    font-size: 1.15rem;
-    font-weight: 600;
+    font-size: 1.24rem;
+    font-weight: 700;
     margin: 0;
     white-space: nowrap;
     display: flex;
@@ -63,8 +64,9 @@ main {
     gap: 0.4rem;
 }
 ::deep .page-header h1 .bi {
-    font-size: 1rem;
-    opacity: 0.7;
+    font-size: 1.1rem;
+    opacity: 0.86;
+    color: var(--text-secondary);
 }
 ::deep .page-header .page-desc {
     font-size: 0.8rem;
@@ -82,11 +84,11 @@ main {
 }
 
 .theme-toggle {
-    background: var(--bg-tertiary);
+    background: var(--bg-card);
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-full);
-    width: 2.25rem;
-    height: 2.25rem;
+    border-radius: var(--radius-md);
+    width: 2.15rem;
+    height: 2.15rem;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -95,7 +97,7 @@ main {
     color: var(--text-tertiary);
     transition: background 0.15s, transform 0.15s, color 0.15s;
 }
-.theme-toggle:hover { background: var(--bg-hover); transform: scale(1.05); color: var(--text-primary); }
+.theme-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* Show/hide theme icons based on current theme */
 [data-theme="dark"] .theme-icon-dark { display: none; }
@@ -104,8 +106,10 @@ main {
 [data-theme="light"] .theme-icon-dark { display: inline; }
 
 .content-area {
-    padding: 1.5rem 2rem 3rem;
+    padding: 1rem 1.25rem 2rem;
     flex: 1;
+    min-width: 0;
+    min-height: 0;
 }
 
 /* Mobile hamburger button (hidden on desktop, shown via app.css media query) */
@@ -116,7 +120,7 @@ main {
     background: transparent;
     border: none;
     color: var(--text-secondary);
-    font-size: 1.5rem;
+    font-size: 1.35rem;
     cursor: pointer;
     padding: 0;
     flex-shrink: 0;
@@ -141,14 +145,15 @@ main {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0.75rem;
+    min-height: 2.25rem;
+    padding: 0.34rem;
     border: none;
     background: transparent;
     color: var(--text-sidebar);
     cursor: pointer;
     border-top: 1px solid var(--bg-sidebar-border);
     transition: background 0.15s, color 0.15s;
-    font-size: 1.1rem;
+    font-size: 0.9rem;
     flex-shrink: 0;
 }
 .sidebar-toggle:hover {
@@ -164,13 +169,13 @@ main {
 
 /* Collapsed sidebar */
 .page.sidebar-collapsed .sidebar {
-    width: 60px;
+    width: var(--sidebar-collapsed-width);
     overflow-x: hidden;
 }
 
 /* Also apply collapsed state before Blazor hydrates, via data attribute on <html> */
 :global([data-sidebar-collapsed="true"]) .sidebar {
-    width: 60px;
+    width: var(--sidebar-collapsed-width);
     overflow-x: hidden;
 }
 :global([data-sidebar-collapsed="true"]) .collapse-icon-collapsed { display: inline; }

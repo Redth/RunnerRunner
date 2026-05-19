@@ -49,6 +49,131 @@
                       OnClose="CloseEnrollmentWizard"
                       OnChanged="ReloadData" />
 
+@if (renameHost is not null)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="rename-host-title" @onclick="CancelRename">
+        <div class="modal-dialog modal-dialog-centered" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="rename-host-title" class="modal-title">
+                            <i class="bi bi-pencil-square me-2"></i>Rename host
+                        </h5>
+                        <div class="modal-kicker">Give this HostWorker a friendly display name.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CancelRename" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="form-label" for="host-rename-input">Display name</label>
+                    <input id="host-rename-input"
+                           class="form-control"
+                           placeholder="@renameHost.Name"
+                           @bind="renameValue"
+                           @onkeydown="OnRenameKeyDown"
+                           autofocus />
+                    <div class="form-text">
+                        Leave blank to use the canonical host name <code>@renameHost.Name</code>.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CancelRename" disabled="@isSavingRename">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveRename" disabled="@isSavingRename">
+                        <i class="bi bi-check2 me-1"></i>@(isSavingRename ? "Saving..." : "Save name")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (configureHost is not null)
+{
+    var autoLabels = GetAutoLabels(configureHost);
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="configure-host-title" @onclick="CloseConfigureHost">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="configure-host-title" class="modal-title">
+                            <i class="bi bi-sliders me-2"></i>Configure @configureHost.Label
+                        </h5>
+                        <div class="modal-kicker">Tune host matching labels, resource limits, and fleet grouping.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseConfigureHost" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-lg-7">
+                            <section class="rr-form-section h-100">
+                                <div class="rr-form-section-title"><i class="bi bi-tags"></i>Host labels</div>
+                                <p class="form-text mb-3">Labels are used by provisioning rules and profiles when selecting eligible hosts.</p>
+                                @if (autoLabels.Any())
+                                {
+                                    <div class="d-flex flex-wrap gap-1 mb-3">
+                                        @foreach (var label in autoLabels)
+                                        {
+                                            <span class="host-chip arch-chip" title="Auto-detected capability (read-only)">
+                                                <i class="bi bi-lock-fill me-1"></i>@label.Key=@label.Value
+                                            </span>
+                                        }
+                                    </div>
+                                }
+                                <div class="d-flex flex-wrap gap-1 mb-3">
+                                    @foreach (var label in configureHost.Labels)
+                                    {
+                                        <span class="host-chip cap-chip">
+                                            @label.Key=@label.Value
+                                            <button type="button" class="btn-close btn-close-sm ms-1" style="font-size: 0.5rem;"
+                                                    @onclick="() => RemoveLabel(configureHost, label.Key)" aria-label="Remove @label.Key label"></button>
+                                        </span>
+                                    }
+                                </div>
+                                <div class="input-group input-group-sm">
+                                    <input class="form-control" @bind="newLabelKey" placeholder="capability" />
+                                    <input class="form-control" @bind="newLabelValue" placeholder="value" />
+                                    <button class="btn btn-outline-primary" @onclick="() => AddLabel(configureHost)">
+                                        <i class="bi bi-plus-lg"></i> Add
+                                    </button>
+                                </div>
+                            </section>
+                        </div>
+                        <div class="col-lg-5">
+                            <section class="rr-form-section h-100">
+                                <div class="rr-form-section-title"><i class="bi bi-speedometer2"></i>Resource limits</div>
+                                <p class="form-text mb-3">Set a backend limit to <code>0</code> to hide and disable that backend on this host.</p>
+                                <div class="mb-2">
+                                    <label class="form-label form-label-sm mb-1">Max Docker containers</label>
+                                    <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxDockerContainers" min="0" />
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label form-label-sm mb-1">Max Tart VMs</label>
+                                    <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxTartVMs" min="0" />
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label form-label-sm mb-1">Max Native processes</label>
+                                    <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxNativeProcesses" min="0" />
+                                </div>
+                                <div>
+                                    <label class="form-label form-label-sm mb-1">Group ID</label>
+                                    <input type="text" class="form-control form-control-sm" @bind="configureHost.GroupId" placeholder="e.g., build-farm-1" />
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseConfigureHost">Cancel</button>
+                    <button type="button" class="btn btn-primary" @onclick="SaveConfiguration">
+                        <i class="bi bi-check2 me-1"></i>Save configuration
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @if (showUpdateOptions)
 {
     <div class="card host-update-options mb-3">
@@ -137,12 +262,12 @@
 <table class="table table-striped resizable-table">
     <thead>
         <tr>
-            <th role="button" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
-            <th role="button" style="width: 10rem;" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
-            <th style="width: 12rem;">Worker</th>
-            <th role="button" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
-            <th style="width: 13rem;">Provisioning</th>
-            <th style="width: 14rem;">Actions</th>
+            <th role="button" data-col-kind="name" data-col-min="170" data-col-preferred="240" data-col-weight="3.5" @onclick='() => ToggleSort("Name")'>Name @SortIndicator("Name")</th>
+            <th role="button" data-col-kind="compact" data-col-min="92" data-col-preferred="120" data-col-priority="2" @onclick='() => ToggleSort("Status")'>Status @SortIndicator("Status")</th>
+            <th data-col-kind="related" data-col-min="112" data-col-preferred="150" data-col-priority="4">Worker</th>
+            <th role="button" data-col-kind="related" data-col-min="130" data-col-preferred="175" data-col-priority="3" @onclick='() => ToggleSort("Platform")'>Platform @SortIndicator("Platform")</th>
+            <th data-col-kind="related" data-col-min="172" data-col-preferred="220" data-col-priority="2" data-col-weight="1.4">Provisioning</th>
+            <th class="actions-col" data-col-min="116" data-col-preferred="132">Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -150,23 +275,14 @@
         {
             var hostRules = GetHostRules(host);
             <tr>
-                <td>
-                    @if (renamingHostId == host.Id)
+                <td class="name-cell">
+                    <span class="name-primary-line">
+                        <span class="primary-label">@host.Label</span>
+                        <button class="btn btn-sm btn-link p-0 inline-name-edit" @onclick="() => StartRename(host)" title="Rename" aria-label="Rename host @host.Label"><i class="bi bi-pencil"></i></button>
+                    </span>
+                    @if (!string.IsNullOrWhiteSpace(host.DisplayName))
                     {
-                        <div class="d-flex gap-1">
-                            <input class="form-control form-control-sm" style="width: 140px" @bind="renameValue" @onkeydown="e => OnRenameKeyDown(e, host)" />
-                            <button class="btn btn-sm btn-success" @onclick="() => SaveRename(host)" title="Save"><i class="bi bi-check-lg"></i></button>
-                            <button class="btn btn-sm btn-outline-secondary" @onclick="CancelRename" title="Cancel"><i class="bi bi-x-lg"></i></button>
-                        </div>
-                    }
-                    else
-                    {
-                        <span>@host.Label</span>
-                        @if (!string.IsNullOrWhiteSpace(host.DisplayName))
-                        {
-                            <br/><small class="text-muted">@host.Name</small>
-                        }
-                        <button class="btn btn-sm btn-link p-0 ms-1" @onclick="() => StartRename(host)" title="Rename"><i class="bi bi-pencil"></i></button>
+                        <small class="secondary-label">@host.Name</small>
                     }
                 </td>
                 <td>
@@ -245,40 +361,16 @@
                             }
                         </div>
                     }
-                    @if (capacitySnapshot.Hosts.TryGetValue(host.Id, out var capacity))
+                    @{
+                        var autoLabels = GetAutoLabels(host);
+                    }
+                    @if (autoLabels.TryGetValue("docker_os", out var dockerOs))
                     {
-                        <div class="backend-capacity-row mt-2" aria-label="Backend capacity">
-                            @foreach (var backend in BackendCapacityOrder)
-                            {
-                                if (capacity.BackendUsage.TryGetValue(backend, out var counter))
-                                {
-                                    <span class="backend-capacity-chip @GetBackendUsageClass(counter)"
-                                          title="@GetBackendUsageTitle(backend, counter)">
-                                        <i class="bi @GetBackendIcon(backend)"></i>
-                                        <span class="backend-capacity-meter" style="@GetBackendUsageStyle(counter)" aria-hidden="true">
-                                            <span></span>
-                                        </span>
-                                        <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
-                                    </span>
-                                }
-                            }
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                            <span class="host-chip cap-chip" title="Docker container mode">
+                                <i class="bi bi-boxes me-1"></i>@dockerOs containers
+                            </span>
                         </div>
-                        @if (GetAutoLabels(host).TryGetValue("docker_os", out var dockerOs))
-                        {
-                            <div class="d-flex flex-wrap gap-1 mt-1">
-                                <span class="host-chip cap-chip" title="Docker container mode">
-                                    <i class="bi bi-boxes me-1"></i>@dockerOs containers
-                                </span>
-                            </div>
-                        }
-                        @if (capacity.ProfileUsage.Any(p => p.IsSaturated))
-                        {
-                            <div class="d-flex flex-wrap gap-1 mt-1">
-                                <span class="host-chip saturated-chip" title="@FormatSaturatedProfiles(capacity)">
-                                    <i class="bi bi-exclamation-triangle-fill me-1"></i>Saturated
-                                </span>
-                            </div>
-                        }
                     }
                 </td>
                 <td>
@@ -303,8 +395,39 @@
                             <span>Rules</span>
                         </a>
                     }
+                    @if (capacitySnapshot.Hosts.TryGetValue(host.Id, out var capacity))
+                    {
+                        var enabledBackends = GetEnabledBackendUsage(host, capacity).ToList();
+                        @if (enabledBackends.Any())
+                        {
+                            <div class="backend-capacity-stack mt-2" aria-label="Backend capacity">
+                                @foreach (var backendUsage in enabledBackends)
+                                {
+                                    var backend = backendUsage.Key;
+                                    var counter = backendUsage.Value;
+                                    <span class="backend-capacity-chip @GetBackendUsageClass(counter)"
+                                          title="@GetBackendUsageTitle(backend, counter)">
+                                        <span class="backend-capacity-meter" style="@GetBackendUsageStyle(counter)" aria-hidden="true">
+                                            <span></span>
+                                        </span>
+                                        <i class="bi @GetBackendIcon(backend)"></i>
+                                        <span class="backend-capacity-label">@GetBackendShortLabel(backend)</span>
+                                        <span class="backend-capacity-count">@counter.Summary</span>
+                                    </span>
+                                }
+                            </div>
+                        }
+                        @if (capacity.ProfileUsage.Any(p => p.IsSaturated))
+                        {
+                            <div class="d-flex flex-wrap gap-1 mt-2">
+                                <span class="host-chip saturated-chip" title="@FormatSaturatedProfiles(capacity)">
+                                    <i class="bi bi-exclamation-triangle-fill me-1"></i>Saturated
+                                </span>
+                            </div>
+                        }
+                    }
                 </td>
-                <td class="host-actions-cell">
+                <td class="actions-cell host-actions-cell">
                     <div class="host-actions">
                         <a href="/logs?source=host:@host.Id" class="btn btn-sm btn-outline-secondary" title="View logs">
                             <i class="bi bi-file-text"></i><span class="host-action-label">Logs</span>
@@ -339,88 +462,6 @@
                     </div>
                 </td>
             </tr>
-            @if (configureHostId == host.Id)
-            {
-                <tr>
-                    <td colspan="6" class="p-0">
-                        <div class="card m-2">
-                            <div class="card-body">
-                                <div class="row">
-                                    @* Capabilities Section *@
-                                    <div class="col-md-7">
-                                        <h6><i class="bi bi-tags me-1"></i>Capabilities</h6>
-                                        @{
-                                            var autoLabels = GetAutoLabels(host);
-                                        }
-                                        @if (autoLabels.Any())
-                                        {
-                                            <div class="d-flex flex-wrap gap-1 mb-2">
-                                                @foreach (var label in autoLabels)
-                                                {
-                                                    <span class="host-chip arch-chip" title="Auto-detected capability (read-only)">
-                                                        <i class="bi bi-lock-fill me-1"></i>@label.Key=@label.Value
-                                                    </span>
-                                                }
-                                            </div>
-                                        }
-                                        <div class="d-flex flex-wrap gap-1 mb-2">
-                                            @foreach (var label in host.Labels)
-                                            {
-                                                <span class="host-chip cap-chip">
-                                                    @label.Key=@label.Value
-                                                    <button type="button" class="btn-close btn-close-sm ms-1" style="font-size: 0.5rem;"
-                                                            @onclick="() => RemoveLabel(host, label.Key)"></button>
-                                                </span>
-                                            }
-                                        </div>
-                                        <div class="input-group input-group-sm" style="max-width: 400px;">
-                                            <input class="form-control" @bind="newLabelKey" placeholder="capability" />
-                                            <input class="form-control" @bind="newLabelValue" placeholder="value" />
-                                            <button class="btn btn-outline-primary" @onclick="() => AddLabel(host)">
-                                                <i class="bi bi-plus-lg"></i> Add
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    @* Resource Limits Section *@
-                                     <div class="col-md-5">
-                                         <h6><i class="bi bi-speedometer2 me-1"></i>Resource Limits</h6>
-                                         <div class="form-text mb-2">These are the host-level backend caps. Set a value to <code>0</code> to disable that backend on this host.</div>
-                                         <div class="mb-2">
-                                             <label class="form-label form-label-sm mb-0">Max Docker Containers</label>
-                                             <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
-                                                    @bind="host.MaxDockerContainers" min="0" />
-                                        </div>
-                                        <div class="mb-2">
-                                            <label class="form-label form-label-sm mb-0">Max Tart VMs</label>
-                                            <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
-                                                   @bind="host.MaxTartVMs" min="0" />
-                                        </div>
-                                        <div class="mb-2">
-                                            <label class="form-label form-label-sm mb-0">Max Native Processes</label>
-                                            <input type="number" class="form-control form-control-sm" style="max-width: 120px;"
-                                                   @bind="host.MaxNativeProcesses" min="0" />
-                                        </div>
-                                        <div class="mb-2">
-                                            <label class="form-label form-label-sm mb-0">Group ID</label>
-                                            <input type="text" class="form-control form-control-sm" style="max-width: 200px;"
-                                                   @bind="host.GroupId" placeholder="e.g., build-farm-1" />
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="mt-3">
-                                    <button class="btn btn-success btn-sm" @onclick="() => SaveConfiguration(host)">
-                                        <i class="bi bi-check-lg me-1"></i>Save
-                                    </button>
-                                    <button class="btn btn-outline-secondary btn-sm ms-1" @onclick="() => configureHostId = null">
-                                        Cancel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </td>
-                </tr>
-            }
         }
     </tbody>
 </table>
@@ -518,19 +559,33 @@
         return new MarkupString(sortAscending ? " ▲" : " ▼");
     }
 
-    // Rename
-    private string? renamingHostId;
+    // Rename modal
+    private Host? renameHost;
     private string renameValue = "";
+    private bool isSavingRename;
 
-    // Configure panel
-    private string? configureHostId;
+    // Configure modal
+    private Host? configureHost;
     private string newLabelKey = "";
     private string newLabelValue = "";
 
     private void ToggleConfigure(Host host)
     {
         openActionsMenuHostId = null;
-        configureHostId = configureHostId == host.Id ? null : host.Id;
+        if (configureHost?.Id == host.Id)
+        {
+            CloseConfigureHost();
+            return;
+        }
+
+        configureHost = CloneHost(host);
+        newLabelKey = "";
+        newLabelValue = "";
+    }
+
+    private void CloseConfigureHost()
+    {
+        configureHost = null;
         newLabelKey = "";
         newLabelValue = "";
     }
@@ -587,34 +642,96 @@
         host.Labels.Remove(key);
     }
 
-    private async Task SaveConfiguration(Host host)
+    private async Task SaveConfiguration()
     {
+        var host = configureHost ?? throw new InvalidOperationException("No host selected for configuration.");
         host.UpdatedAt = DateTime.UtcNow;
         await Store.Update(host);
-        configureHostId = null;
+        configureHost = null;
         await ReloadData();
     }
+
+    private static Host CloneHost(Host host) => new()
+    {
+        Id = host.Id,
+        Name = host.Name,
+        DisplayName = host.DisplayName,
+        Platform = host.Platform,
+        AgentStatus = host.AgentStatus,
+        LastHeartbeat = host.LastHeartbeat,
+        AgentVersion = host.AgentVersion,
+        OsVersion = host.OsVersion,
+        Architecture = host.Architecture,
+        IsContainerized = host.IsContainerized,
+        ContainerId = host.ContainerId,
+        ContainerImage = host.ContainerImage,
+        Capabilities = host.Capabilities.ToList(),
+        EnvironmentOverrides = new Dictionary<string, string>(host.EnvironmentOverrides),
+        EnrollmentToken = host.EnrollmentToken,
+        EnrollmentTokenHash = host.EnrollmentTokenHash,
+        EnrollmentTokenCreatedAt = host.EnrollmentTokenCreatedAt,
+        EnrolledAt = host.EnrolledAt,
+        WorkerId = host.WorkerId,
+        LatestAvailableVersion = host.LatestAvailableVersion,
+        LastUpdateCheckAt = host.LastUpdateCheckAt,
+        UpdateStatus = host.UpdateStatus,
+        UpdateMessage = host.UpdateMessage,
+        LastUpdateStartedAt = host.LastUpdateStartedAt,
+        LastUpdateCompletedAt = host.LastUpdateCompletedAt,
+        IsApproved = host.IsApproved,
+        RunnerBasePath = host.RunnerBasePath,
+        WorkDirectory = host.WorkDirectory,
+        ReportedEnvironment = new Dictionary<string, string>(host.ReportedEnvironment),
+        Labels = new Dictionary<string, string>(host.Labels),
+        MaxDockerContainers = host.MaxDockerContainers,
+        MaxTartVMs = host.MaxTartVMs,
+        MaxNativeProcesses = host.MaxNativeProcesses,
+        ObservedRunningTartVMs = host.ObservedRunningTartVMs,
+        ObservedResourceUsageAt = host.ObservedResourceUsageAt,
+        GroupId = host.GroupId,
+        CreatedAt = host.CreatedAt,
+        UpdatedAt = host.UpdatedAt
+    };
 
     private void StartRename(Host host)
     {
-        renamingHostId = host.Id;
+        openActionsMenuHostId = null;
+        renameHost = host;
         renameValue = host.DisplayName ?? "";
     }
 
-    private void CancelRename() => renamingHostId = null;
-
-    private async Task SaveRename(Host host)
+    private void CancelRename()
     {
-        host.DisplayName = string.IsNullOrWhiteSpace(renameValue) ? null : renameValue.Trim();
-        host.UpdatedAt = DateTime.UtcNow;
-        await Store.Update(host);
-        renamingHostId = null;
-        await ReloadData();
+        if (isSavingRename)
+            return;
+
+        renameHost = null;
+        renameValue = "";
     }
 
-    private async Task OnRenameKeyDown(KeyboardEventArgs e, Host host)
+    private async Task SaveRename()
     {
-        if (e.Key == "Enter") await SaveRename(host);
+        var host = renameHost ?? throw new InvalidOperationException("No host selected for rename.");
+        isSavingRename = true;
+
+        try
+        {
+            host.DisplayName = string.IsNullOrWhiteSpace(renameValue) ? null : renameValue.Trim();
+            host.UpdatedAt = DateTime.UtcNow;
+            await Store.Update(host);
+            renameHost = null;
+            renameValue = "";
+            await ReloadData();
+        }
+        finally
+        {
+            isSavingRename = false;
+        }
+    }
+
+    private async Task OnRenameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SaveRename();
         if (e.Key == "Escape") CancelRename();
     }
 
@@ -1006,6 +1123,25 @@
         ExecutionBackend.HyperV => "Hyper-V",
         _ => backend.ToString()
     };
+
+    private static IEnumerable<KeyValuePair<ExecutionBackend, CapacityCounter>> GetEnabledBackendUsage(
+        Host host,
+        HostCapacityView capacity)
+    {
+        foreach (var backend in BackendCapacityOrder)
+        {
+            if (capacity.BackendUsage.TryGetValue(backend, out var counter) && IsBackendVisible(host, backend, counter))
+                yield return new KeyValuePair<ExecutionBackend, CapacityCounter>(backend, counter);
+        }
+    }
+
+    private static bool IsBackendVisible(Host host, ExecutionBackend backend, CapacityCounter counter)
+    {
+        if (counter.IsDisabled)
+            return false;
+
+        return backend != ExecutionBackend.Tart || host.Platform == HostPlatform.MacOS;
+    }
 
     private static string GetBackendUsageClass(CapacityCounter counter)
     {

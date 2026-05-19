@@ -58,9 +58,20 @@
 
 @if (showForm)
 {
-    <div class="card mb-4">
-        <div class="card-body">
-            <h5 class="card-title">@(isEditing ? "Edit" : "Create") Profile</h5>
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="profile-form-title" @onclick="CloseProfileForm">
+        <div class="modal-dialog modal-xxl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="profile-form-title" class="modal-title">
+                            <i class="bi bi-clipboard2-check-fill me-2"></i>@(isEditing ? "Edit" : "Create") Runner Profile
+                        </h5>
+                        <div class="modal-kicker">Define provider, backend image, labels, environment, and init steps in a focused dialog.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseProfileForm" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
 
             @* Basic info *@
             <div class="row">
@@ -350,7 +361,7 @@
 
             <table class="table table-sm">
                 <thead>
-                    <tr><th>Key</th><th>Value</th><th style="width:150px">Resolves To</th><th style="width:60px" class="text-center"><i class="bi bi-shield-lock" title="Secret"></i></th><th style="width:40px"></th></tr>
+                    <tr><th>Key</th><th>Value</th><th style="width:150px">Resolves To</th><th style="width:60px" class="text-center"><i class="bi bi-shield-lock" title="Secret"></i></th><th class="actions-col"></th></tr>
                 </thead>
                 <tbody>
                     @foreach (var kvp in profileEnvOverrides)
@@ -378,7 +389,7 @@
                                 }
                             </td>
                             <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSecret" @onchange="() => ToggleOverrideSecret(kvp.Key)" title="Mark as secret" /></td>
-                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveOverride(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
+                            <td class="actions-cell"><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveOverride(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
                         </tr>
                     }
                 </tbody>
@@ -417,7 +428,7 @@
                         <th style="width:120px">Shell</th>
                         <th style="width:80px">Timeout</th>
                         <th style="width:70px" class="text-center" title="Continue on error">CoE</th>
-                        <th style="width:80px"></th>
+                        <th class="actions-col"></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -427,106 +438,179 @@
                         var step = editInitSteps[idx];
                         <tr class="@(editingStepIndex == idx ? "table-active" : "")">
                             <td>
-                                <input type="checkbox" class="form-check-input" checked="@step.Enabled"
-                                       @onchange="e => { step.Enabled = (bool)(e.Value ?? false); }" title="Enabled" />
+                                <span class="badge @(step.Enabled ? "bg-success" : "bg-secondary")" title="@(step.Enabled ? "Enabled" : "Disabled")">
+                                    <i class="bi @(step.Enabled ? "bi-check2" : "bi-pause-fill")"></i>
+                                </span>
                             </td>
                             <td>
                                 <button class="btn btn-sm btn-outline-secondary py-0 px-1" @onclick="() => MoveInitStep(idx, -1)" disabled="@(idx == 0)"><i class="bi bi-arrow-up"></i></button>
                                 <button class="btn btn-sm btn-outline-secondary py-0 px-1" @onclick="() => MoveInitStep(idx, 1)" disabled="@(idx == editInitSteps.Count - 1)"><i class="bi bi-arrow-down"></i></button>
                             </td>
-                            <td><input class="form-control form-control-sm" @bind="step.Name" placeholder="Install sentry-cli" /></td>
                             <td>
-                                <select class="form-select form-select-sm" @bind="step.Phase">
-                                    <option value="@InitStepPhase.PreRunner">PreRunner</option>
-                                    <option value="@InitStepPhase.PostExit">PostExit</option>
-                                </select>
+                                <div class="fw-semibold">@step.Name</div>
+                                @if (!string.IsNullOrWhiteSpace(step.Script))
+                                {
+                                    <small class="text-muted">@step.Script.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()</small>
+                                }
                             </td>
-                            <td>
-                                <select class="form-select form-select-sm" @bind="step.Shell">
-                                    @foreach (var s in Enum.GetValues<InitStepShell>())
-                                    {
-                                        <option value="@s">@s</option>
-                                    }
-                                </select>
+                            <td><span class="badge bg-secondary">@step.Phase</span></td>
+                            <td><code>@step.Shell</code></td>
+                            <td>@step.TimeoutSeconds sec</td>
+                            <td class="text-center">
+                                @if (step.ContinueOnError)
+                                {
+                                    <i class="bi bi-check2 text-warning" title="Continues on error"></i>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">—</span>
+                                }
                             </td>
-                            <td><input type="number" class="form-control form-control-sm" min="1" @bind="step.TimeoutSeconds" /></td>
-                            <td class="text-center"><input type="checkbox" class="form-check-input" checked="@step.ContinueOnError" @onchange="e => { step.ContinueOnError = (bool)(e.Value ?? false); }" /></td>
-                            <td>
-                                <button class="btn btn-sm btn-outline-primary" @onclick="() => EditInitStep(idx)" title="Edit script"><i class="bi bi-code-slash"></i></button>
+                            <td class="actions-cell">
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => EditInitStep(idx)" title="Edit step"><i class="bi bi-pencil-square"></i></button>
                                 <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveInitStep(idx)" title="Delete"><i class="bi bi-x-lg"></i></button>
                             </td>
                         </tr>
-                        @if (editingStepIndex == idx)
-                        {
-                            <tr>
-                                <td colspan="8">
-                                    <div class="row g-2">
-                                        <div class="col-md-6">
-                                            <label class="form-label small mb-1">Working directory (optional)</label>
-                                            <input class="form-control form-control-sm" @bind="step.WorkingDirectory" placeholder="/home/runner" />
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label class="form-label small mb-1">Referenced Env Var Sets</label>
-                                            <div style="max-height:100px; overflow-y:auto; border:1px solid var(--border-color); border-radius:4px; padding:4px;">
-                                                @foreach (var evs in allEnvVarSets)
-                                                {
-                                                    var sel = step.EnvironmentVariableSetIds.Contains(evs.Id);
-                                                    <div class="form-check form-check-sm">
-                                                        <input class="form-check-input" type="checkbox" checked="@sel"
-                                                               @onchange="() => ToggleStepEnvSet(step, evs.Id)" id="step-@idx-evs-@evs.Id" />
-                                                        <label class="form-check-label small" for="step-@idx-evs-@evs.Id">@evs.Name <span class="text-muted">(@evs.Variables.Count vars)</span></label>
-                                                    </div>
-                                                }
-                                            </div>
-                                        </div>
-                                        <div class="col-12">
-                                            <label class="form-label small mb-1">Script</label>
-                                            <textarea class="form-control form-control-sm" rows="8" style="font-family: var(--bs-font-monospace, monospace);" @bind="step.Script" placeholder="#!/usr/bin/env bash&#10;set -e&#10;curl -sL https://sentry.io/get-cli/ | bash"></textarea>
-                                        </div>
-                                        <div class="col-12">
-                                            <label class="form-label small mb-1">Step-level Environment Overrides</label>
-                                            <table class="table table-sm mb-1">
-                                                <thead><tr><th>Key</th><th>Value</th><th style="width:60px" class="text-center">Secret</th><th style="width:40px"></th></tr></thead>
-                                                <tbody>
-                                                    @foreach (var kvp in step.EnvironmentOverrides.ToList())
-                                                    {
-                                                        var k = kvp.Key;
-                                                        var isSec = step.EnvironmentOverrideSecretKeys.Contains(k);
-                                                        <tr>
-                                                            <td><input class="form-control form-control-sm" value="@k" @onchange="e => RenameStepOverrideKey(step, k, e.Value?.ToString() ?? string.Empty)" /></td>
-                                                            <td><input type="@(isSec ? "password" : "text")" class="form-control form-control-sm" value="@kvp.Value" @onchange="e => { step.EnvironmentOverrides[k] = e.Value?.ToString() ?? string.Empty; }" /></td>
-                                                            <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSec" @onchange="() => ToggleStepOverrideSecret(step, k)" /></td>
-                                                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveStepOverride(step, k)"><i class="bi bi-x-lg"></i></button></td>
-                                                        </tr>
-                                                    }
-                                                </tbody>
-                                            </table>
-                                            <div class="row g-2">
-                                                <div class="col-md-3"><input class="form-control form-control-sm" placeholder="KEY" @bind="newStepOverrideKey" /></div>
-                                                <div class="col-md-4"><input class="form-control form-control-sm" placeholder="Value" @bind="newStepOverrideValue" /></div>
-                                                <div class="col-md-2 d-flex align-items-center">
-                                                    <input type="checkbox" class="form-check-input me-1" @bind="newStepOverrideIsSecret" id="newStepOverrideSecret-@idx" />
-                                                    <label class="form-check-label small" for="newStepOverrideSecret-@idx">Secret</label>
-                                                </div>
-                                                <div class="col-md-2">
-                                                    <button class="btn btn-sm btn-outline-success" @onclick="() => AddStepOverride(step)"><i class="bi bi-plus-lg"></i> Add</button>
-                                                </div>
-                                                <div class="col-md-1 text-end">
-                                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => editingStepIndex = null" title="Collapse"><i class="bi bi-chevron-up"></i></button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
                     }
                 </tbody>
             </table>
             <button class="btn btn-sm btn-outline-success mb-3" @onclick="AddInitStep"><i class="bi bi-plus-lg"></i> Add init step</button>
 
-            <button class="btn btn-success me-2" @onclick="SaveProfile">Save</button>
-            <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="CloseProfileForm">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveProfile">
+                        <i class="bi bi-check2 me-1"></i>Save profile
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showForm && editingStepIndex is int initStepIndex && initStepIndex >= 0 && initStepIndex < editInitSteps.Count)
+{
+    var step = editInitSteps[initStepIndex];
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="init-step-title" @onclick="CloseInitStepEditor">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="init-step-title" class="modal-title">
+                            <i class="bi bi-code-slash me-2"></i>Edit init step
+                        </h5>
+                        <div class="modal-kicker">Configure script, timing, environment sets, and step-level overrides.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseInitStepEditor" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="rr-form-section">
+                        <div class="rr-form-section-title"><i class="bi bi-sliders"></i> Step settings</div>
+                        <div class="row g-3">
+                            <div class="col-md-5">
+                                <label class="form-label">Name</label>
+                                <input class="form-control" @bind="step.Name" placeholder="Install sentry-cli" />
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Phase</label>
+                                <select class="form-select" @bind="step.Phase">
+                                    <option value="@InitStepPhase.PreRunner">PreRunner</option>
+                                    <option value="@InitStepPhase.PostExit">PostExit</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Shell</label>
+                                <select class="form-select" @bind="step.Shell">
+                                    @foreach (var s in Enum.GetValues<InitStepShell>())
+                                    {
+                                        <option value="@s">@s</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Timeout</label>
+                                <input type="number" class="form-control" min="1" @bind="step.TimeoutSeconds" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Working directory (optional)</label>
+                                <input class="form-control" @bind="step.WorkingDirectory" placeholder="/home/runner" />
+                            </div>
+                            <div class="col-md-3 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" @bind="step.Enabled" id="initStepEnabled" />
+                                    <label class="form-check-label" for="initStepEnabled">Enabled</label>
+                                </div>
+                            </div>
+                            <div class="col-md-3 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" @bind="step.ContinueOnError" id="initStepContinueOnError" />
+                                    <label class="form-check-label" for="initStepContinueOnError">Continue on error</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="rr-form-section">
+                        <div class="rr-form-section-title"><i class="bi bi-terminal"></i> Script</div>
+                        <textarea class="form-control font-monospace" rows="10" @bind="step.Script" placeholder="#!/usr/bin/env bash&#10;set -e&#10;curl -sL https://sentry.io/get-cli/ | bash"></textarea>
+                    </div>
+
+                    <div class="rr-form-section">
+                        <div class="rr-form-section-title"><i class="bi bi-braces"></i> Environment</div>
+                        <label class="form-label">Referenced Env Var Sets</label>
+                        <div class="border rounded p-2 mb-3" style="max-height: 9rem; overflow-y: auto;">
+                            @if (!allEnvVarSets.Any())
+                            {
+                                <div class="text-muted small">No environment variable sets exist yet.</div>
+                            }
+                            @foreach (var evs in allEnvVarSets)
+                            {
+                                var sel = step.EnvironmentVariableSetIds.Contains(evs.Id);
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" checked="@sel"
+                                           @onchange="() => ToggleStepEnvSet(step, evs.Id)" id="step-modal-evs-@evs.Id" />
+                                    <label class="form-check-label" for="step-modal-evs-@evs.Id">@evs.Name <span class="text-muted">(@evs.Variables.Count vars)</span></label>
+                                </div>
+                            }
+                        </div>
+
+                        <label class="form-label">Step-level Environment Overrides</label>
+                        <table class="table table-sm mb-2">
+                            <thead><tr><th>Key</th><th>Value</th><th style="width:60px" class="text-center">Secret</th><th class="actions-col"></th></tr></thead>
+                            <tbody>
+                                @foreach (var kvp in step.EnvironmentOverrides.ToList())
+                                {
+                                    var k = kvp.Key;
+                                    var isSec = step.EnvironmentOverrideSecretKeys.Contains(k);
+                                    <tr>
+                                        <td><input class="form-control form-control-sm" value="@k" @onchange="e => RenameStepOverrideKey(step, k, e.Value?.ToString() ?? string.Empty)" /></td>
+                                        <td><input type="@(isSec ? "password" : "text")" class="form-control form-control-sm" value="@kvp.Value" @onchange="e => { step.EnvironmentOverrides[k] = e.Value?.ToString() ?? string.Empty; }" /></td>
+                                        <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSec" @onchange="() => ToggleStepOverrideSecret(step, k)" /></td>
+                                        <td class="actions-cell"><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveStepOverride(step, k)"><i class="bi bi-x-lg"></i></button></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <div class="row g-2">
+                            <div class="col-md-3"><input class="form-control form-control-sm" placeholder="KEY" @bind="newStepOverrideKey" /></div>
+                            <div class="col-md-4"><input class="form-control form-control-sm" placeholder="Value" @bind="newStepOverrideValue" /></div>
+                            <div class="col-md-2 d-flex align-items-center">
+                                <input type="checkbox" class="form-check-input me-1" @bind="newStepOverrideIsSecret" id="newStepOverrideSecret-@initStepIndex" />
+                                <label class="form-check-label small" for="newStepOverrideSecret-@initStepIndex">Secret</label>
+                            </div>
+                            <div class="col-md-3">
+                                <button class="btn btn-sm btn-outline-success" @onclick="() => AddStepOverride(step)"><i class="bi bi-plus-lg"></i> Add override</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-primary" @onclick="CloseInitStepEditor">
+                        <i class="bi bi-check2 me-1"></i>Done
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 }
@@ -535,23 +619,23 @@
 <table class="table table-striped resizable-table">
     <thead>
         <tr>
-            <th role="button" @onclick='() => SetSort("Name")' style="cursor:pointer; user-select:none;">Name @SortIndicator("Name")</th>
-            <th role="button" @onclick='() => SetSort("Provider")' style="cursor:pointer; user-select:none;">Provider / Platform @SortIndicator("Provider")</th>
-            <th>Labels</th>
-            <th>Env Sets</th>
-            <th>Max Parallel</th>
-            <th>Actions</th>
+            <th role="button" data-col-kind="name" data-col-min="180" data-col-preferred="280" data-col-weight="3.5" @onclick='() => SetSort("Name")' style="cursor:pointer; user-select:none;">Name @SortIndicator("Name")</th>
+            <th role="button" data-col-kind="related" data-col-min="150" data-col-preferred="210" data-col-priority="2" @onclick='() => SetSort("Provider")' style="cursor:pointer; user-select:none;">Provider / Platform @SortIndicator("Provider")</th>
+            <th data-col-kind="optional" data-col-min="110" data-col-preferred="150" data-col-priority="5">Labels</th>
+            <th data-col-kind="compact" data-col-min="92" data-col-preferred="112" data-col-priority="3">Env Sets</th>
+            <th data-col-kind="compact" data-col-min="108" data-col-preferred="132" data-col-priority="3">Max Parallel</th>
+            <th class="actions-col" data-col-min="132" data-col-preferred="154">Actions</th>
         </tr>
     </thead>
     <tbody>
         @foreach (var profile in FilteredProfiles)
         {
             <tr>
-                <td>
-                    <strong>@profile.Name</strong>
+                <td class="name-cell">
+                    <span class="primary-label">@profile.Name</span>
                     @if (!string.IsNullOrWhiteSpace(profile.Description))
                     {
-                        <br/><small class="text-muted">@profile.Description</small>
+                        <small class="secondary-label">@profile.Description</small>
                     }
                 </td>
                 <td>
@@ -611,8 +695,8 @@
                         </div>
                     }
                 </td>
-                <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditProfile(profile)"><i class="bi bi-pencil-square"></i> Edit</button>
+                <td class="actions-cell">
+                    <button class="btn btn-sm btn-outline-primary" @onclick="() => EditProfile(profile)"><i class="bi bi-pencil-square"></i> Edit</button>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteProfile(profile)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
@@ -805,6 +889,21 @@
         showForm = true;
     }
 
+    private void CloseProfileForm()
+    {
+        showForm = false;
+        showProfileRrHelp = false;
+        editingStepIndex = null;
+    }
+
+    private void CloseInitStepEditor()
+    {
+        editingStepIndex = null;
+        newStepOverrideKey = "";
+        newStepOverrideValue = "";
+        newStepOverrideIsSecret = false;
+    }
+
     private async Task SaveProfile()
     {
         editProfile.Labels = [.. editLabels];
@@ -862,7 +961,7 @@
             await Store.Insert(editProfile);
 
         await LoadDataAsync();
-        showForm = false;
+        CloseProfileForm();
     }
 
     private async Task ConfirmAndDeleteProfile(RunnerProfile profile)

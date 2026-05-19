@@ -41,16 +41,16 @@ else
     <table class="table table-striped resizable-table">
         <thead>
             <tr>
-                <th>Time</th>
-                <th>Action</th>
-                <th>Repository</th>
-                <th>Workflow</th>
-                <th>Rule</th>
-                <th>Labels</th>
-                <th>Image Tag</th>
-                <th>Matched Profile</th>
-                <th>Status</th>
-                <th>Instance</th>
+                <th data-col-kind="time" data-col-min="108" data-col-preferred="130" data-col-priority="3">Time</th>
+                <th data-col-kind="compact" data-col-min="78" data-col-preferred="96" data-col-priority="4">Action</th>
+                <th data-col-kind="name" data-col-min="170" data-col-preferred="250" data-col-weight="3.5">Repository</th>
+                <th data-col-kind="related" data-col-min="130" data-col-preferred="180" data-col-priority="3">Workflow</th>
+                <th data-col-kind="related" data-col-min="112" data-col-preferred="150" data-col-priority="4">Rule</th>
+                <th data-col-kind="optional" data-col-min="100" data-col-preferred="140" data-col-priority="5">Labels</th>
+                <th data-col-kind="optional" data-col-min="88" data-col-preferred="112" data-col-priority="5">Image Tag</th>
+                <th data-col-kind="related" data-col-min="118" data-col-preferred="150" data-col-priority="4">Matched Profile</th>
+                <th data-col-kind="description" data-col-min="220" data-col-preferred="320" data-col-priority="2" data-col-weight="1.7">Status</th>
+                <th data-col-kind="optional" data-col-min="98" data-col-preferred="126" data-col-priority="5">Instance</th>
             </tr>
         </thead>
         <tbody>
@@ -59,11 +59,11 @@ else
                 <tr>
                     <td>@evt.ReceivedAt.ToString("g")</td>
                     <td><span class="badge @(evt.Action == "queued" ? "bg-primary" : "bg-secondary")">@evt.Action</span></td>
-                    <td>
-                        @evt.Repository
+                    <td class="name-cell">
+                        <span class="primary-label">@evt.Repository</span>
                         @if (!string.IsNullOrWhiteSpace(evt.GitHubInstallationId))
                         {
-                            <div><small class="text-muted">installation @evt.GitHubInstallationId</small></div>
+                            <small class="secondary-label">installation @evt.GitHubInstallationId</small>
                         }
                     </td>
                     <td>@evt.WorkflowName</td>
@@ -95,53 +95,39 @@ else
                         }
                     </td>
                     <td>@(evt.MatchedProfileName ?? "—")</td>
-                     <td>
-                         <span class="badge @GetStatusBadge(evt.Status)">@GetStatusLabel(evt.Status)</span>
-                         @if (!string.IsNullOrEmpty(evt.Error))
-                         {
-                             <br/><small class="@(evt.Status is "timed_out" or "error" or "rejected" ? "text-danger" : "text-muted")">@evt.Error</small>
+                    <td>
+                        @{
+                            var insight = GetEventInsight(evt);
+                            var primaryMessage = GetPrimaryStatusMessage(evt);
+                            var metaItems = GetStatusMeta(evt).ToList();
                         }
-                        @if (evt.RetryCount > 0 || evt.NextRetryAt.HasValue || evt.ExpiresAt.HasValue || IsQueuedWait(evt))
-                        {
-                            <div class="small text-muted mt-1">
-                                @if (IsQueuedWait(evt))
+                        <div class="event-status-card @GetStatusToneClass(evt.Status)">
+                            <div class="event-status-heading">
+                                <span class="badge @GetStatusBadge(evt.Status)">@GetStatusLabel(evt.Status)</span>
+                                @if (insight is not null && insight.BlockedBy != CapacityBlockerKind.None)
                                 {
-                                    var queuePosition = GetQueuePosition(evt);
-                                    if (queuePosition.HasValue)
+                                    <span class="event-blocker-pill @GetLimitToneClass(insight.BlockedBy)" title="@GetInsightTitle(insight)">
+                                        <i class="bi @GetLimitIcon(insight.BlockedBy)"></i>@GetLimitLabel(insight.BlockedBy)
+                                    </span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(primaryMessage))
+                            {
+                                <span class="event-status-summary" title="@primaryMessage">@primaryMessage</span>
+                            }
+                            @if (metaItems.Any())
+                            {
+                                <div class="event-status-meta">
+                                    @foreach (var item in metaItems)
                                     {
-                                        <span>Queue: #@queuePosition.Value</span>
+                                        <span title="@item.Title">
+                                            <i class="bi @item.Icon"></i>@item.Text
+                                        </span>
                                     }
-                                    <span>@(queuePosition.HasValue ? " · " : "")Waiting since @evt.ReceivedAt.ToLocalTime().ToString("g")</span>
-                                }
-                                @if (evt.RetryCount > 0)
-                                {
-                                    <span>@(IsQueuedWait(evt) ? " · " : "")Attempts: @evt.RetryCount</span>
-                                }
-                                @if (evt.NextRetryAt.HasValue && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "provisioned")
-                                {
-                                    <span>@((evt.RetryCount > 0 || IsQueuedWait(evt) ? " · " : ""))Next: @evt.NextRetryAt.Value.ToLocalTime().ToString("t")</span>
-                                }
-                                @if (evt.ExpiresAt.HasValue && evt.Status is not "completed" and not "timed_out")
-                                {
-                                    <span> · Expires: @evt.ExpiresAt.Value.ToLocalTime().ToString("t")</span>
-                                 }
-                             </div>
-                         }
-                         @if (IsQueuedWait(evt) && capacitySnapshot.Events.TryGetValue(evt.Id, out var insight) && (!string.IsNullOrWhiteSpace(insight.Summary) || insight.Details.Any()))
-                         {
-                             <div class="small mt-1">
-                                 @if (insight.BlockedBy != CapacityBlockerKind.None)
-                                 {
-                                     <span class="badge @GetLimitBadge(insight.BlockedBy) me-1">@GetLimitLabel(insight.BlockedBy)</span>
-                                 }
-                                 <span>@insight.Summary</span>
-                                 @if (insight.Details.Any())
-                                 {
-                                     <br/><span class="text-muted">@string.Join(" · ", insight.Details.Take(2))</span>
-                                 }
-                             </div>
-                         }
-                     </td>
+                                </div>
+                            }
+                        </div>
+                    </td>
                     <td>
                         @if (!string.IsNullOrEmpty(evt.InstanceId))
                         {
@@ -168,6 +154,8 @@ else
     private CancellationTokenSource? _refreshCts;
 
     private string _lastSearch = "";
+
+    private sealed record EventStatusMeta(string Icon, string Text, string Title);
 
     protected override async Task OnInitializedAsync()
     {
@@ -263,6 +251,57 @@ else
         _ => status
     };
 
+    private EventCapacityView? GetEventInsight(WebhookEvent evt) =>
+        IsQueuedWait(evt) && capacitySnapshot.Events.TryGetValue(evt.Id, out var insight)
+            ? insight
+            : null;
+
+    private string? GetPrimaryStatusMessage(WebhookEvent evt)
+    {
+        if (!string.IsNullOrWhiteSpace(evt.Error))
+            return evt.Error;
+
+        return evt.Status switch
+        {
+            "provisioned" when !string.IsNullOrWhiteSpace(evt.InstanceId) => $"Runner {evt.InstanceId[..Math.Min(8, evt.InstanceId.Length)]} created",
+            "in_progress" => "Workflow job is running on a matched runner.",
+            "completed" => "Workflow job completed.",
+            "ignored" => "Event ignored by the provisioning pipeline.",
+            _ => null
+        };
+    }
+
+    private IEnumerable<EventStatusMeta> GetStatusMeta(WebhookEvent evt)
+    {
+        if (IsQueuedWait(evt))
+        {
+            var queuePosition = GetQueuePosition(evt);
+            if (queuePosition.HasValue)
+                yield return new("bi-list-ol", $"#{queuePosition.Value}", $"Queue position #{queuePosition.Value}");
+
+            yield return new("bi-clock", evt.ReceivedAt.ToLocalTime().ToString("t"), $"Waiting since {evt.ReceivedAt.ToLocalTime():f}");
+        }
+
+        if (evt.RetryCount > 0)
+            yield return new("bi-arrow-repeat", evt.RetryCount.ToString(), $"{evt.RetryCount} provisioning attempt(s)");
+
+        if (evt.NextRetryAt.HasValue && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "provisioned")
+            yield return new("bi-skip-forward", evt.NextRetryAt.Value.ToLocalTime().ToString("t"), $"Next check at {evt.NextRetryAt.Value.ToLocalTime():f}");
+
+        if (evt.ExpiresAt.HasValue && evt.Status is not "completed" and not "timed_out")
+            yield return new("bi-hourglass-split", evt.ExpiresAt.Value.ToLocalTime().ToString("t"), $"Expires at {evt.ExpiresAt.Value.ToLocalTime():f}");
+    }
+
+    private static string GetStatusToneClass(string status) => status switch
+    {
+        "provisioned" or "completed" => "event-status-good",
+        "matching" or "preparing" or "dispatching" or "in_progress" => "event-status-info",
+        "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "event-status-warn",
+        "error" or "rejected" or "timed_out" => "event-status-danger",
+        "ignored" => "event-status-muted",
+        _ => ""
+    };
+
     private static bool IsQueuedWait(WebhookEvent evt) =>
         evt.Action == "queued"
         && evt.Status is "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match";
@@ -278,6 +317,28 @@ else
         _ => "bg-light text-muted"
     };
 
+    private static string GetLimitToneClass(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "event-blocker-neutral",
+        CapacityBlockerKind.ProvisioningRule => "event-blocker-warn",
+        CapacityBlockerKind.Profile => "event-blocker-info",
+        CapacityBlockerKind.Host => "event-blocker-danger",
+        CapacityBlockerKind.Matching => "event-blocker-dark",
+        CapacityBlockerKind.Configuration => "event-blocker-neutral",
+        _ => "event-blocker-neutral"
+    };
+
+    private static string GetLimitIcon(CapacityBlockerKind kind) => kind switch
+    {
+        CapacityBlockerKind.Fifo => "bi-signpost-split",
+        CapacityBlockerKind.ProvisioningRule => "bi-diagram-3",
+        CapacityBlockerKind.Profile => "bi-person-badge",
+        CapacityBlockerKind.Host => "bi-hdd-network",
+        CapacityBlockerKind.Matching => "bi-filter-circle",
+        CapacityBlockerKind.Configuration => "bi-gear",
+        _ => "bi-check-circle"
+    };
+
     private string GetLimitLabel(CapacityBlockerKind kind) => kind switch
     {
         CapacityBlockerKind.Fifo => "FIFO",
@@ -288,6 +349,15 @@ else
         CapacityBlockerKind.Configuration => "Config",
         _ => "Ready"
     };
+
+    private static string GetInsightTitle(EventCapacityView insight)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(insight.Summary))
+            parts.Add(insight.Summary);
+        parts.AddRange(insight.Details);
+        return string.Join(" · ", parts);
+    }
 
     private int? GetQueuePosition(WebhookEvent evt)
     {

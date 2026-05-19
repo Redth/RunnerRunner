@@ -1,4 +1,5 @@
 @page "/envvarsets"
+@page "/env-var-sets"
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
@@ -17,9 +18,20 @@
 
 @if (showForm)
 {
-    <div class="card mb-4">
-        <div class="card-body">
-            <h5 class="card-title">@(isEditing ? "Edit" : "Create") Environment Variable Set</h5>
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="env-var-set-title" @onclick="CloseForm">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="env-var-set-title" class="modal-title">
+                            <i class="bi bi-braces me-2"></i>@(isEditing ? "Edit" : "Create") Environment Variable Set
+                        </h5>
+                        <div class="modal-kicker">Compose reusable variables for runner profiles without disrupting the list view.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseForm" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
             <div class="row mb-3">
                 <div class="col-md-4">
                     <label class="form-label">Name</label>
@@ -98,7 +110,7 @@
                         <th>Value</th>
                         <th style="width:150px">Resolves To</th>
                         <th style="width:60px" class="text-center"><i class="bi bi-shield-lock" title="Secret"></i></th>
-                        <th style="width:40px"></th>
+                        <th class="actions-col"></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -127,7 +139,7 @@
                                 }
                             </td>
                             <td class="text-center"><input type="checkbox" class="form-check-input" checked="@isSecret" @onchange="() => ToggleSecret(kvp.Key)" title="Mark as secret" /></td>
-                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVariable(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
+                            <td class="actions-cell"><button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveVariable(kvp.Key)"><i class="bi bi-x-lg"></i></button></td>
                         </tr>
                     }
                 </tbody>
@@ -148,8 +160,14 @@
                 </div>
             </div>
 
-            <button class="btn btn-success me-2" @onclick="SaveSet">Save</button>
-            <button class="btn btn-secondary" @onclick="() => showForm = false">Cancel</button>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="CloseForm">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveSet">
+                        <i class="bi bi-check2 me-1"></i>Save set
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 }
@@ -158,18 +176,18 @@
 <table class="table table-striped resizable-table">
     <thead>
         <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Priority</th>
-            <th>Variables</th>
-            <th>Actions</th>
+            <th data-col-kind="name" data-col-min="180" data-col-preferred="260" data-col-weight="3.2">Name</th>
+            <th data-col-kind="description" data-col-min="180" data-col-preferred="280" data-col-priority="4" data-col-weight="2">Description</th>
+            <th data-col-kind="compact" data-col-min="76" data-col-preferred="94" data-col-priority="3">Priority</th>
+            <th data-col-kind="compact" data-col-min="100" data-col-preferred="124" data-col-priority="2">Variables</th>
+            <th class="actions-col" data-col-min="132" data-col-preferred="154">Actions</th>
         </tr>
     </thead>
     <tbody>
         @foreach (var set in envVarSets)
         {
             <tr>
-                <td>@set.Name</td>
+                <td class="name-cell"><span class="primary-label">@set.Name</span></td>
                 <td>@set.Description</td>
                 <td>@set.Priority</td>
                 <td>
@@ -179,8 +197,8 @@
                         <span class="badge bg-secondary ms-1"><i class="bi bi-shield-lock"></i> @set.SecretKeys.Count secret(s)</span>
                     }
                 </td>
-                <td>
-                    <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => EditSet(set)"><i class="bi bi-pencil-square"></i> Edit</button>
+                <td class="actions-cell">
+                    <button class="btn btn-sm btn-outline-primary" @onclick="() => EditSet(set)"><i class="bi bi-pencil-square"></i> Edit</button>
                     <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteSet(set)"><i class="bi bi-trash3"></i> Delete</button>
                 </td>
             </tr>
@@ -235,6 +253,12 @@
         editSecretKeys = [.. set.SecretKeys];
         isEditing = true;
         showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        showForm = false;
+        showRrHelp = false;
     }
 
     private void AddVariable()

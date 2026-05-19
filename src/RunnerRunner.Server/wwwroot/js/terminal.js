@@ -14,14 +14,14 @@ window.rrTerminal = {
 
         var term = new window.Terminal({
             theme: {
-                background: options?.darkMode ? '#1a1b26' : '#f8f9fa',
-                foreground: options?.darkMode ? '#c0caf5' : '#24292f',
-                cursor: options?.darkMode ? '#c0caf5' : '#24292f',
-                selectionBackground: options?.darkMode ? '#33467c' : '#b6d7ff',
+                background: options?.darkMode ? '#05070b' : '#f8f9fa',
+                foreground: options?.darkMode ? '#f3f4f6' : '#24292f',
+                cursor: options?.darkMode ? '#f3f4f6' : '#24292f',
+                selectionBackground: options?.darkMode ? '#374151' : '#b6d7ff',
                 black: '#15161e',
                 red: '#f7768e',
-                green: '#9ece6a',
-                yellow: '#e0af68',
+                green: '#22c55e',
+                yellow: '#e0a100',
                 blue: '#7aa2f7',
                 magenta: '#bb9af7',
                 cyan: '#7dcfff',
@@ -35,8 +35,8 @@ window.rrTerminal = {
                 brightCyan: '#7dcfff',
                 brightWhite: '#c0caf5'
             },
-            fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-            fontSize: 13,
+            fontFamily: "'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+            fontSize: options?.fontSize || 12,
             lineHeight: 1.4,
             scrollback: 5000,
             cursorBlink: false,
@@ -54,18 +54,29 @@ window.rrTerminal = {
         // Delay fit to ensure container has dimensions
         setTimeout(function () { fitAddon.fit(); }, 50);
 
-        // Refit on resize
-        var resizeObserver = new ResizeObserver(function () {
-            try { fitAddon.fit(); } catch (e) { }
-        });
-        resizeObserver.observe(el);
-
-        this._instances[elementId] = {
+        var instance = {
             term: term,
             fitAddon: fitAddon,
             searchAddon: searchAddon,
-            resizeObserver: resizeObserver
+            resizeObserver: null,
+            lastText: '',
+            wrap: true
         };
+
+        // Refit on resize unless wrapping is disabled and the terminal is using a wide buffer.
+        var resizeObserver = new ResizeObserver(function () {
+            try {
+                if (instance.wrap === false) {
+                    term.resize(240, Math.max(term.rows || 24, 1));
+                } else {
+                    fitAddon.fit();
+                }
+            } catch (e) { }
+        });
+        resizeObserver.observe(el);
+        instance.resizeObserver = resizeObserver;
+
+        this._instances[elementId] = instance;
 
         return true;
     },
@@ -73,18 +84,36 @@ window.rrTerminal = {
     write: function (elementId, text) {
         var inst = this._instances[elementId];
         if (!inst) return;
+        inst.lastText += text || '';
         inst.term.write(text);
     },
 
     writeln: function (elementId, text) {
         var inst = this._instances[elementId];
         if (!inst) return;
+        inst.lastText += (text || '') + '\n';
         inst.term.writeln(text);
+    },
+
+    writeText: function (elementId, text, autoScroll) {
+        var inst = this._instances[elementId];
+        if (!inst) return;
+        inst.lastText = text || '';
+        inst.term.clear();
+        inst.term.reset();
+        if (inst.wrap === false) {
+            inst.term.resize(240, Math.max(inst.term.rows || 24, 1));
+        }
+        inst.term.write(inst.lastText.replace(/\r?\n/g, '\r\n'));
+        if (autoScroll !== false) {
+            setTimeout(function () { inst.term.scrollToBottom(); }, 0);
+        }
     },
 
     clear: function (elementId) {
         var inst = this._instances[elementId];
         if (!inst) return;
+        inst.lastText = '';
         inst.term.clear();
         inst.term.reset();
     },
@@ -105,11 +134,59 @@ window.rrTerminal = {
         var inst = this._instances[elementId];
         if (!inst) return;
         inst.term.options.theme = {
-            background: darkMode ? '#1a1b26' : '#f8f9fa',
-            foreground: darkMode ? '#c0caf5' : '#24292f',
-            cursor: darkMode ? '#c0caf5' : '#24292f',
-            selectionBackground: darkMode ? '#33467c' : '#b6d7ff'
+            background: darkMode ? '#05070b' : '#f8f9fa',
+            foreground: darkMode ? '#f3f4f6' : '#24292f',
+            cursor: darkMode ? '#f3f4f6' : '#24292f',
+            selectionBackground: darkMode ? '#374151' : '#b6d7ff'
         };
+    },
+
+    setFontSize: function (elementId, fontSize) {
+        var inst = this._instances[elementId];
+        if (!inst) return;
+        inst.term.options.fontSize = Number(fontSize) || 12;
+        if (inst.wrap === false) {
+            inst.term.resize(240, Math.max(inst.term.rows || 24, 1));
+        } else {
+            inst.fitAddon.fit();
+        }
+    },
+
+    setWrap: function (elementId, wrap) {
+        var inst = this._instances[elementId];
+        if (!inst) return;
+        inst.wrap = wrap !== false;
+        if (inst.wrap) {
+            inst.fitAddon.fit();
+        } else {
+            inst.term.resize(240, Math.max(inst.term.rows || 24, 1));
+        }
+    },
+
+    scrollToBottom: function (elementId) {
+        var inst = this._instances[elementId];
+        if (!inst) return;
+        inst.term.scrollToBottom();
+    },
+
+    copy: function (elementId) {
+        var inst = this._instances[elementId];
+        if (!inst || !navigator.clipboard) return;
+        navigator.clipboard.writeText(inst.lastText || '');
+    },
+
+    download: function (elementId, filename) {
+        var inst = this._instances[elementId];
+        if (!inst) return;
+        var blob = new Blob([inst.lastText || ''], { type: 'text/plain;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'runnerrunner-logs.log';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     },
 
     fit: function (elementId) {
@@ -124,6 +201,36 @@ window.rrTerminal = {
         inst.resizeObserver.disconnect();
         inst.term.dispose();
         delete this._instances[elementId];
+    }
+};
+
+window.rrViewport = {
+    isBelow: function (width) {
+        return window.innerWidth <= width;
+    },
+
+    getBooleanPreference: function (key) {
+        try {
+            var value = window.localStorage.getItem(key);
+            if (value === null) return null;
+            return value === 'true';
+        } catch (e) {
+            return null;
+        }
+    },
+
+    getPreference: function (key) {
+        try {
+            return window.localStorage.getItem(key);
+        } catch (e) {
+            return null;
+        }
+    },
+
+    setBooleanPreference: function (key, value) {
+        try {
+            window.localStorage.setItem(key, value ? 'true' : 'false');
+        } catch (e) { }
     }
 };
 
@@ -169,53 +276,6 @@ window.rrSplitPane = {
             }
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
-        });
-    }
-};
-
-// Resizable table columns
-window.rrResizableColumns = {
-    init: function () {
-        document.querySelectorAll('table.resizable-table').forEach(function (table) {
-            if (table.dataset.resizable) return;
-            table.dataset.resizable = 'true';
-            table.style.tableLayout = 'fixed';
-
-            var headers = table.querySelectorAll('thead th');
-            headers.forEach(function (th, index) {
-                if (index >= headers.length - 1) return;
-
-                th.style.position = 'relative';
-                th.style.overflow = 'hidden';
-                th.style.textOverflow = 'ellipsis';
-
-                var grip = document.createElement('div');
-                grip.className = 'col-resize-grip';
-                grip.addEventListener('mousedown', function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    var startX = e.clientX;
-                    var startW = th.getBoundingClientRect().width;
-                    document.body.style.cursor = 'col-resize';
-                    document.body.style.userSelect = 'none';
-                    grip.classList.add('active');
-
-                    function onMove(ev) {
-                        var newW = Math.max(50, startW + ev.clientX - startX);
-                        th.style.width = newW + 'px';
-                    }
-                    function onUp() {
-                        document.removeEventListener('mousemove', onMove);
-                        document.removeEventListener('mouseup', onUp);
-                        document.body.style.cursor = '';
-                        document.body.style.userSelect = '';
-                        grip.classList.remove('active');
-                    }
-                    document.addEventListener('mousemove', onMove);
-                    document.addEventListener('mouseup', onUp);
-                });
-                th.appendChild(grip);
-            });
         });
     }
 };
