@@ -20,7 +20,7 @@
         <div class="alert @MessageClass py-2">@Message</div>
     }
 
-    <form method="post" action="/auth/login" class="auth-form">
+    <form method="post" action="/auth/login/password" class="auth-form">
         <AntiforgeryToken />
         <input type="hidden" name="returnUrl" value="@ReturnUrlValue" />
 
