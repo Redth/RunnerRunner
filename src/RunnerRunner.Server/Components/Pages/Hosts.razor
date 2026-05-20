@@ -1,4 +1,5 @@
 @page "/hosts"
+@attribute [Authorize(Policy = RunnerRunnerPolicies.ManageHosts)]
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models

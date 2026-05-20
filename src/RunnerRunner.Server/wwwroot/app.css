@@ -3299,3 +3299,111 @@ h1 .bi, h3 .bi { opacity: 0.7; }
         table-layout: fixed !important;
     }
 }
+
+.auth-page {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 2rem 1rem;
+    background:
+        radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 22rem),
+        radial-gradient(circle at 82% 0%, color-mix(in srgb, var(--info) 14%, transparent), transparent 20rem),
+        var(--bg-primary);
+}
+
+.auth-shell {
+    width: min(100%, 34rem);
+}
+
+.auth-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-xl);
+    background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+    box-shadow: var(--shadow-xl);
+    padding: 2rem;
+    backdrop-filter: blur(18px);
+}
+
+.auth-card-wide {
+    width: min(100vw - 2rem, 46rem);
+}
+
+.auth-brand {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.auth-brand-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 3.25rem;
+    height: 3.25rem;
+    border-radius: 1rem;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 1.7rem;
+}
+
+.auth-brand-icon-warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+}
+
+.auth-brand h1 {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.auth-brand p {
+    margin: 0.25rem 0 0;
+    color: var(--text-secondary);
+}
+
+.auth-form .form-control {
+    background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-secondary));
+}
+
+.auth-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 1.25rem 0;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--border-color);
+}
+
+.user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-secondary));
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    max-width: 16rem;
+}
+
+.user-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.role-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+}

@@ -1,5 +1,6 @@
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Models;
+using System.Security.Claims;
 
 namespace RunnerRunner.Server.Services;
 
@@ -9,11 +10,16 @@ namespace RunnerRunner.Server.Services;
 public class AuditService
 {
     private readonly IDocumentStore _store;
+    private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly ILogger<AuditService> _logger;
 
-    public AuditService(IDocumentStore store, ILogger<AuditService> logger)
+    public AuditService(
+        IDocumentStore store,
+        IHttpContextAccessor httpContextAccessor,
+        ILogger<AuditService> logger)
     {
         _store = store;
+        _httpContextAccessor = httpContextAccessor;
         _logger = logger;
     }
 
@@ -23,8 +29,9 @@ public class AuditService
         {
             Action = action,
             EntityType = entityType,
-            EntityId = entityId != null ? Guid.Parse(entityId) : null,
+            EntityId = Guid.TryParse(entityId, out var parsedEntityId) ? parsedEntityId : null,
             Details = details,
+            UserName = GetCurrentUserName(),
             Timestamp = DateTime.UtcNow
         };
 
@@ -39,5 +46,16 @@ public class AuditService
             .OrderByDescending(e => e.Timestamp)
             .Paginate(0, count)
             .ToList()).ToList();
+    }
+
+    private string? GetCurrentUserName()
+    {
+        var user = _httpContextAccessor.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+            return null;
+
+        return user.Identity.Name
+            ?? user.FindFirstValue(ClaimTypes.Email)
+            ?? user.FindFirstValue(ClaimTypes.NameIdentifier);
     }
 }

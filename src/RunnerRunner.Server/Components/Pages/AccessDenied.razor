@@ -1,0 +1,22 @@
+@page "/auth/access-denied"
+@layout AuthLayout
+
+<PageTitle>Access denied - RunnerRunner</PageTitle>
+
+<div class="auth-card">
+    <div class="auth-brand">
+        <span class="auth-brand-icon auth-brand-icon-warning"><i class="bi bi-slash-circle-fill"></i></span>
+        <div>
+            <h1>Access denied</h1>
+            <p>Your account does not have permission to open that RunnerRunner area.</p>
+        </div>
+    </div>
+
+    <div class="d-grid gap-2">
+        <a class="btn btn-primary" href="/">Return to dashboard</a>
+        <form method="post" action="/auth/logout">
+            <AntiforgeryToken />
+            <button class="btn btn-outline-secondary w-100" type="submit">Sign out</button>
+        </form>
+    </div>
+</div>

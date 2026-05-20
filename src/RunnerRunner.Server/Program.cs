@@ -8,7 +8,14 @@ using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using RunnerRunner.Server.Authentication;
+using RunnerRunner.Server.Data.Auth;
+using RunnerRunner.Server.Services.Auth;
 using Microsoft.Extensions.Logging;
 using RunnerRunner.Server.Services.Logs;
 
@@ -25,23 +32,55 @@ builder.WebHost.ConfigureKestrel(options =>
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
 builder.AddServiceDefaults();
 
-if (!builder.Environment.IsDevelopment())
-{
-    var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
-    if (string.IsNullOrWhiteSpace(dataProtectionKeysPath))
-        dataProtectionKeysPath = Path.Combine(builder.Environment.ContentRootPath, "data", "data-protection-keys");
+var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+if (string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+    dataProtectionKeysPath = Path.Combine(builder.Environment.ContentRootPath, "data", "data-protection-keys");
 
-    Directory.CreateDirectory(dataProtectionKeysPath);
-    builder.Services.AddDataProtection()
-        .SetApplicationName("RunnerRunner.Server")
-        .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
-}
+Directory.CreateDirectory(dataProtectionKeysPath);
+builder.Services.AddDataProtection()
+    .SetApplicationName("RunnerRunner.Server")
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
 
 // Document store (Shiny DocumentDB with PostgreSQL)
 var pgConnectionString = builder.Configuration.GetValue<string>("Database:ConnectionString")
     ?? builder.Configuration.GetConnectionString("DefaultConnection")
     ?? "Host=localhost;Port=5432;Database=runnerrunner;Username=runnerrunner;Password=runnerrunner";
 builder.Services.AddRunnerRunnerDocumentStore(pgConnectionString);
+
+builder.Services.AddDbContext<RunnerRunnerAuthDbContext>(options =>
+    options.UseNpgsql(pgConnectionString));
+
+builder.Services
+    .AddIdentity<RunnerRunnerUser, IdentityRole>(options =>
+    {
+        options.User.RequireUniqueEmail = true;
+        options.SignIn.RequireConfirmedAccount = false;
+        options.Lockout.AllowedForNewUsers = true;
+        options.Lockout.MaxFailedAccessAttempts = 8;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(10);
+        options.Password.RequiredLength = 12;
+        options.Password.RequireNonAlphanumeric = false;
+    })
+    .AddEntityFrameworkStores<RunnerRunnerAuthDbContext>()
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.Cookie.Name = "RunnerRunner.Auth";
+    options.LoginPath = "/auth/login";
+    options.LogoutPath = "/auth/logout";
+    options.AccessDeniedPath = "/auth/access-denied";
+    options.SlidingExpiration = true;
+});
+
+builder.Services.AddAuthentication()
+    .AddOpenIdConnect(RunnerRunnerAuthSchemes.Oidc, _ => { });
+builder.Services.AddAuthorization(options => options.AddRunnerRunnerPolicies());
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, RunnerRunnerOidcOptionsConfigurator>();
+builder.Services.AddSingleton<RunnerRunnerAuthSettingsService>();
+builder.Services.AddScoped<FirstRunSetupService>();
 
 // SignalR remains available only for legacy log/image compatibility surfaces.
 builder.Services.AddSignalR();
@@ -186,6 +225,8 @@ if (!app.Environment.IsDevelopment())
 
 // Ensure all document store tables exist before serving requests
 await DatabaseInitializer.EnsureTablesCreatedAsync(app.Services);
+await RunnerRunnerAuthSchemaInitializer.EnsureCreatedAsync(app.Services);
+await app.Services.GetRequiredService<RunnerRunnerAuthSettingsService>().LoadAsync();
 
 if (!app.Environment.IsDevelopment())
 {
@@ -195,11 +236,15 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 
+app.UseAuthentication();
+app.UseMiddleware<FirstRunSetupMiddleware>();
+app.UseAuthorization();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+app.MapRunnerRunnerAuthEndpoints();
 
 // Legacy compatibility hub; HostWorker runtime commands use gRPC.
 app.MapHub<AgentHub>("/hubs/agent");
@@ -210,14 +255,16 @@ app.MapHostWorkerUpdateEndpoints();
 app.MapWebhookEndpoints();
 
 // Orleans Dashboard
-app.MapOrleansDashboard("/orleans");
+app.MapOrleansDashboard("/orleans")
+    .RequireAuthorization(RunnerRunnerPolicies.ManageUsers);
 
 // Aspire health check endpoints
 app.MapDefaultEndpoints();
 
 if (app.Environment.IsDevelopment())
 {
-    var demo = app.MapGroup("/dev/demo-data");
+    var demo = app.MapGroup("/dev/demo-data")
+        .RequireAuthorization(RunnerRunnerPolicies.ManageUsers);
 
     demo.MapPost("/seed", async (DemoDataSeeder seeder) =>
     {

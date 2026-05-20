@@ -1,5 +1,6 @@
 @page "/envvarsets"
 @page "/env-var-sets"
+@attribute [Authorize(Policy = RunnerRunnerPolicies.ManageProfiles)]
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models

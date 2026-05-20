@@ -1,4 +1,5 @@
 @page "/registries"
+@attribute [Authorize(Policy = RunnerRunnerPolicies.ManageRegistries)]
 @rendermode InteractiveServer
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Hub

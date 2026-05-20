@@ -1,0 +1,97 @@
+@page "/auth/login"
+@layout AuthLayout
+@inject RunnerRunner.Server.Services.Auth.RunnerRunnerAuthSettingsService AuthSettings
+@inject RunnerRunner.Server.Services.Auth.FirstRunSetupService SetupService
+@inject NavigationManager Navigation
+
+<PageTitle>Sign in - RunnerRunner</PageTitle>
+
+<div class="auth-card">
+    <div class="auth-brand">
+        <span class="auth-brand-icon"><i class="bi bi-play-circle-fill"></i></span>
+        <div>
+            <h1>Welcome back</h1>
+            <p>Sign in to manage your RunnerRunner fleet.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="alert @MessageClass py-2">@Message</div>
+    }
+
+    <form method="post" action="/auth/login" class="auth-form">
+        <AntiforgeryToken />
+        <input type="hidden" name="returnUrl" value="@ReturnUrlValue" />
+
+        <div class="mb-3">
+            <label class="form-label" for="identifier">Username or email</label>
+            <input id="identifier" name="identifier" class="form-control form-control-lg" autocomplete="username" autofocus required />
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label" for="password">Password</label>
+            <input id="password" name="password" type="password" class="form-control form-control-lg" autocomplete="current-password" required />
+        </div>
+
+        <div class="form-check mb-4">
+            <input id="rememberMe" name="rememberMe" class="form-check-input" type="checkbox" />
+            <label class="form-check-label" for="rememberMe">Keep me signed in</label>
+        </div>
+
+        <button class="btn btn-primary btn-lg w-100" type="submit">
+            <i class="bi bi-box-arrow-in-right me-1"></i> Sign in
+        </button>
+    </form>
+
+    @if (oidcEnabled)
+    {
+        <div class="auth-divider"><span>or</span></div>
+        <a class="btn btn-outline-primary btn-lg w-100" href="@OidcLoginUrl">
+            <i class="bi bi-shield-lock me-1"></i> Continue with @oidcDisplayName
+        </a>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    [SupplyParameterFromQuery(Name = "loggedOut")]
+    public bool LoggedOut { get; set; }
+
+    private bool oidcEnabled;
+    private string oidcDisplayName = "single sign-on";
+    private string ReturnUrlValue => string.IsNullOrWhiteSpace(ReturnUrl) ? "/" : ReturnUrl!;
+    private string OidcLoginUrl => $"/auth/oidc?returnUrl={Uri.EscapeDataString(ReturnUrlValue)}";
+
+    private string? Message => Error switch
+    {
+        "invalid" => "The username, email, or password was not recognized.",
+        "locked" => "This account is temporarily locked. Try again later.",
+        "oidc-disabled" => "Single sign-on is not configured.",
+        "oidc-failed" => "Single sign-on did not complete successfully.",
+        not null => Error,
+        _ => LoggedOut ? "You have been signed out." : null
+    };
+
+    private string MessageClass => Error is null ? "alert-success" : "alert-danger";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await SetupService.HasEnabledUsersAsync())
+        {
+            Navigation.NavigateTo("/setup", forceLoad: true);
+            return;
+        }
+
+        var settings = await AuthSettings.GetAsync();
+        oidcEnabled = settings.Oidc.IsConfigured;
+        oidcDisplayName = string.IsNullOrWhiteSpace(settings.Oidc.DisplayName)
+            ? "single sign-on"
+            : settings.Oidc.DisplayName;
+    }
+}
