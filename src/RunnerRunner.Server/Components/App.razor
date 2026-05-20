@@ -55,6 +55,11 @@
             var page = document.querySelector('.page');
             if (!page) return;
             var collapsed = page.classList.toggle('sidebar-collapsed');
+            if (collapsed) {
+                document.documentElement.setAttribute('data-sidebar-collapsed', 'true');
+            } else {
+                document.documentElement.removeAttribute('data-sidebar-collapsed');
+            }
             localStorage.setItem('rr-sidebar-collapsed', collapsed);
         };
         window.toggleTheme = function() {

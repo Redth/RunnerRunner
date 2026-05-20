@@ -27,42 +27,6 @@
 </SectionContent>
 
 <div class="row g-3">
-    <div class="col-md-6 col-xl-4">
-        <div class="card h-100">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-key-fill me-2"></i>Provider Credentials</h5>
-                <p class="card-text">Add GitHub App, GitHub PAT, Gitea, and Azure DevOps credentials with guided setup flows.</p>
-                <AuthorizeView Policy="@RunnerRunnerPolicies.ManageCredentials">
-                    <Authorized>
-                        <a class="btn btn-outline-primary" href="credentials">
-                            <i class="bi bi-key me-1"></i> Open Credentials
-                        </a>
-                    </Authorized>
-                    <NotAuthorized>
-                        <span class="badge bg-secondary">Requires CredentialsManager</span>
-                    </NotAuthorized>
-                </AuthorizeView>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-6 col-xl-4">
-        <div class="card h-100">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-box-seam me-2"></i>Container / OCI Registries</h5>
-                <p class="card-text">Browse images, inspect tags, and target pulls to hosts from the dedicated registries page.</p>
-                <AuthorizeView Policy="@RunnerRunnerPolicies.ManageRegistries">
-                    <Authorized>
-                        <a class="btn btn-outline-primary" href="registries">
-                            <i class="bi bi-boxes me-1"></i> Open Registries
-                        </a>
-                    </Authorized>
-                    <NotAuthorized>
-                        <span class="badge bg-secondary">Requires RegistriesManager</span>
-                    </NotAuthorized>
-                </AuthorizeView>
-            </div>
-        </div>
-    </div>
     <div class="col-md-12 col-xl-4">
         <div class="card h-100">
             <div class="card-body">

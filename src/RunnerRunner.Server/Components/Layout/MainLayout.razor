@@ -5,10 +5,6 @@
 <div class="page" id="page-root">
     <aside class="sidebar" onclick="if(event.target.closest('a'))closeMobileSidebar()">
         <NavMenu />
-        <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
-            <i class="bi bi-chevron-bar-left collapse-icon-expanded"></i>
-            <i class="bi bi-chevron-bar-right collapse-icon-collapsed"></i>
-        </button>
     </aside>
     <div class="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
@@ -17,6 +13,10 @@
             <div class="top-bar-left">
                 <button class="mobile-hamburger" onclick="toggleMobileSidebar()" title="Open menu">
                     <i class="bi bi-list"></i>
+                </button>
+                <button type="button" class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar">
+                    <i class="bi bi-chevron-bar-left collapse-icon-expanded"></i>
+                    <i class="bi bi-chevron-bar-right collapse-icon-collapsed"></i>
                 </button>
                 <SectionOutlet SectionName="page-header" />
             </div>
