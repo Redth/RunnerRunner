@@ -204,36 +204,6 @@ window.rrTerminal = {
     }
 };
 
-window.rrViewport = {
-    isBelow: function (width) {
-        return window.innerWidth <= width;
-    },
-
-    getBooleanPreference: function (key) {
-        try {
-            var value = window.localStorage.getItem(key);
-            if (value === null) return null;
-            return value === 'true';
-        } catch (e) {
-            return null;
-        }
-    },
-
-    getPreference: function (key) {
-        try {
-            return window.localStorage.getItem(key);
-        } catch (e) {
-            return null;
-        }
-    },
-
-    setBooleanPreference: function (key, value) {
-        try {
-            window.localStorage.setItem(key, value ? 'true' : 'false');
-        } catch (e) { }
-    }
-};
-
 // Resizable split-pane
 window.rrSplitPane = {
     init: function (handleId, panelId, storageKey, minWidth, maxWidth) {

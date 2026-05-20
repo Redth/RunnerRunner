@@ -20,14 +20,29 @@
     </div>
 </SectionContent>
 
-<div class="mb-3 d-flex flex-wrap align-items-end gap-2">
-    <div>
-        <label class="form-label mb-0 small text-muted">Search</label>
-        <input type="text" class="form-control form-control-sm" placeholder="Filter jobs…" @bind="searchText" @bind:event="oninput" style="min-width:180px;" />
+<div class="rr-filter-panel mb-3" aria-label="Job filters">
+    <div class="rr-filter-header">
+        <div class="rr-filter-panel-title">
+            <i class="bi bi-funnel"></i>
+            <span>Filters</span>
+        </div>
+        <div class="rr-filter-buttons">
+            <button class="btn btn-sm rr-filter-btn rr-filter-btn-clear" @onclick="ClearFilters" disabled="@(!HasActiveFilters())">
+                <i class="bi bi-eraser"></i> Clear
+            </button>
+            <button class="btn btn-sm rr-filter-btn rr-filter-btn-refresh" @onclick="Refresh">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
     </div>
-    <div>
-        <label class="form-label mb-0 small text-muted">Status</label>
-        <select class="form-select form-select-sm" @bind="filterStatus" style="min-width:120px;">
+    <div class="rr-filter-grid">
+    <div class="rr-filter-field rr-filter-field-wide">
+        <label class="form-label">Search</label>
+        <input type="text" class="form-control form-control-sm" placeholder="Filter jobs…" @bind="searchText" @bind:event="oninput" />
+    </div>
+    <div class="rr-filter-field">
+        <label class="form-label">Status</label>
+        <select class="form-select form-select-sm" @bind="filterStatus">
             <option value="active">Active</option>
             <option value="">All</option>
             <option value="Queued">Queued</option>
@@ -37,17 +52,17 @@
             }
         </select>
     </div>
-    <div>
-        <label class="form-label mb-0 small text-muted">Mode</label>
-        <select class="form-select form-select-sm" @bind="filterMode" style="min-width:120px;">
+    <div class="rr-filter-field">
+        <label class="form-label">Mode</label>
+        <select class="form-select form-select-sm" @bind="filterMode">
             <option value="">All</option>
             <option value="static">Static</option>
             <option value="dynamic">Dynamic</option>
         </select>
     </div>
-    <div>
-        <label class="form-label mb-0 small text-muted">Profile</label>
-        <select class="form-select form-select-sm" @bind="filterProfileId" style="min-width:140px;">
+    <div class="rr-filter-field">
+        <label class="form-label">Profile</label>
+        <select class="form-select form-select-sm" @bind="filterProfileId">
             <option value="">All</option>
             @foreach (var kv in profileNames.OrderBy(p => p.Value))
             {
@@ -55,9 +70,9 @@
             }
         </select>
     </div>
-    <div>
-        <label class="form-label mb-0 small text-muted">Host</label>
-        <select class="form-select form-select-sm" @bind="filterHostId" style="min-width:140px;">
+    <div class="rr-filter-field">
+        <label class="form-label">Host</label>
+        <select class="form-select form-select-sm" @bind="filterHostId">
             <option value="">All</option>
             @foreach (var kv in hostNames.OrderBy(h => h.Value))
             {
@@ -65,8 +80,6 @@
             }
         </select>
     </div>
-    <div>
-        <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
     </div>
 </div>
 
@@ -672,6 +685,15 @@ else
         !string.IsNullOrWhiteSpace(filterMode) ||
         !string.IsNullOrWhiteSpace(filterProfileId) ||
         !string.IsNullOrWhiteSpace(filterHostId);
+
+    private void ClearFilters()
+    {
+        searchText = "";
+        filterStatus = "active";
+        filterMode = "";
+        filterProfileId = "";
+        filterHostId = "";
+    }
 
     private IEnumerable<JobView> GetFilteredJobs()
     {

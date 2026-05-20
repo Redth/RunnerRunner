@@ -15,21 +15,112 @@
     </div>
 </SectionContent>
 
-<div class="mb-3 d-flex flex-wrap align-items-end gap-2">
-    <div>
-        <label class="form-label mb-0 small text-muted">Search</label>
-        <input type="text" class="form-control form-control-sm" placeholder="Filter events…" @bind="searchText" @bind:event="oninput" style="min-width:220px;" />
+<div class="rr-filter-panel mb-3" aria-label="Event filters">
+    <div class="rr-filter-header">
+        <div class="rr-filter-panel-title">
+            <i class="bi bi-funnel"></i>
+            <span>Filters</span>
+        </div>
+        <div class="rr-filter-header-actions">
+            <label class="rr-auto-refresh-control">
+                <span>Auto-refresh</span>
+                <select class="form-select form-select-sm rr-auto-refresh-select" value="@autoRefreshInterval" @onchange="AutoRefreshIntervalChanged">
+                    <option value="3">3s</option>
+                    <option value="5">5s</option>
+                    <option value="30">30s</option>
+                    <option value="60">60s</option>
+                    <option value="@AutoRefreshNever">Never</option>
+                </select>
+            </label>
+            <div class="rr-filter-buttons">
+                <button class="btn btn-sm rr-filter-btn rr-filter-btn-clear" @onclick="ClearFilters" disabled="@(!HasActiveFilters)">
+                    <i class="bi bi-eraser"></i> Clear
+                </button>
+                <button class="btn btn-sm rr-filter-btn rr-filter-btn-refresh" @onclick="Refresh">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
     </div>
-    <div>
-        <button class="btn btn-outline-secondary btn-sm" @onclick="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    <div class="rr-filter-grid">
+        <div class="rr-filter-field rr-filter-field-wide">
+            <label class="form-label">Search</label>
+            <input type="search" class="form-control form-control-sm" placeholder="Repo, workflow, labels, status…" @bind="searchText" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Repository</label>
+            <input type="search" class="form-control form-control-sm" list="event-repository-options" placeholder="owner/repo" @bind="repositoryFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Workflow</label>
+            <input type="search" class="form-control form-control-sm" list="event-workflow-options" placeholder="workflow name" @bind="workflowFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Rule</label>
+            <input type="search" class="form-control form-control-sm" list="event-rule-options" placeholder="provisioning rule" @bind="ruleFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Labels</label>
+            <input type="search" class="form-control form-control-sm" list="event-label-options" placeholder="linux, docker" @bind="labelFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Status</label>
+            <select class="form-select form-select-sm" @bind="statusFilter" @bind:after="ApplyFilterFromInput">
+                <option value="">Any status</option>
+                @foreach (var status in StatusOptions)
+                {
+                    <option value="@status">@GetStatusLabel(status)</option>
+                }
+            </select>
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Action</label>
+            <select class="form-select form-select-sm" @bind="actionFilter" @bind:after="ApplyFilterFromInput">
+                <option value="">Any action</option>
+                @foreach (var action in ActionOptions)
+                {
+                    <option value="@action">@action</option>
+                }
+            </select>
+        </div>
+        <div class="rr-filter-field">
+            <label class="form-label">Profile</label>
+            <input type="search" class="form-control form-control-sm" list="event-profile-options" placeholder="matched profile" @bind="profileFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+        </div>
     </div>
-    <div class="small text-muted mb-1">Auto-refreshing every 5s</div>
+    <div class="rr-filter-summary">Showing @filteredEvents.Count of @allEvents.Count events</div>
 </div>
 
-<div class="alert alert-info py-2 d-flex align-items-center gap-2 mb-3" style="font-size: 0.9rem;">
-    <i class="bi bi-info-circle"></i>
-    <span>Queued work is evaluated in this order: <strong>FIFO</strong> → <strong>rule concurrency</strong> → <strong>profile per-host cap</strong> → <strong>host backend slots</strong>.</span>
-</div>
+<datalist id="event-repository-options">
+    @foreach (var option in RepositoryOptions)
+    {
+        <option value="@option"></option>
+    }
+</datalist>
+<datalist id="event-workflow-options">
+    @foreach (var option in WorkflowOptions)
+    {
+        <option value="@option"></option>
+    }
+</datalist>
+<datalist id="event-rule-options">
+    @foreach (var option in RuleOptions)
+    {
+        <option value="@option"></option>
+    }
+</datalist>
+<datalist id="event-label-options">
+    @foreach (var option in LabelOptions)
+    {
+        <option value="@option"></option>
+    }
+</datalist>
+<datalist id="event-profile-options">
+    @foreach (var option in ProfileOptions)
+    {
+        <option value="@option"></option>
+    }
+</datalist>
 
 @if (!filteredEvents.Any())
 {
@@ -151,26 +242,70 @@ else
     private Dictionary<string, string> sourceNames = [];
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private string searchText = "";
+    private string repositoryFilter = "";
+    private string workflowFilter = "";
+    private string ruleFilter = "";
+    private string labelFilter = "";
+    private string statusFilter = "";
+    private string actionFilter = "";
+    private string profileFilter = "";
     private CancellationTokenSource? _refreshCts;
+    private const string AutoRefreshNever = "never";
+    private string autoRefreshInterval = "5";
 
-    private string _lastSearch = "";
+    private string _lastFilterSignature = "";
 
     private sealed record EventStatusMeta(string Icon, string Text, string Title);
+
+    private IEnumerable<string> RepositoryOptions => DistinctOptions(allEvents.Select(e => e.Repository));
+
+    private IEnumerable<string> WorkflowOptions => DistinctOptions(allEvents.Select(e => e.WorkflowName));
+
+    private IEnumerable<string> RuleOptions => DistinctOptions(allEvents.Select(GetSourceName).Where(name => name != "—"));
+
+    private IEnumerable<string> LabelOptions => DistinctOptions(allEvents.SelectMany(e => e.Labels));
+
+    private IEnumerable<string> StatusOptions => DistinctOptions(allEvents.Select(e => e.Status));
+
+    private IEnumerable<string> ActionOptions => DistinctOptions(allEvents.Select(e => e.Action));
+
+    private IEnumerable<string> ProfileOptions => DistinctOptions(allEvents.Select(e => e.MatchedProfileName));
+
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(searchText)
+        || !string.IsNullOrWhiteSpace(repositoryFilter)
+        || !string.IsNullOrWhiteSpace(workflowFilter)
+        || !string.IsNullOrWhiteSpace(ruleFilter)
+        || !string.IsNullOrWhiteSpace(labelFilter)
+        || !string.IsNullOrWhiteSpace(statusFilter)
+        || !string.IsNullOrWhiteSpace(actionFilter)
+        || !string.IsNullOrWhiteSpace(profileFilter);
 
     protected override async Task OnInitializedAsync()
     {
         await Refresh();
-        _refreshCts = new CancellationTokenSource();
-        _ = RunAutoRefreshAsync(_refreshCts.Token);
+        RestartAutoRefresh();
     }
 
     protected override void OnParametersSet() => ApplyFilter();
 
+    private void ApplyFilterFromInput() => ApplyFilter(force: true);
+
     private void ApplyFilter(bool force = false)
     {
-        if (!force && searchText == _lastSearch && filteredEvents.Any())
+        var signature = string.Join('\u001f',
+            searchText,
+            repositoryFilter,
+            workflowFilter,
+            ruleFilter,
+            labelFilter,
+            statusFilter,
+            actionFilter,
+            profileFilter);
+
+        if (!force && signature == _lastFilterSignature && filteredEvents.Any())
             return;
-        _lastSearch = searchText;
+        _lastFilterSignature = signature;
 
         var q = allEvents.AsEnumerable();
         if (!string.IsNullOrWhiteSpace(searchText))
@@ -180,10 +315,80 @@ else
                 e.Repository.Contains(term, StringComparison.OrdinalIgnoreCase)
                 || (e.GitHubInstallationId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || e.WorkflowName.Contains(term, StringComparison.OrdinalIgnoreCase)
-                || e.Status.Contains(term, StringComparison.OrdinalIgnoreCase));
+                || e.Status.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.Action.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.Provider.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || GetSourceName(e).Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (e.MatchedProfileName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.InstanceId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || e.JobId.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.RunId.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.Labels.Any(label => label.Contains(term, StringComparison.OrdinalIgnoreCase)));
         }
+
+        if (!string.IsNullOrWhiteSpace(repositoryFilter))
+            q = q.Where(e => e.Repository.Contains(repositoryFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(workflowFilter))
+            q = q.Where(e => e.WorkflowName.Contains(workflowFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(ruleFilter))
+        {
+            var term = ruleFilter.Trim();
+            q = q.Where(e =>
+                GetSourceName(e).Contains(term, StringComparison.OrdinalIgnoreCase)
+                || e.BindingId.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var labelTerms = SplitFilterTerms(labelFilter).ToList();
+        if (labelTerms.Any())
+        {
+            q = q.Where(e => labelTerms.All(term =>
+                e.Labels.Any(label => label.Contains(term, StringComparison.OrdinalIgnoreCase))));
+        }
+
+        if (!string.IsNullOrWhiteSpace(statusFilter))
+            q = q.Where(e => string.Equals(e.Status, statusFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(actionFilter))
+            q = q.Where(e => string.Equals(e.Action, actionFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(profileFilter))
+        {
+            var term = profileFilter.Trim();
+            q = q.Where(e =>
+                (e.MatchedProfileName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.MatchedProfileId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
         filteredEvents = q.ToList();
     }
+
+    private void ClearFilters()
+    {
+        searchText = "";
+        repositoryFilter = "";
+        workflowFilter = "";
+        ruleFilter = "";
+        labelFilter = "";
+        statusFilter = "";
+        actionFilter = "";
+        profileFilter = "";
+        ApplyFilter(force: true);
+    }
+
+    private static IEnumerable<string> DistinctOptions(IEnumerable<string?> values) =>
+        values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .Take(100);
+
+    private static IEnumerable<string> SplitFilterTerms(string value) =>
+        value
+            .Split([','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(term => !string.IsNullOrWhiteSpace(term));
 
     private async Task Refresh()
     {
@@ -206,9 +411,40 @@ else
     private static DateTime GetActivityTime(WebhookEvent evt) =>
         evt.UpdatedAt > evt.ReceivedAt ? evt.UpdatedAt : evt.ReceivedAt;
 
-    private async Task RunAutoRefreshAsync(CancellationToken ct)
+    private void AutoRefreshIntervalChanged(ChangeEventArgs args)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        autoRefreshInterval = args.Value?.ToString() ?? AutoRefreshNever;
+        RestartAutoRefresh();
+    }
+
+    private void RestartAutoRefresh()
+    {
+        _refreshCts?.Cancel();
+        _refreshCts?.Dispose();
+        _refreshCts = null;
+
+        if (!TryGetAutoRefreshInterval(out var interval))
+            return;
+
+        _refreshCts = new CancellationTokenSource();
+        _ = RunAutoRefreshAsync(interval, _refreshCts.Token);
+    }
+
+    private bool TryGetAutoRefreshInterval(out TimeSpan interval)
+    {
+        if (int.TryParse(autoRefreshInterval, out var seconds) && seconds > 0)
+        {
+            interval = TimeSpan.FromSeconds(seconds);
+            return true;
+        }
+
+        interval = TimeSpan.Zero;
+        return false;
+    }
+
+    private async Task RunAutoRefreshAsync(TimeSpan interval, CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(interval);
         try
         {
             while (await timer.WaitForNextTickAsync(ct))

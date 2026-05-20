@@ -17,13 +17,10 @@
     </div>
 </SectionContent>
 
-<div class="images-workspace logs-workspace @(hostPanelCollapsed ? "sources-collapsed" : "sources-expanded")">
+<div class="images-workspace logs-workspace">
     <aside id="images-sidebar" class="logs-source-panel images-host-panel" aria-label="Image hosts">
         <div class="logs-source-panel-header">
             <span><i class="bi bi-pc-display"></i> Hosts</span>
-            <button type="button" class="icon-btn" @onclick="ToggleHostPanel" aria-label="Collapse image hosts" title="Collapse hosts" aria-controls="images-sidebar" aria-expanded="@(!hostPanelCollapsed)">
-                <i class="bi bi-layout-sidebar-inset"></i>
-            </button>
         </div>
 
         <div class="logs-source-search">
@@ -34,12 +31,6 @@
                    aria-label="Filter image hosts"
                    @bind="hostFilter"
                    @bind:event="oninput" />
-        </div>
-
-        <div class="logs-source-actions">
-            <button type="button" @onclick="SelectFirstHost">Select first</button>
-            <span aria-hidden="true"></span>
-            <button type="button" @onclick="ClearHostFilter">Clear</button>
         </div>
 
         <div class="logs-source-list">
@@ -74,13 +65,6 @@
     </aside>
 
     <div id="images-resize-handle" class="split-resize-handle"></div>
-
-    @if (hostPanelCollapsed)
-    {
-        <button type="button" class="source-panel-reveal source-panel-reveal-icon-only" @onclick="ToggleHostPanel" aria-label="Show image hosts" title="Show hosts" aria-controls="images-sidebar" aria-expanded="false">
-            <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
-        </button>
-    }
 
     <section class="images-main-panel" aria-label="Host images">
         @if (string.IsNullOrEmpty(selectedHostId))
@@ -333,11 +317,9 @@
     private List<RegistryCredential> registries = [];
     private string selectedHostId = "";
     private string hostFilter = "";
-    private bool hostPanelCollapsed;
     private string activeTab = "docker";
     private List<AgentImage> dockerImages = [];
     private List<AgentImage> tartImages = [];
-    private const string HostPanelPreferenceKey = "rr-images-hosts-collapsed-v2";
 
     // Search & sort
     private string searchText = "";
@@ -384,7 +366,6 @@
             return;
 
         await JS.InvokeVoidAsync("rrSplitPane.init", "images-resize-handle", "images-sidebar", "rr-images-sidebar-width-v2", 220, 420);
-        await InitializeResponsiveHostPanel();
     }
 
     private IEnumerable<Host> FilteredHosts =>
@@ -397,38 +378,6 @@
                 || h.AgentStatus.ToString().Contains(hostFilter.Trim(), StringComparison.OrdinalIgnoreCase));
 
     private Host? SelectedHost => hosts.FirstOrDefault(h => h.Id == selectedHostId);
-
-    private async Task ToggleHostPanel()
-    {
-        hostPanelCollapsed = !hostPanelCollapsed;
-        await JS.InvokeVoidAsync("rrViewport.setBooleanPreference", HostPanelPreferenceKey, hostPanelCollapsed);
-        StateHasChanged();
-    }
-
-    private async Task InitializeResponsiveHostPanel()
-    {
-        var savedCollapsed = await JS.InvokeAsync<string?>("rrViewport.getPreference", HostPanelPreferenceKey);
-        hostPanelCollapsed = bool.TryParse(savedCollapsed, out var collapsed)
-            ? collapsed
-            : await JS.InvokeAsync<bool>("rrViewport.isBelow", 720);
-        StateHasChanged();
-    }
-
-    private async Task SelectFirstHost()
-    {
-        var first = FilteredHosts
-            .OrderByDescending(h => h.AgentStatus == AgentStatus.Online)
-            .ThenBy(h => h.Label)
-            .FirstOrDefault();
-
-        if (first != null)
-            await SelectHost(first.Id);
-    }
-
-    private void ClearHostFilter()
-    {
-        hostFilter = "";
-    }
 
     private async Task SelectHost(string hostId)
     {

@@ -18,14 +18,11 @@
     </div>
 </SectionContent>
 
-<div class="registries-workspace images-workspace logs-workspace @(registryPanelCollapsed ? "sources-collapsed" : "sources-expanded")">
+<div class="registries-workspace images-workspace logs-workspace">
     <aside id="registries-sidebar" class="logs-source-panel registries-source-panel" aria-label="Registries">
         <div class="logs-source-panel-header">
             <span><i class="bi bi-boxes"></i> Registries</span>
             <span class="badge bg-secondary">@registries.Count</span>
-            <button type="button" class="icon-btn" @onclick="ToggleRegistryPanel" aria-label="Collapse registries" title="Collapse registries" aria-controls="registries-sidebar" aria-expanded="@(!registryPanelCollapsed)">
-                <i class="bi bi-layout-sidebar-inset"></i>
-            </button>
         </div>
 
         <div class="registries-sidebar-cta">
@@ -42,12 +39,6 @@
                    aria-label="Filter registries"
                    @bind="registryFilter"
                    @bind:event="oninput" />
-        </div>
-
-        <div class="logs-source-actions">
-            <button type="button" @onclick="SelectFirstRegistry">Select first</button>
-            <span aria-hidden="true"></span>
-            <button type="button" @onclick="ClearRegistryFilter">Clear</button>
         </div>
 
         <div class="logs-source-list">
@@ -94,21 +85,10 @@
 
     <div id="registries-resize-handle" class="split-resize-handle"></div>
 
-    @if (registryPanelCollapsed)
-    {
-        <button type="button" class="source-panel-reveal" @onclick="ToggleRegistryPanel" aria-label="Show registries" title="Show registries" aria-controls="registries-sidebar" aria-expanded="false">
-            <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
-            <span>Show registries</span>
-        </button>
-    }
-
     <section class="images-main-panel registries-main-panel" aria-label="Registry browser">
         @if (GetSelectedRegistry() is not RegistryCredential selectedRegistry)
         {
             <div class="images-empty-state">
-                <button type="button" class="console-icon-btn mb-3" @onclick="ToggleRegistryPanel" aria-label="Show registries" title="Show registries" aria-controls="registries-sidebar" aria-expanded="@(!registryPanelCollapsed)">
-                    <i class="bi bi-layout-sidebar"></i>
-                </button>
                 <span class="empty-state-icon"><i class="bi bi-boxes" aria-hidden="true"></i></span>
                 <h3>Select a registry</h3>
                 <p>Choose a registry from the sidebar or add a new one to start browsing images.</p>
@@ -119,9 +99,6 @@
             <div class="images-toolbar registries-toolbar">
                 <div class="images-toolbar-title">
                     <div class="images-toolbar-heading">
-                        <button type="button" class="console-icon-btn" @onclick="ToggleRegistryPanel" aria-label="Toggle registries" title="Toggle registries" aria-controls="registries-sidebar" aria-expanded="@(!registryPanelCollapsed)">
-                            <i class="bi bi-layout-sidebar"></i>
-                        </button>
                         <i class="bi @GetRegistryTypeIcon(selectedRegistry.RegistryType)"></i>
                         <strong>@selectedRegistry.Name</strong>
                         @if (selectedRegistry.IsDefault)
@@ -536,12 +513,9 @@
 }
 
 @code {
-    private const string RegistryPanelPreferenceKey = "rr-registries-panel-collapsed-v2";
-
     private List<RegistryCredential> registries = [];
     private List<RunnerHost> hosts = [];
     private string selectedRegistryId = "";
-    private bool registryPanelCollapsed;
     private string registryFilter = "";
 
     private RegistryCredential editRegistry = new() { Name = "", RegistryUrl = "" };
@@ -581,7 +555,6 @@
             return;
 
         await JS.InvokeVoidAsync("rrSplitPane.init", "registries-resize-handle", "registries-sidebar", "rr-registries-sidebar-width-v2", 220, 420);
-        await InitializeResponsiveRegistryPanel();
     }
 
     private async Task LoadPageDataAsync()
@@ -613,38 +586,6 @@
                 || (!string.IsNullOrWhiteSpace(r.DefaultNamespace) && r.DefaultNamespace.Contains(query, StringComparison.OrdinalIgnoreCase))
                 || (!string.IsNullOrWhiteSpace(r.Username) && r.Username.Contains(query, StringComparison.OrdinalIgnoreCase)));
         }
-    }
-
-    private async Task ToggleRegistryPanel()
-    {
-        registryPanelCollapsed = !registryPanelCollapsed;
-        await JS.InvokeVoidAsync("rrViewport.setBooleanPreference", RegistryPanelPreferenceKey, registryPanelCollapsed);
-        StateHasChanged();
-    }
-
-    private async Task InitializeResponsiveRegistryPanel()
-    {
-        var savedCollapsed = await JS.InvokeAsync<string?>("rrViewport.getPreference", RegistryPanelPreferenceKey);
-        registryPanelCollapsed = bool.TryParse(savedCollapsed, out var collapsed)
-            ? collapsed
-            : await JS.InvokeAsync<bool>("rrViewport.isBelow", 720);
-        StateHasChanged();
-    }
-
-    private void SelectFirstRegistry()
-    {
-        var first = FilteredRegistries
-            .OrderByDescending(r => r.IsDefault)
-            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
-
-        if (first != null)
-            SelectRegistry(first.Id);
-    }
-
-    private void ClearRegistryFilter()
-    {
-        registryFilter = "";
     }
 
     private void SelectRegistry(string id)
