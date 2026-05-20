@@ -5,55 +5,103 @@
 
 <PageTitle>First-run setup - RunnerRunner</PageTitle>
 
-<div class="auth-card auth-card-wide">
-    <div class="auth-brand">
-        <span class="auth-brand-icon"><i class="bi bi-shield-lock-fill"></i></span>
+<div class="auth-card auth-card-wide setup-card">
+    <aside class="setup-hero">
         <div>
+            <span class="setup-eyebrow">First-run setup</span>
+            <div class="setup-hero-icon">
+                <i class="bi bi-shield-lock-fill"></i>
+            </div>
             <h1>Secure RunnerRunner</h1>
-            <p>Create the first administrator account before opening the control plane.</p>
-        </div>
-    </div>
-
-    @if (!string.IsNullOrWhiteSpace(Error))
-    {
-        <div class="alert alert-danger py-2">@Error</div>
-    }
-
-    <form method="post" action="/auth/setup" class="auth-form">
-        <AntiforgeryToken />
-
-        <div class="row g-3">
-            <div class="col-md-6">
-                <label class="form-label" for="displayName">Display name</label>
-                <input id="displayName" name="displayName" class="form-control" autocomplete="name" required />
-            </div>
-            <div class="col-md-6">
-                <label class="form-label" for="userName">Username</label>
-                <input id="userName" name="userName" class="form-control" autocomplete="username" required />
-            </div>
-            <div class="col-12">
-                <label class="form-label" for="email">Email</label>
-                <input id="email" name="email" type="email" class="form-control" autocomplete="email" required />
-            </div>
-            <div class="col-md-6">
-                <label class="form-label" for="password">Password</label>
-                <input id="password" name="password" type="password" class="form-control" autocomplete="new-password" required />
-            </div>
-            <div class="col-md-6">
-                <label class="form-label" for="confirmPassword">Confirm password</label>
-                <input id="confirmPassword" name="confirmPassword" type="password" class="form-control" autocomplete="new-password" required />
-            </div>
+            <p>Start with a trusted administrator account before the control plane opens to your fleet.</p>
         </div>
 
-        <button class="btn btn-primary btn-lg w-100 mt-4" type="submit">
-            <i class="bi bi-person-check me-1"></i> Create administrator
-        </button>
-    </form>
+        <div class="setup-highlights" aria-label="Setup checklist">
+            <div class="setup-highlight">
+                <i class="bi bi-person-check"></i>
+                <span>Create the owner account</span>
+            </div>
+            <div class="setup-highlight">
+                <i class="bi bi-lock"></i>
+                <span>Protect access from first launch</span>
+            </div>
+            <div class="setup-highlight">
+                <i class="bi bi-diagram-3"></i>
+                <span>Manage hosts, runners, and credentials</span>
+            </div>
+        </div>
+    </aside>
+
+    <section class="setup-form-panel">
+        <div class="setup-form-heading">
+            <span class="setup-step-pill">Step 1 of 1</span>
+            <h2>Create administrator</h2>
+            <p>Use a memorable username and a strong password. You will be signed in immediately.</p>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            <div class="alert alert-danger py-2">
+                <i class="bi bi-exclamation-triangle"></i>@ErrorMessage
+            </div>
+        }
+
+        <form method="post" action="/auth/setup" class="auth-form">
+            <AntiforgeryToken />
+
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="form-floating">
+                        <input id="displayName" name="displayName" class="form-control" autocomplete="name" placeholder="Display name" autofocus required />
+                        <label for="displayName">Display name</label>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-floating">
+                        <input id="userName" name="userName" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Username" required />
+                        <label for="userName">Username</label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <div class="form-floating">
+                        <input id="email" name="email" type="email" class="form-control" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="admin@example.com" required />
+                        <label for="email">Email</label>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-floating">
+                        <input id="password" name="password" type="password" class="form-control" autocomplete="new-password" minlength="12" placeholder="Password" aria-describedby="passwordHelp" required />
+                        <label for="password">Password</label>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="form-floating">
+                        <input id="confirmPassword" name="confirmPassword" type="password" class="form-control" autocomplete="new-password" minlength="12" placeholder="Confirm password" required />
+                        <label for="confirmPassword">Confirm password</label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="passwordHelp" class="form-text mt-3">
+                Passwords must be at least 12 characters.
+            </div>
+
+            <button class="btn btn-primary btn-lg w-100 mt-4 setup-submit" type="submit">
+                <i class="bi bi-person-check"></i> Create administrator
+            </button>
+        </form>
+    </section>
 </div>
 
 @code {
     [SupplyParameterFromQuery(Name = "error")]
     public string? Error { get; set; }
+
+    private string? ErrorMessage => string.IsNullOrWhiteSpace(Error)
+        ? null
+        : Error == "password-mismatch"
+            ? "Passwords do not match."
+            : Error;
 
     protected override async Task OnInitializedAsync()
     {

@@ -15,7 +15,7 @@ public static class RunnerRunnerAuthEndpoints
     {
         var auth = endpoints.MapGroup("/auth");
 
-        auth.MapPost("/login", LoginAsync).AllowAnonymous();
+        auth.MapPost("/login/password", LoginAsync).AllowAnonymous();
         auth.MapPost("/logout", LogoutAsync);
         auth.MapPost("/setup", SetupAsync).AllowAnonymous();
         auth.MapGet("/oidc", StartOidcAsync).AllowAnonymous();
