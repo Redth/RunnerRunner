@@ -13,7 +13,6 @@
 @inject CapacityPlanningService CapacityService
 @inject IHostCommandDispatcher HostCommandDispatcher
 @inject HostWorkerUpdateService HostWorkerUpdateService
-@inject HostWorkerLocalUpdateStore HostWorkerUpdateStore
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -41,7 +40,7 @@
 
 <HostEnrollmentWizard IsOpen="@showEnrollmentWizard"
                       UpdateHost="@manualUpdateHost"
-                      UpdateSource="@selectedUpdateSource"
+                      UpdateSource="@HostWorkerUpdateSourceKind.Release"
                       UpdateVersion="@selectedUpdateVersion"
                       OnClose="CloseEnrollmentWizard"
                       OnChanged="ReloadData" />
@@ -175,58 +174,50 @@
 {
     <div class="card host-update-options mb-3">
         <div class="card-body">
-            <div class="d-flex flex-wrap align-items-end gap-2">
-                <div>
-                    <label class="form-label form-label-sm mb-1">Update source</label>
-                    <select class="form-select form-select-sm" value="@selectedUpdateSource.ToSourceId()" @onchange="OnUpdateSourceChanged">
-                        <option value="release">GitHub ref</option>
-                        <option value="local-folder">SSH/local folder</option>
-                    </select>
+            <div class="host-update-options-layout">
+                <div class="host-update-options-copy">
+                    <span class="host-update-options-icon"><i class="bi bi-arrow-up-circle"></i></span>
+                    <div>
+                        <div class="host-update-options-kicker">HostWorker updates</div>
+                        <div class="host-update-options-title">Check hosts against a GitHub ref</div>
+                        <div class="host-update-options-text">Use <code>latest</code>, a release tag, branch, or commit to find matching HostWorker artifacts.</div>
+                    </div>
                 </div>
-                <div style="min-width: 260px;">
-                    <label class="form-label form-label-sm mb-1">@(selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Ref" : "Version")</label>
-                    @if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
-                    {
-                        <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest, tag, branch, or commit" />
-                    }
-                    else
-                    {
-                        <select class="form-select form-select-sm" @bind="selectedUpdateVersion">
-                            @if (availableUpdateVersions.Count == 0)
-                            {
-                                <option value="">No builds found</option>
-                            }
-                            @foreach (var version in availableUpdateVersions)
-                            {
-                                <option value="@version.Version">@version.Version (@version.Assets.Count assets)</option>
-                            }
-                        </select>
-                    }
+                <div class="host-update-options-controls">
+                    <label class="form-label form-label-sm mb-1">Ref</label>
+                    <input class="form-control form-control-sm" @bind="selectedUpdateVersion" placeholder="latest, tag, branch, or commit" />
+                    <div class="host-update-options-hint">Blank uses the latest available release.</div>
                 </div>
-                <button class="btn btn-outline-secondary btn-sm" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
-                    <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check hosts")
-                </button>
-                @if (selectedUpdateSource != HostWorkerUpdateSourceKind.Release)
-                {
-                    <button class="btn btn-outline-secondary btn-sm" @onclick="LoadUpdateVersions">
-                        <i class="bi bi-arrow-clockwise me-1"></i> Refresh builds
+                <div class="host-update-options-actions">
+                    <button class="btn btn-primary btn-sm" @onclick="CheckHostWorkerUpdates" disabled="@checkingUpdates">
+                        <i class="bi bi-cloud-download me-1"></i> @(checkingUpdates ? "Checking..." : "Check hosts")
                     </button>
-                }
-            </div>
-            <div class="small text-muted mt-2">
-                GitHub refs resolve to a release tag first, then matching workflow artifacts for a branch or commit. SSH/local builds are read from
-                <code>@HostWorkerUpdateStore.LocalFolderRoot</code>.
+                </div>
             </div>
         </div>
     </div>
 }
 
-<div class="row g-2 mb-3 align-items-end">
-    <div class="col-auto flex-grow-1">
+<div class="rr-filter-panel mb-3" aria-label="Host filters">
+    <div class="rr-filter-header">
+        <div class="rr-filter-panel-title">
+            <i class="bi bi-funnel"></i>
+            <span>Filters</span>
+        </div>
+        <div class="rr-filter-buttons">
+            <button class="btn btn-sm rr-filter-btn rr-filter-btn-clear" @onclick="ClearFilters" disabled="@(!HasActiveFilters())">
+                <i class="bi bi-eraser"></i> Clear
+            </button>
+        </div>
+    </div>
+    <div class="rr-filter-grid">
+    <div class="rr-filter-field rr-filter-field-wide">
+        <label class="form-label">Search</label>
         <input type="text" class="form-control form-control-sm" placeholder="Search by name, platform, architecture, capabilities…"
                @bind="searchText" @bind:event="oninput" />
     </div>
-    <div class="col-auto">
+    <div class="rr-filter-field">
+        <label class="form-label">Platform</label>
         <select class="form-select form-select-sm" @bind="filterPlatform">
             <option value="">All Platforms</option>
             @foreach (var p in Enum.GetValues<HostPlatform>())
@@ -235,7 +226,8 @@
             }
         </select>
     </div>
-    <div class="col-auto">
+    <div class="rr-filter-field">
+        <label class="form-label">Status</label>
         <select class="form-select form-select-sm" @bind="filterStatus">
             <option value="">All Statuses</option>
             @foreach (var s in Enum.GetValues<AgentStatus>())
@@ -244,7 +236,8 @@
             }
         </select>
     </div>
-    <div class="col-auto">
+    <div class="rr-filter-field">
+        <label class="form-label">Architecture</label>
         <select class="form-select form-select-sm" @bind="filterArch">
             <option value="">All Architectures</option>
             @foreach (var a in hosts.Select(h => h.Architecture).Where(a => !string.IsNullOrEmpty(a)).Distinct().OrderBy(a => a))
@@ -252,6 +245,7 @@
                 <option value="@a">@a</option>
             }
         </select>
+    </div>
     </div>
 </div>
 
@@ -473,18 +467,14 @@
     private bool checkingUpdates;
     private string? updateError;
     private readonly HashSet<string> updatingHosts = [];
-    private HostWorkerUpdateSourceKind selectedUpdateSource = HostWorkerUpdateSourceKind.Release;
     private string? selectedUpdateVersion;
-    private IReadOnlyList<HostWorkerUpdateVersion> availableUpdateVersions = [];
     private bool showUpdateOptions;
     private string? openActionsMenuHostId;
     private static readonly ExecutionBackend[] BackendCapacityOrder =
         new[] { ExecutionBackend.Docker, ExecutionBackend.Tart, ExecutionBackend.Native };
 
     private string SelectedUpdateTargetLabel =>
-        selectedUpdateSource == HostWorkerUpdateSourceKind.Release
-            ? $"GitHub: {SelectedUpdateVersionLabel}"
-            : $"Local: {SelectedUpdateVersionLabel}";
+        $"GitHub: {SelectedUpdateVersionLabel}";
 
     private string SelectedUpdateTargetTitle =>
         string.IsNullOrWhiteSpace(selectedUpdateVersion)
@@ -493,7 +483,7 @@
 
     private string SelectedUpdateVersionLabel =>
         string.IsNullOrWhiteSpace(selectedUpdateVersion)
-            ? selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "latest" : "no build"
+            ? "latest"
             : FormatDisplayVersion(selectedUpdateVersion);
 
     // Filter & sort state
@@ -503,6 +493,20 @@
     private string filterArch = "";
     private string sortColumn = "Name";
     private bool sortAscending = true;
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(searchText) ||
+        !string.IsNullOrWhiteSpace(filterPlatform) ||
+        !string.IsNullOrWhiteSpace(filterStatus) ||
+        !string.IsNullOrWhiteSpace(filterArch);
+
+    private void ClearFilters()
+    {
+        searchText = "";
+        filterPlatform = "";
+        filterStatus = "";
+        filterArch = "";
+    }
 
     private IEnumerable<Host> FilteredHosts
     {
@@ -743,7 +747,6 @@
     protected override async Task OnInitializedAsync()
     {
         await ReloadData();
-        await LoadUpdateVersions();
     }
 
     private async Task ReloadData()
@@ -793,7 +796,7 @@
         {
             await HostWorkerUpdateService.QueueUpdateAsync(
                 host.Id,
-                CreateUpdateSelection(allowNonUpgrade: selectedUpdateSource != HostWorkerUpdateSourceKind.Release));
+                CreateUpdateSelection());
             await ReloadData();
         }
         catch (Exception ex)
@@ -808,64 +811,20 @@
 
     private bool CanUpdate(Host host)
         => host.AgentStatus == AgentStatus.Online
-           && (selectedUpdateSource == HostWorkerUpdateSourceKind.Release
-               ? string.Equals(host.UpdateStatus, "UpdateAvailable", StringComparison.OrdinalIgnoreCase)
-               : !string.IsNullOrWhiteSpace(selectedUpdateVersion));
+           && string.Equals(host.UpdateStatus, "UpdateAvailable", StringComparison.OrdinalIgnoreCase);
 
-    private async Task OnUpdateSourceChanged(ChangeEventArgs e)
-    {
-        if (!HostWorkerUpdateSourceKinds.TryParse(e.Value?.ToString(), out var source))
-        {
-            updateError = $"Unsupported HostWorker update source '{e.Value}'.";
-            return;
-        }
-
-        selectedUpdateSource = source;
-        updateError = null;
-        await LoadUpdateVersions();
-    }
-
-    private async Task LoadUpdateVersions()
-    {
-        if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release)
-        {
-            availableUpdateVersions = [];
-            return;
-        }
-
-        availableUpdateVersions = await HostWorkerUpdateService.GetAvailableVersionsAsync(selectedUpdateSource);
-        if (availableUpdateVersions.Count == 0)
-        {
-            selectedUpdateVersion = null;
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(selectedUpdateVersion) ||
-            !availableUpdateVersions.Any(x => string.Equals(x.Version, selectedUpdateVersion, StringComparison.OrdinalIgnoreCase)))
-        {
-            selectedUpdateVersion = availableUpdateVersions[0].Version;
-        }
-    }
-
-    private HostWorkerUpdateSelection CreateUpdateSelection(bool allowNonUpgrade = false)
+    private HostWorkerUpdateSelection CreateUpdateSelection()
         => new(
-            selectedUpdateSource,
+            HostWorkerUpdateSourceKind.Release,
             string.IsNullOrWhiteSpace(selectedUpdateVersion) ? null : selectedUpdateVersion.Trim(),
             Force: false,
-            AllowNonUpgrade: allowNonUpgrade,
+            AllowNonUpgrade: false,
             PublicBaseUrl: Navigation.BaseUri);
 
     private bool CanCheckSelectedUpdateSource()
     {
-        if (selectedUpdateSource == HostWorkerUpdateSourceKind.Release ||
-            !string.IsNullOrWhiteSpace(selectedUpdateVersion))
-        {
-            updateError = null;
-            return true;
-        }
-
-        updateError = $"No {selectedUpdateSource.ToDisplayName()} HostWorker build version is selected.";
-        return false;
+        updateError = null;
+        return true;
     }
 
     private static string FormatUpdateStatus(string status)
@@ -934,7 +893,7 @@
         if (updatingHosts.Contains(host.Id))
             return "Queuing...";
 
-        return selectedUpdateSource == HostWorkerUpdateSourceKind.Release ? "Update" : "Apply";
+        return "Update";
     }
 
     private void OpenEnrollmentWizard()

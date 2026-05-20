@@ -27,13 +27,10 @@
     </div>
 </SectionContent>
 
-<div class="logs-workspace @(sourcePanelCollapsed ? "sources-collapsed" : "sources-expanded")">
+<div class="logs-workspace">
     <aside id="logs-sidebar" class="logs-source-panel" aria-label="Log sources">
         <div class="logs-source-panel-header">
             <span><i class="bi bi-stack"></i> Sources</span>
-            <button type="button" class="icon-btn" @onclick="ToggleSourcePanel" aria-label="Collapse log sources" title="Collapse sources" aria-controls="logs-sidebar" aria-expanded="@(!sourcePanelCollapsed)">
-                <i class="bi bi-layout-sidebar-inset"></i>
-            </button>
         </div>
 
         <div class="logs-source-search">
@@ -44,12 +41,6 @@
                    aria-label="Filter log sources"
                    @bind="sourceFilter"
                    @bind:event="oninput" />
-        </div>
-
-        <div class="logs-source-actions">
-            <button type="button" @onclick='() => SelectSource("all")'>Select all</button>
-            <span aria-hidden="true"></span>
-            <button type="button" @onclick="ClearSourceFilter">Clear</button>
         </div>
 
         <div class="logs-source-list">
@@ -95,27 +86,7 @@
 
     <div id="logs-resize-handle" class="split-resize-handle" aria-hidden="true"></div>
 
-    @if (sourcePanelCollapsed)
-    {
-        <button type="button" class="source-panel-reveal" @onclick="ToggleSourcePanel" aria-label="Show log sources" title="Show sources" aria-controls="logs-sidebar" aria-expanded="false">
-            <span class="source-panel-reveal-icon"><i class="bi bi-layout-sidebar-inset"></i></span>
-            <span>Show sources</span>
-        </button>
-    }
-
     <section class="logs-console-panel" aria-label="Log console">
-        <div class="logs-mode-tabs" role="tablist" aria-label="Log view mode">
-            <button type="button" class="@(logViewMode == "single" ? "active" : "")" @onclick='() => SetLogViewMode("single")' aria-pressed="@(logViewMode == "single")">
-                <i class="bi bi-square"></i> Single
-            </button>
-            <button type="button" class="@(logViewMode == "multi" ? "active" : "")" @onclick='() => SetLogViewMode("multi")' aria-pressed="@(logViewMode == "multi")">
-                <i class="bi bi-list-ul"></i> Multi
-            </button>
-            <button type="button" class="@(logViewMode == "grouped" ? "active" : "")" @onclick='() => SetLogViewMode("grouped")' aria-pressed="@(logViewMode == "grouped")">
-                <i class="bi bi-stack"></i> Grouped
-            </button>
-        </div>
-
         <div class="logs-filter-rack">
             <div class="input-group input-group-sm logs-search">
                 <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -164,9 +135,6 @@
 
         <div class="logs-console-chrome">
             <div class="logs-console-title">
-                <button type="button" class="console-icon-btn" @onclick="ToggleSourcePanel" aria-label="Toggle log sources" title="Toggle sources" aria-controls="logs-sidebar" aria-expanded="@(!sourcePanelCollapsed)">
-                    <i class="bi bi-layout-sidebar"></i>
-                </button>
                 <span class="logs-live-pill"><span class="logs-live-dot"></span> Live</span>
                 <strong>@SelectedSourceName</strong>
                 <span class="logs-source-focus-dot" aria-hidden="true"></span>
@@ -233,11 +201,8 @@
     private bool followLogs;
     private bool autoScroll = true;
     private bool wrapLogs = true;
-    private const string SourcePanelPreferenceKey = "rr-logs-sources-collapsed-v2";
 
-    private bool sourcePanelCollapsed;
     private int terminalFontSize = 12;
-    private string logViewMode = "grouped";
     private string sourceFilter = "";
     private string searchQuery = "";
     private string terminalSearchQuery = "";
@@ -294,7 +259,6 @@
 
         termInitialized = await JS.InvokeAsync<bool>("rrTerminal.init", "rr-terminal", new { darkMode = true, fontSize = terminalFontSize });
         await JS.InvokeVoidAsync("rrSplitPane.init", "logs-resize-handle", "logs-sidebar", "rr-logs-sidebar-width-v2", 220, 480);
-        await InitializeResponsiveSourcePanel();
         await FetchLogs();
     }
 
@@ -314,43 +278,6 @@
     private async Task SelectSource(string sourceId)
     {
         selectedSourceId = sourceId;
-        if (sourceId != "all")
-            logViewMode = "single";
-        else if (logViewMode == "single")
-            logViewMode = "multi";
-        await FetchLogs();
-    }
-
-    private void ClearSourceFilter()
-    {
-        sourceFilter = "";
-    }
-
-    private async Task ToggleSourcePanel()
-    {
-        sourcePanelCollapsed = !sourcePanelCollapsed;
-        await JS.InvokeVoidAsync("rrViewport.setBooleanPreference", SourcePanelPreferenceKey, sourcePanelCollapsed);
-        StateHasChanged();
-        await Task.Delay(50);
-        await JS.InvokeVoidAsync("rrTerminal.fit", "rr-terminal");
-    }
-
-    private async Task InitializeResponsiveSourcePanel()
-    {
-        var savedCollapsed = await JS.InvokeAsync<string?>("rrViewport.getPreference", SourcePanelPreferenceKey);
-        sourcePanelCollapsed = bool.TryParse(savedCollapsed, out var collapsed)
-            ? collapsed
-            : await JS.InvokeAsync<bool>("rrViewport.isBelow", 720);
-        StateHasChanged();
-        await Task.Delay(50);
-        await JS.InvokeVoidAsync("rrTerminal.fit", "rr-terminal");
-    }
-
-    private async Task SetLogViewMode(string mode)
-    {
-        logViewMode = mode;
-        if (mode is "multi" or "grouped")
-            selectedSourceId = "all";
         await FetchLogs();
     }
 
@@ -468,7 +395,7 @@
         if (result.Entries.Count == 0)
             return string.IsNullOrWhiteSpace(directTail) ? BuildEmptyMessage() : directTail;
 
-        if (logViewMode != "grouped" || selectedSourceId != "all")
+        if (selectedSourceId != "all")
             return string.Join('\n', result.Entries.Select(FormatEntry));
 
         var groups = result.Entries

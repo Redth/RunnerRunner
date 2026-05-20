@@ -16,13 +16,29 @@
     </div>
 </SectionContent>
 
-<button class="btn btn-primary mb-3" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Profile</button>
+<div class="mb-3 d-flex flex-wrap gap-2">
+    <button class="btn btn-primary" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Profile</button>
+</div>
 
-<div class="row g-2 mb-3 align-items-end">
-    <div class="col-md-4">
+<div class="rr-filter-panel mb-3" aria-label="Profile filters">
+    <div class="rr-filter-header">
+        <div class="rr-filter-panel-title">
+            <i class="bi bi-funnel"></i>
+            <span>Filters</span>
+        </div>
+        <div class="rr-filter-buttons">
+            <button class="btn btn-sm rr-filter-btn rr-filter-btn-clear" @onclick="ClearFilters" disabled="@(!HasActiveFilters())">
+                <i class="bi bi-eraser"></i> Clear
+            </button>
+        </div>
+    </div>
+    <div class="rr-filter-grid">
+    <div class="rr-filter-field rr-filter-field-wide">
+        <label class="form-label">Search</label>
         <input class="form-control form-control-sm" placeholder="Search profiles..." @bind="searchText" @bind:event="oninput" />
     </div>
-    <div class="col-md-2">
+    <div class="rr-filter-field">
+        <label class="form-label">Provider</label>
         <select class="form-select form-select-sm" @bind="filterProvider">
             <option value="">All Providers</option>
             @foreach (var p in Enum.GetValues<RunnerProvider>())
@@ -31,7 +47,8 @@
             }
         </select>
     </div>
-    <div class="col-md-2">
+    <div class="rr-filter-field">
+        <label class="form-label">Platform</label>
         <select class="form-select form-select-sm" @bind="filterPlatform">
             <option value="">All Platforms</option>
             @foreach (var p in Enum.GetValues<HostPlatform>())
@@ -40,7 +57,8 @@
             }
         </select>
     </div>
-    <div class="col-md-2">
+    <div class="rr-filter-field">
+        <label class="form-label">Backend</label>
         <select class="form-select form-select-sm" @bind="filterBackend">
             <option value="">All Backends</option>
             @foreach (var b in Enum.GetValues<ExecutionBackend>())
@@ -48,6 +66,7 @@
                 <option value="@b">@b</option>
             }
         </select>
+    </div>
     </div>
 </div>
 
@@ -721,6 +740,20 @@
     private string filterBackend = "";
     private string sortColumn = "Name";
     private bool sortAscending = true;
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(searchText) ||
+        !string.IsNullOrWhiteSpace(filterProvider) ||
+        !string.IsNullOrWhiteSpace(filterPlatform) ||
+        !string.IsNullOrWhiteSpace(filterBackend);
+
+    private void ClearFilters()
+    {
+        searchText = "";
+        filterProvider = "";
+        filterPlatform = "";
+        filterBackend = "";
+    }
 
     private IEnumerable<RunnerProfile> FilteredProfiles
     {
