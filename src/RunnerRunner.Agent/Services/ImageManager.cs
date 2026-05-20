@@ -70,9 +70,7 @@ public partial class ImageManager
 
         var errorLines = new List<string>();
         using var progressLock = new SemaphoreSlim(1, 1);
-        var lastPercent = 0.0;
-        long lastDownloaded = 0;
-        long lastTotal = 0;
+        var progressTracker = new ImagePullProgressTracker(fullImage);
 
         var stdoutTask = ReadDockerPullOutputAsync(process.StandardOutput, isError: false);
         var stderrTask = ReadDockerPullOutputAsync(process.StandardError, isError: true);
@@ -100,26 +98,20 @@ public partial class ImageManager
                 if (isError)
                     errorLines.Add(status);
 
-                var progress = ParseDockerPullProgress(status);
                 await progressLock.WaitAsync(ct);
                 try
                 {
-                    if (progress.HasValue)
-                    {
-                        lastPercent = Math.Clamp(progress.Value.percent, 0, 100);
-                        lastDownloaded = progress.Value.downloaded;
-                        lastTotal = progress.Value.total;
-                    }
-
+                    var snapshot = progressTracker.Update(status);
                     await onProgress(new ImagePullProgressEvent
                     {
                         HostId = "",
                         ImageType = ImageType.Docker,
                         ImageName = fullImage,
-                        ProgressPercent = lastPercent,
-                        BytesDownloaded = lastDownloaded,
-                        BytesTotal = lastTotal,
-                        Status = status
+                        ProgressPercent = snapshot.ProgressPercent,
+                        BytesDownloaded = snapshot.BytesDownloaded,
+                        BytesTotal = snapshot.BytesTotal,
+                        Status = snapshot.Status,
+                        Layers = snapshot.Layers
                     });
                 }
                 finally
@@ -221,32 +213,57 @@ public partial class ImageManager
 
         process.Start();
 
-        // Tart outputs progress to stderr
-        var lastPercent = 0.0;
-        string? eline; while ((eline = await process.StandardError.ReadLineAsync(ct)) != null)
-        {
-            var line = eline;
-            
+        var errorLines = new List<string>();
+        using var progressLock = new SemaphoreSlim(1, 1);
+        var progressTracker = new ImagePullProgressTracker(fullImage);
 
-            var percent = ParseTartProgress(line);
-            if (percent.HasValue && percent.Value > lastPercent)
-            {
-                lastPercent = percent.Value;
-                await onProgress(new ImagePullProgressEvent
-                {
-                    HostId = "",
-                    ImageType = ImageType.Tart,
-                    ImageName = fullImage,
-                    ProgressPercent = percent.Value,
-                    Status = line.Trim()
-                });
-            }
-        }
-
+        var stdoutTask = ReadTartPullOutputAsync(process.StandardOutput, isError: false);
+        var stderrTask = ReadTartPullOutputAsync(process.StandardError, isError: true);
         await process.WaitForExitAsync(ct);
+        await Task.WhenAll(stdoutTask, stderrTask);
 
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"Tart pull failed for {fullImage}");
+        {
+            var error = string.Join(Environment.NewLine, errorLines).Trim();
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                ? $"Tart pull failed for {fullImage}"
+                : $"Tart pull failed for {fullImage}: {error}");
+        }
+
+        async Task ReadTartPullOutputAsync(TextReader reader, bool isError)
+        {
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) != null)
+            {
+                var status = line.Trim();
+                if (string.IsNullOrWhiteSpace(status))
+                    continue;
+
+                if (isError)
+                    errorLines.Add(status);
+
+                await progressLock.WaitAsync(ct);
+                try
+                {
+                    var snapshot = progressTracker.Update(status);
+                    await onProgress(new ImagePullProgressEvent
+                    {
+                        HostId = "",
+                        ImageType = ImageType.Tart,
+                        ImageName = fullImage,
+                        ProgressPercent = snapshot.ProgressPercent,
+                        BytesDownloaded = snapshot.BytesDownloaded,
+                        BytesTotal = snapshot.BytesTotal,
+                        Status = snapshot.Status,
+                        Layers = snapshot.Layers
+                    });
+                }
+                finally
+                {
+                    progressLock.Release();
+                }
+            }
+        }
     }
 
     public async Task DeleteTartImageAsync(string imageName, CancellationToken ct = default)
@@ -398,6 +415,185 @@ public partial class ImageManager
         return null;
     }
 
+    internal sealed class ImagePullProgressTracker
+    {
+        private readonly string _fallbackLayerId;
+        private readonly Dictionary<string, ImagePullLayerProgress> _layers = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> _layerOrder = [];
+        private string _lastStatus = "Pulling...";
+        private double _lastProgress;
+        private long _lastDownloaded;
+        private long _lastTotal;
+
+        public ImagePullProgressTracker(string fallbackLayerId)
+        {
+            _fallbackLayerId = fallbackLayerId;
+        }
+
+        public ImagePullProgressSnapshot Update(string line)
+        {
+            var status = line.Trim();
+            if (string.IsNullOrWhiteSpace(status))
+                return CreateSnapshot();
+
+            _lastStatus = status;
+            if (TryParseLayerStatus(status, out var layerId, out var layerStatus))
+            {
+                UpdateLayer(layerId, layerStatus);
+            }
+            else if (ParseDockerPullProgress(status) is { } byteProgress)
+            {
+                _lastDownloaded = byteProgress.downloaded;
+                _lastTotal = byteProgress.total;
+                _lastProgress = Math.Clamp(byteProgress.percent, 0, 100);
+            }
+            else if (ParseTartProgress(status).HasValue)
+            {
+                UpdateLayer(_fallbackLayerId, status);
+            }
+
+            return CreateSnapshot();
+        }
+
+        private void UpdateLayer(string layerId, string status)
+        {
+            var layer = GetOrAddLayer(layerId);
+            layer.Status = status;
+
+            if (ParseDockerPullProgress(status) is { } byteProgress)
+            {
+                layer.BytesDownloaded = byteProgress.downloaded;
+                layer.BytesTotal = byteProgress.total;
+                layer.ProgressPercent = NormalizeLayerPercent(status, byteProgress.percent);
+            }
+            else if (ParseTartProgress(status) is { } percent)
+            {
+                layer.ProgressPercent = Math.Clamp(percent, 0, 100);
+            }
+            else if (ContainsStatus(status, "Download complete"))
+            {
+                layer.ProgressPercent = Math.Max(layer.ProgressPercent, 80);
+                if (layer.BytesTotal > 0)
+                    layer.BytesDownloaded = layer.BytesTotal;
+            }
+            else if (ContainsStatus(status, "Verifying Checksum"))
+            {
+                layer.ProgressPercent = Math.Max(layer.ProgressPercent, 85);
+            }
+            else if (ContainsStatus(status, "Waiting") || ContainsStatus(status, "Pulling fs layer"))
+            {
+                layer.ProgressPercent = Math.Max(layer.ProgressPercent, 0);
+            }
+
+            if (IsCompleteLayerStatus(status) || layer.ProgressPercent >= 100)
+            {
+                layer.IsComplete = true;
+                layer.ProgressPercent = 100;
+                if (layer.BytesTotal > 0)
+                    layer.BytesDownloaded = layer.BytesTotal;
+            }
+        }
+
+        private ImagePullLayerProgress GetOrAddLayer(string layerId)
+        {
+            if (_layers.TryGetValue(layerId, out var layer))
+                return layer;
+
+            layer = new ImagePullLayerProgress { Id = layerId };
+            _layers[layerId] = layer;
+            _layerOrder.Add(layerId);
+            return layer;
+        }
+
+        private ImagePullProgressSnapshot CreateSnapshot()
+        {
+            var layers = _layerOrder
+                .Select(id => _layers[id])
+                .Select(CloneLayer)
+                .ToList();
+
+            if (layers.Count == 0)
+                return new ImagePullProgressSnapshot(_lastProgress, _lastDownloaded, _lastTotal, _lastStatus, layers);
+
+            var percent = layers.Average(l => l.IsComplete ? 100 : Math.Clamp(l.ProgressPercent, 0, 100));
+            var downloaded = layers.Sum(l => l.BytesDownloaded);
+            var total = layers.Sum(l => l.BytesTotal);
+            return new ImagePullProgressSnapshot(Math.Clamp(percent, 0, 100), downloaded, total, _lastStatus, layers);
+        }
+
+        private static ImagePullLayerProgress CloneLayer(ImagePullLayerProgress layer) => new()
+        {
+            Id = layer.Id,
+            Status = layer.Status,
+            ProgressPercent = layer.ProgressPercent,
+            BytesDownloaded = layer.BytesDownloaded,
+            BytesTotal = layer.BytesTotal,
+            IsComplete = layer.IsComplete
+        };
+
+        private static bool TryParseLayerStatus(string line, out string layerId, out string status)
+        {
+            layerId = "";
+            status = "";
+
+            var match = LayerStatusRegex().Match(line);
+            if (!match.Success)
+                return false;
+
+            var candidateId = match.Groups["id"].Value.Trim();
+            var candidateStatus = match.Groups["status"].Value.Trim();
+            if (IsReservedLayerPrefix(candidateId) || !LooksLikeLayerStatus(candidateStatus))
+                return false;
+
+            layerId = candidateId;
+            status = candidateStatus;
+            return true;
+        }
+
+        private static bool LooksLikeLayerStatus(string status) =>
+            ParseDockerPullProgress(status).HasValue
+            || ParseTartProgress(status).HasValue
+            || ContainsStatus(status, "Pulling fs layer")
+            || ContainsStatus(status, "Waiting")
+            || ContainsStatus(status, "Downloading")
+            || ContainsStatus(status, "Download complete")
+            || ContainsStatus(status, "Verifying Checksum")
+            || ContainsStatus(status, "Extracting")
+            || ContainsStatus(status, "Pull complete")
+            || ContainsStatus(status, "Already exists");
+
+        private static double NormalizeLayerPercent(string status, double rawPercent)
+        {
+            var clamped = Math.Clamp(rawPercent, 0, 100);
+            if (ContainsStatus(status, "Downloading"))
+                return clamped * 0.8;
+            if (ContainsStatus(status, "Extracting"))
+                return 80 + clamped * 0.2;
+            return clamped;
+        }
+
+        private static bool IsCompleteLayerStatus(string status) =>
+            ContainsStatus(status, "Pull complete")
+            || ContainsStatus(status, "Already exists");
+
+        private static bool ContainsStatus(string status, string value) =>
+            status.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsReservedLayerPrefix(string value) =>
+            string.Equals(value, "Digest", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "Status", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "Downloading", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "Extracting", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "Pulling", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal sealed record ImagePullProgressSnapshot(
+        double ProgressPercent,
+        long BytesDownloaded,
+        long BytesTotal,
+        string Status,
+        List<ImagePullLayerProgress> Layers);
+
     [GeneratedRegex(@"([\d.]+)\s*(KIB|MIB|GIB|TIB|KB|MB|GB|TB|B)", RegexOptions.IgnoreCase)]
     private static partial Regex SizeRegex();
 
@@ -406,4 +602,7 @@ public partial class ImageManager
 
     [GeneratedRegex(@"([\d.]+)\s*%")]
     private static partial Regex PercentRegex();
+
+    [GeneratedRegex(@"^(?<id>[^\s:]{3,}):\s+(?<status>.+)$")]
+    private static partial Regex LayerStatusRegex();
 }

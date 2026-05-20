@@ -1,6 +1,7 @@
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Server.Services
 @using Shiny.DocumentDb
+@rendermode InteractiveServer
 @inject LongRunningTaskService Tasks
 @inject IDocumentStore Store
 @implements IDisposable
@@ -10,6 +11,8 @@
             type="button"
             title="Long-running tasks"
             aria-label="Long-running tasks"
+            aria-haspopup="dialog"
+            aria-expanded="@isOpen"
             @onclick="ToggleOpen">
         <i class="bi @(runningCount > 0 ? "bi-activity" : "bi-list-task")"></i>
         @if (runningCount > 0)
@@ -20,7 +23,7 @@
 
     @if (isOpen)
     {
-        <div class="long-tasks-popover">
+        <div class="long-tasks-popover" role="dialog" aria-label="Long-running task details" aria-live="polite">
             <div class="long-tasks-header">
                 <div>
                     <h6>Long-running tasks</h6>
@@ -70,6 +73,29 @@
                             @if (!string.IsNullOrWhiteSpace(task.Error))
                             {
                                 <div class="long-task-error">@task.Error</div>
+                            }
+                            @if (task.Details.Count > 0)
+                            {
+                                <div class="long-task-details">
+                                    @foreach (var detail in task.Details)
+                                    {
+                                        <div class="long-task-detail">
+                                            <div class="long-task-detail-heading">
+                                                <span class="long-task-detail-label">@detail.Label</span>
+                                                <span class="long-task-detail-progress">@FormatDetailProgress(detail)</span>
+                                            </div>
+                                            <div class="progress long-task-layer-progress">
+                                                <div class="progress-bar @(detail.IsComplete ? "bg-success" : "")"
+                                                     role="progressbar"
+                                                     style="width: @detail.ProgressPercent.ToString("F0")%"
+                                                     aria-valuenow="@detail.ProgressPercent"
+                                                     aria-valuemin="0"
+                                                     aria-valuemax="100"></div>
+                                            </div>
+                                            <div class="long-task-detail-status">@detail.StatusText</div>
+                                        </div>
+                                    }
+                                </div>
                             }
                         </div>
                     }
@@ -151,6 +177,23 @@
         if (elapsed < TimeSpan.FromHours(1))
             return $"{(int)elapsed.TotalMinutes}m ago";
         return updatedAt.LocalDateTime.ToString("HH:mm");
+    }
+
+    private static string FormatDetailProgress(LongRunningTaskDetailInfo detail)
+    {
+        var percent = $"{detail.ProgressPercent:F0}%";
+        if (detail.BytesDownloaded <= 0 || detail.BytesTotal <= 0)
+            return percent;
+
+        return $"{percent} · {FormatSize(detail.BytesDownloaded)} / {FormatSize(detail.BytesTotal)}";
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
     }
 
     private static string StatusBadge(LongRunningTaskStatus status) => status switch

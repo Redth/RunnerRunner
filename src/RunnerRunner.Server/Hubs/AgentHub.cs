@@ -379,7 +379,8 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             BytesDownloaded = evt.BytesDownloaded,
             BytesTotal = evt.BytesTotal,
             Status = evt.Status,
-            TaskId = evt.TaskId
+            TaskId = evt.TaskId,
+            Layers = evt.Layers
         });
     }
 

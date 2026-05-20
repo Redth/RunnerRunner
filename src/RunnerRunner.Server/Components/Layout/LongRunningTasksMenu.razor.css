@@ -160,3 +160,60 @@
     font-size: 0.75rem;
     overflow-wrap: anywhere;
 }
+
+.long-task-details {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding: 0.65rem;
+    background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+}
+
+.long-task-detail {
+    display: grid;
+    gap: 0.25rem;
+}
+
+.long-task-detail-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.long-task-detail-label {
+    min-width: 0;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.long-task-detail-progress,
+.long-task-detail-status {
+    color: var(--text-tertiary);
+    font-size: 0.7rem;
+}
+
+.long-task-detail-progress {
+    flex-shrink: 0;
+}
+
+.long-task-detail-status {
+    overflow-wrap: anywhere;
+}
+
+.long-task-layer-progress {
+    height: 0.35rem;
+    background: var(--bg-primary);
+}
+
+.long-task-layer-progress .progress-bar {
+    background-color: var(--accent);
+}

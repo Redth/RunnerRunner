@@ -136,9 +136,18 @@ public sealed class LongRunningTaskService : IDisposable
                 return;
 
             task.ProgressPercent = Math.Clamp(evt.ProgressPercent, 0, 100);
-            task.StatusText = string.IsNullOrWhiteSpace(evt.Status)
-                ? FormatBytes(evt.BytesDownloaded, evt.BytesTotal)
-                : evt.Status;
+            task.StatusText = FormatImagePullStatus(evt);
+            task.Details = evt.Layers
+                .Select((layer, index) => new LongRunningTaskDetailInfo
+                {
+                    Label = FormatLayerLabel(layer, index),
+                    StatusText = string.IsNullOrWhiteSpace(layer.Status) ? "Pulling..." : layer.Status,
+                    ProgressPercent = Math.Clamp(layer.ProgressPercent, 0, 100),
+                    BytesDownloaded = layer.BytesDownloaded,
+                    BytesTotal = layer.BytesTotal,
+                    IsComplete = layer.IsComplete
+                })
+                .ToList();
             task.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
@@ -161,8 +170,16 @@ public sealed class LongRunningTaskService : IDisposable
 
             task.Status = evt.Success ? LongRunningTaskStatus.Succeeded : LongRunningTaskStatus.Failed;
             task.ProgressPercent = evt.Success ? 100 : task.ProgressPercent;
-            task.StatusText = evt.Success ? "Complete" : "Failed";
+            task.StatusText = evt.Success ? FormatCompleteStatus(task) : "Failed";
             task.Error = evt.Success ? null : evt.Error;
+            if (evt.Success && task.Details.Count > 0)
+            {
+                foreach (var detail in task.Details)
+                {
+                    detail.ProgressPercent = 100;
+                    detail.IsComplete = true;
+                }
+            }
             task.CompletedAt = DateTimeOffset.UtcNow;
             task.UpdatedAt = task.CompletedAt.Value;
             PruneCompletedTasks();
@@ -216,6 +233,39 @@ public sealed class LongRunningTaskService : IDisposable
         return $"{FormatSize(downloaded)} / {FormatSize(total)}";
     }
 
+    private static string FormatImagePullStatus(ImagePullProgressEvent evt)
+    {
+        var status = string.IsNullOrWhiteSpace(evt.Status)
+            ? FormatBytes(evt.BytesDownloaded, evt.BytesTotal)
+            : evt.Status;
+
+        if (evt.Layers.Count == 0)
+            return status;
+
+        var completed = evt.Layers.Count(l => l.IsComplete || l.ProgressPercent >= 100);
+        var layerText = $"{completed}/{evt.Layers.Count} layers complete";
+        var byteText = evt.BytesDownloaded > 0 && evt.BytesTotal > 0
+            ? FormatBytes(evt.BytesDownloaded, evt.BytesTotal)
+            : null;
+
+        return string.IsNullOrWhiteSpace(byteText)
+            ? $"{layerText} · {status}"
+            : $"{layerText} · {byteText} · {status}";
+    }
+
+    private static string FormatCompleteStatus(LongRunningTaskInfo task) =>
+        task.Details.Count == 0
+            ? "Complete"
+            : $"{task.Details.Count}/{task.Details.Count} layers complete";
+
+    private static string FormatLayerLabel(ImagePullLayerProgress layer, int index)
+    {
+        if (string.IsNullOrWhiteSpace(layer.Id))
+            return $"Layer {index + 1}";
+
+        return layer.Id.Length > 12 ? layer.Id[..12] : layer.Id;
+    }
+
     private static string FormatSize(long bytes)
     {
         if (bytes < 1024) return $"{bytes} B";
@@ -237,6 +287,7 @@ public sealed class LongRunningTaskInfo
     public string StatusText { get; set; } = "";
     public double ProgressPercent { get; set; }
     public string? Error { get; set; }
+    public List<LongRunningTaskDetailInfo> Details { get; set; } = [];
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
@@ -253,9 +304,30 @@ public sealed class LongRunningTaskInfo
         StatusText = StatusText,
         ProgressPercent = ProgressPercent,
         Error = Error,
+        Details = Details.Select(d => d.Clone()).ToList(),
         StartedAt = StartedAt,
         UpdatedAt = UpdatedAt,
         CompletedAt = CompletedAt
+    };
+}
+
+public sealed class LongRunningTaskDetailInfo
+{
+    public required string Label { get; init; }
+    public string StatusText { get; set; } = "";
+    public double ProgressPercent { get; set; }
+    public long BytesDownloaded { get; set; }
+    public long BytesTotal { get; set; }
+    public bool IsComplete { get; set; }
+
+    public LongRunningTaskDetailInfo Clone() => new()
+    {
+        Label = Label,
+        StatusText = StatusText,
+        ProgressPercent = ProgressPercent,
+        BytesDownloaded = BytesDownloaded,
+        BytesTotal = BytesTotal,
+        IsComplete = IsComplete
     };
 }
 
