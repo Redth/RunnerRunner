@@ -1,14 +1,28 @@
 @page "/settings"
+@attribute [Authorize(Policy = RunnerRunnerPolicies.ManageSettings)]
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
 @using RunnerRunner.ServiceDefaults
+@using RunnerRunner.Server.Data.Auth
+@using RunnerRunner.Server.Models
+@using RunnerRunner.Server.Services
+@using RunnerRunner.Server.Services.Auth
 @using RunnerRunner.Server.Services.HostWorkers
 @inject HostWorkerUpdateService HostWorkerUpdateService
+@inject UserManager<RunnerRunnerUser> UserManager
+@inject RunnerRunnerAuthSettingsService AuthSettingsService
+@inject AuditService AuditService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IAuthorizationService AuthorizationService
+@inject IHttpClientFactory HttpClientFactory
+@inject NavigationManager Navigation
 
 <PageTitle>Settings - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-gear-fill"></i> Settings</h1>
-        <span class="page-desc">Global application settings and links to configuration areas.</span>
+        <span class="page-desc">Global application settings, authentication, users, and integrations.</span>
     </div>
 </SectionContent>
 
@@ -18,9 +32,16 @@
             <div class="card-body">
                 <h5 class="card-title"><i class="bi bi-key-fill me-2"></i>Provider Credentials</h5>
                 <p class="card-text">Add GitHub App, GitHub PAT, Gitea, and Azure DevOps credentials with guided setup flows.</p>
-                <a class="btn btn-outline-primary" href="credentials">
-                    <i class="bi bi-key me-1"></i> Open Credentials
-                </a>
+                <AuthorizeView Policy="@RunnerRunnerPolicies.ManageCredentials">
+                    <Authorized>
+                        <a class="btn btn-outline-primary" href="credentials">
+                            <i class="bi bi-key me-1"></i> Open Credentials
+                        </a>
+                    </Authorized>
+                    <NotAuthorized>
+                        <span class="badge bg-secondary">Requires CredentialsManager</span>
+                    </NotAuthorized>
+                </AuthorizeView>
             </div>
         </div>
     </div>
@@ -29,9 +50,16 @@
             <div class="card-body">
                 <h5 class="card-title"><i class="bi bi-box-seam me-2"></i>Container / OCI Registries</h5>
                 <p class="card-text">Browse images, inspect tags, and target pulls to hosts from the dedicated registries page.</p>
-                <a class="btn btn-outline-primary" href="registries">
-                    <i class="bi bi-boxes me-1"></i> Open Registries
-                </a>
+                <AuthorizeView Policy="@RunnerRunnerPolicies.ManageRegistries">
+                    <Authorized>
+                        <a class="btn btn-outline-primary" href="registries">
+                            <i class="bi bi-boxes me-1"></i> Open Registries
+                        </a>
+                    </Authorized>
+                    <NotAuthorized>
+                        <span class="badge bg-secondary">Requires RegistriesManager</span>
+                    </NotAuthorized>
+                </AuthorizeView>
             </div>
         </div>
     </div>
@@ -84,6 +112,215 @@
     </div>
 </div>
 
+<AuthorizeView Roles="@RunnerRunnerRoles.Administrator">
+    <Authorized>
+        <div class="row g-3 mt-1">
+            <div class="col-xl-7">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div class="d-flex flex-wrap justify-content-between gap-2 align-items-start mb-3">
+                            <div>
+                                <h5 class="card-title"><i class="bi bi-people-fill me-2"></i>User Management</h5>
+                                <p class="card-text mb-0">Create direct users, review OIDC-linked users, enable or disable access, and assign built-in roles.</p>
+                            </div>
+                            <button class="btn btn-outline-secondary btn-sm" @onclick="LoadUsersAsync" disabled="@usersLoading">
+                                <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                            </button>
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(userMessage))
+                        {
+                            <div class="alert @(userMessageIsError ? "alert-danger" : "alert-success") py-2">@userMessage</div>
+                        }
+
+                        <div class="table-responsive mb-4">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>User</th>
+                                        <th>Source</th>
+                                        <th>Roles</th>
+                                        <th>Status</th>
+                                        <th>Last login</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var row in userRows)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <strong>@row.User.DisplayLabel</strong>
+                                                <div class="small text-muted">@row.User.Email</div>
+                                            </td>
+                                            <td><span class="badge @GetUserSourceBadge(row.User.Source)">@row.User.Source</span></td>
+                                            <td>
+                                                <div class="role-grid">
+                                                    @foreach (var role in RunnerRunnerRoles.All)
+                                                    {
+                                                        var checkedId = $"role-{row.User.Id}-{role}";
+                                                        <label class="form-check form-check-inline small" for="@checkedId">
+                                                            <input id="@checkedId"
+                                                                   class="form-check-input"
+                                                                   type="checkbox"
+                                                                   checked="@row.Roles.Contains(role)"
+                                                                   disabled="@IsRoleCheckboxDisabled(row, role)"
+                                                                   @onchange="args => SetUserRoleAsync(row, role, args.Value is bool value && value)" />
+                                                            <span class="form-check-label">@role</span>
+                                                        </label>
+                                                    }
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="badge @(row.User.Enabled ? "bg-success" : "bg-secondary")">@(row.User.Enabled ? "Enabled" : "Disabled")</span>
+                                            </td>
+                                            <td class="small">@FormatDate(row.User.LastLoginAt)</td>
+                                            <td class="text-end">
+                                                <button class="btn btn-sm @(row.User.Enabled ? "btn-outline-warning" : "btn-outline-success")"
+                                                        @onclick="() => SetUserEnabledAsync(row, !row.User.Enabled)"
+                                                        disabled="@IsDisableButtonDisabled(row)">
+                                                    @(row.User.Enabled ? "Disable" : "Enable")
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <section class="rr-form-section">
+                            <div class="rr-form-section-title"><i class="bi bi-person-plus-fill"></i>Create direct user</div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Display name</label>
+                                    <input class="form-control" @bind="newUserDisplayName" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Username</label>
+                                    <input class="form-control" @bind="newUserName" autocomplete="off" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Email</label>
+                                    <input class="form-control" type="email" @bind="newUserEmail" autocomplete="off" />
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Initial password</label>
+                                    <input class="form-control" type="password" @bind="newUserPassword" autocomplete="new-password" />
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label">Roles</label>
+                                    <div class="role-grid">
+                                        @foreach (var role in RunnerRunnerRoles.All)
+                                        {
+                                            var checkedId = $"new-role-{role}";
+                                            <label class="form-check form-check-inline" for="@checkedId">
+                                                <input id="@checkedId"
+                                                       class="form-check-input"
+                                                       type="checkbox"
+                                                       checked="@newUserRoles.Contains(role)"
+                                                       @onchange="args => ToggleNewUserRole(role, args.Value is bool value && value)" />
+                                                <span class="form-check-label">@role</span>
+                                            </label>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary mt-3" @onclick="CreateLocalUserAsync" disabled="@creatingUser">
+                                <i class="bi bi-person-plus me-1"></i>@(creatingUser ? "Creating..." : "Create user")
+                            </button>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-5">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h5 class="card-title"><i class="bi bi-shield-lock-fill me-2"></i>OpenID Connect</h5>
+                        <p class="card-text">Enable a generic OIDC provider such as Pocket ID. Users are linked locally after first sign-in so RunnerRunner can assign roles.</p>
+
+                        @if (!string.IsNullOrWhiteSpace(oidcMessage))
+                        {
+                            <div class="alert @(oidcMessageIsError ? "alert-danger" : "alert-success") py-2">@oidcMessage</div>
+                        }
+
+                        <div class="form-check form-switch mb-3">
+                            <input id="oidc-enabled" class="form-check-input" type="checkbox" @bind="authSettings.Oidc.Enabled" />
+                            <label class="form-check-label" for="oidc-enabled">Enable OIDC login</label>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label">Button label</label>
+                            <input class="form-control" @bind="authSettings.Oidc.DisplayName" placeholder="Pocket ID" />
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Authority</label>
+                            <input class="form-control" @bind="authSettings.Oidc.Authority" placeholder="https://id.example.com" />
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Client ID</label>
+                            <input class="form-control" @bind="authSettings.Oidc.ClientId" autocomplete="off" />
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Client secret</label>
+                            <input class="form-control" type="password" @bind="oidcClientSecret" placeholder="@OidcSecretPlaceholder" autocomplete="new-password" />
+                            <div class="form-text">Secrets are protected with persisted ASP.NET Core data-protection keys.</div>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Scopes</label>
+                            <input class="form-control" @bind="oidcScopes" placeholder="openid profile email" />
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label">Name claim</label>
+                                <input class="form-control" @bind="authSettings.Oidc.NameClaimType" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Email claim</label>
+                                <input class="form-control" @bind="authSettings.Oidc.EmailClaimType" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Role claim</label>
+                                <input class="form-control" @bind="authSettings.Oidc.RoleClaimType" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Default role</label>
+                                <select class="form-select" @bind="authSettings.Oidc.DefaultRole">
+                                    <option value="">No automatic access</option>
+                                    @foreach (var role in RunnerRunnerRoles.All)
+                                    {
+                                        <option value="@role">@role</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-check mt-3">
+                            <input id="oidc-https" class="form-check-input" type="checkbox" @bind="authSettings.Oidc.RequireHttpsMetadata" />
+                            <label class="form-check-label" for="oidc-https">Require HTTPS metadata</label>
+                        </div>
+                        <div class="small text-muted mt-3">
+                            Redirect URI: <code>@OidcRedirectUri</code>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2 mt-3">
+                            <button class="btn btn-primary" @onclick="SaveOidcSettingsAsync" disabled="@savingOidc">
+                                <i class="bi bi-check2 me-1"></i>@(savingOidc ? "Saving..." : "Save OIDC")
+                            </button>
+                            <button class="btn btn-outline-secondary" @onclick="TestOidcDiscoveryAsync" disabled="@testingOidc">
+                                <i class="bi bi-broadcast-pin me-1"></i>@(testingOidc ? "Testing..." : "Test discovery")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="alert alert-secondary mt-3">
+            User and authentication management is restricted to administrators.
+        </div>
+    </NotAuthorized>
+</AuthorizeView>
+
 @code {
     private readonly RunnerRunnerBuildInfo serverBuildInfo = RunnerRunnerBuildInfo.FromEntryAssembly();
     private string serverUpdateRef = "latest";
@@ -91,8 +328,39 @@
     private string? serverUpdateError;
     private ServerUpdateTarget? serverUpdateTarget;
 
+    private List<UserRoleRow> userRows = [];
+    private bool usersLoading;
+    private bool creatingUser;
+    private string? userMessage;
+    private bool userMessageIsError;
+    private string newUserDisplayName = "";
+    private string newUserName = "";
+    private string newUserEmail = "";
+    private string newUserPassword = "";
+    private HashSet<string> newUserRoles = new(StringComparer.Ordinal) { RunnerRunnerRoles.Viewer };
+
+    private RunnerRunnerAuthSettings authSettings = new();
+    private string oidcScopes = "openid profile email";
+    private string oidcClientSecret = "";
+    private bool savingOidc;
+    private bool testingOidc;
+    private string? oidcMessage;
+    private bool oidcMessageIsError;
+
     private string ServerUpdateCommand
         => $"sudo runnerrunner-server update {QuoteShellArgument(string.IsNullOrWhiteSpace(serverUpdateRef) ? "latest" : serverUpdateRef.Trim())}";
+
+    private string OidcRedirectUri
+        => Navigation.BaseUri.TrimEnd('/') + authSettings.Oidc.CallbackPath;
+
+    private string OidcSecretPlaceholder
+        => string.IsNullOrWhiteSpace(authSettings.Oidc.ProtectedClientSecret) ? "Client secret" : "Leave blank to keep current secret";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUsersAsync();
+        await LoadAuthSettingsAsync();
+    }
 
     private async Task CheckServerUpdate()
     {
@@ -135,11 +403,267 @@
         }
     }
 
+    private async Task LoadUsersAsync()
+    {
+        usersLoading = true;
+        try
+        {
+            var users = await UserManager.Users
+                .OrderBy(x => x.UserName)
+                .ToListAsync();
+
+            userRows = [];
+            foreach (var user in users)
+            {
+                var roles = await UserManager.GetRolesAsync(user);
+                userRows.Add(new UserRoleRow(user, roles.ToHashSet(StringComparer.Ordinal)));
+            }
+        }
+        finally
+        {
+            usersLoading = false;
+        }
+    }
+
+    private async Task LoadAuthSettingsAsync()
+    {
+        authSettings = await AuthSettingsService.GetAsync();
+        oidcScopes = string.Join(" ", authSettings.Oidc.Scopes);
+        oidcClientSecret = "";
+    }
+
+    private async Task CreateLocalUserAsync()
+    {
+        if (!await EnsureAdministratorAsync())
+            return;
+
+        creatingUser = true;
+        userMessage = null;
+        try
+        {
+            var roles = newUserRoles.Count == 0 ? [RunnerRunnerRoles.Viewer] : newUserRoles.ToArray();
+            var user = new RunnerRunnerUser
+            {
+                UserName = newUserName.Trim(),
+                Email = newUserEmail.Trim(),
+                EmailConfirmed = true,
+                DisplayName = newUserDisplayName.Trim(),
+                Source = RunnerRunnerUserSources.Local,
+                Enabled = true
+            };
+
+            var createResult = await UserManager.CreateAsync(user, newUserPassword);
+            if (!createResult.Succeeded)
+            {
+                SetUserMessage(createResult.Errors.First().Description, isError: true);
+                return;
+            }
+
+            var roleResult = await UserManager.AddToRolesAsync(user, roles);
+            if (!roleResult.Succeeded)
+            {
+                SetUserMessage(roleResult.Errors.First().Description, isError: true);
+                return;
+            }
+
+            await AuditService.LogAsync("CreateUser", "User", user.Id, $"source={user.Source}; roles={string.Join(",", roles)}");
+            newUserDisplayName = "";
+            newUserName = "";
+            newUserEmail = "";
+            newUserPassword = "";
+            newUserRoles = new HashSet<string>(StringComparer.Ordinal) { RunnerRunnerRoles.Viewer };
+            SetUserMessage($"Created user {user.UserName}.", isError: false);
+            await LoadUsersAsync();
+        }
+        finally
+        {
+            creatingUser = false;
+        }
+    }
+
+    private async Task SetUserRoleAsync(UserRoleRow row, string role, bool assign)
+    {
+        if (!await EnsureAdministratorAsync())
+            return;
+
+        if (!RunnerRunnerRoles.All.Contains(role, StringComparer.Ordinal))
+            return;
+
+        if (!assign && role == RunnerRunnerRoles.Administrator && await IsLastEnabledAdministratorAsync(row.User))
+        {
+            SetUserMessage("The last enabled administrator cannot be demoted.", isError: true);
+            return;
+        }
+
+        var result = assign
+            ? await UserManager.AddToRoleAsync(row.User, role)
+            : await UserManager.RemoveFromRoleAsync(row.User, role);
+
+        if (!result.Succeeded)
+        {
+            SetUserMessage(result.Errors.First().Description, isError: true);
+            return;
+        }
+
+        if (assign)
+            row.Roles.Add(role);
+        else
+            row.Roles.Remove(role);
+
+        await AuditService.LogAsync(assign ? "AddUserRole" : "RemoveUserRole", "User", row.User.Id, $"user={row.User.UserName}; role={role}");
+        SetUserMessage($"Updated roles for {row.User.DisplayLabel}.", isError: false);
+    }
+
+    private async Task SetUserEnabledAsync(UserRoleRow row, bool enabled)
+    {
+        if (!await EnsureAdministratorAsync())
+            return;
+
+        if (!enabled && await IsLastEnabledAdministratorAsync(row.User))
+        {
+            SetUserMessage("The last enabled administrator cannot be disabled.", isError: true);
+            return;
+        }
+
+        row.User.Enabled = enabled;
+        row.User.UpdatedAt = DateTime.UtcNow;
+        var result = await UserManager.UpdateAsync(row.User);
+        if (!result.Succeeded)
+        {
+            SetUserMessage(result.Errors.First().Description, isError: true);
+            return;
+        }
+
+        await AuditService.LogAsync(enabled ? "EnableUser" : "DisableUser", "User", row.User.Id, $"user={row.User.UserName}");
+        SetUserMessage($"{row.User.DisplayLabel} is now {(enabled ? "enabled" : "disabled")}.", isError: false);
+    }
+
+    private void ToggleNewUserRole(string role, bool enabled)
+    {
+        if (enabled)
+            newUserRoles.Add(role);
+        else
+            newUserRoles.Remove(role);
+    }
+
+    private async Task SaveOidcSettingsAsync()
+    {
+        if (!await EnsureAdministratorAsync())
+            return;
+
+        savingOidc = true;
+        oidcMessage = null;
+        try
+        {
+            authSettings.Oidc.Scopes = SplitScopes(oidcScopes);
+            await AuthSettingsService.SaveAsync(authSettings, oidcClientSecret);
+            await AuditService.LogAsync("UpdateOidcSettings", "AuthSettings", details: $"enabled={authSettings.Oidc.Enabled}; authority={authSettings.Oidc.Authority}");
+            await LoadAuthSettingsAsync();
+            SetOidcMessage("OIDC settings saved.", isError: false);
+        }
+        catch (Exception ex)
+        {
+            SetOidcMessage($"Unable to save OIDC settings: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            savingOidc = false;
+        }
+    }
+
+    private async Task TestOidcDiscoveryAsync()
+    {
+        if (!await EnsureAdministratorAsync())
+            return;
+
+        testingOidc = true;
+        oidcMessage = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(authSettings.Oidc.Authority))
+            {
+                SetOidcMessage("Enter an authority URL before testing discovery.", isError: true);
+                return;
+            }
+
+            var client = HttpClientFactory.CreateClient();
+            var metadataUrl = authSettings.Oidc.Authority.Trim().TrimEnd('/') + "/.well-known/openid-configuration";
+            using var response = await client.GetAsync(metadataUrl);
+            if (!response.IsSuccessStatusCode)
+            {
+                SetOidcMessage($"Discovery failed with HTTP {(int)response.StatusCode}.", isError: true);
+                return;
+            }
+
+            SetOidcMessage("OIDC discovery document is reachable.", isError: false);
+        }
+        catch (Exception ex)
+        {
+            SetOidcMessage($"OIDC discovery failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            testingOidc = false;
+        }
+    }
+
+    private async Task<bool> EnsureAdministratorAsync()
+    {
+        var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var result = await AuthorizationService.AuthorizeAsync(state.User, RunnerRunnerPolicies.ManageUsers);
+        if (result.Succeeded)
+            return true;
+
+        SetUserMessage("Only administrators can change users or authentication settings.", isError: true);
+        SetOidcMessage("Only administrators can change users or authentication settings.", isError: true);
+        return false;
+    }
+
+    private async Task<bool> IsLastEnabledAdministratorAsync(RunnerRunnerUser user)
+    {
+        if (!user.Enabled || !await UserManager.IsInRoleAsync(user, RunnerRunnerRoles.Administrator))
+            return false;
+
+        var admins = await UserManager.GetUsersInRoleAsync(RunnerRunnerRoles.Administrator);
+        return admins.Count(x => x.Enabled && x.Id != user.Id) == 0;
+    }
+
+    private bool IsRoleCheckboxDisabled(UserRoleRow row, string role)
+        => role == RunnerRunnerRoles.Administrator && row.User.Enabled && row.Roles.Contains(role) && userRows.Count(x => x.User.Enabled && x.Roles.Contains(RunnerRunnerRoles.Administrator)) <= 1;
+
+    private bool IsDisableButtonDisabled(UserRoleRow row)
+        => row.User.Enabled && row.Roles.Contains(RunnerRunnerRoles.Administrator) && userRows.Count(x => x.User.Enabled && x.Roles.Contains(RunnerRunnerRoles.Administrator)) <= 1;
+
+    private void SetUserMessage(string message, bool isError)
+    {
+        userMessage = message;
+        userMessageIsError = isError;
+    }
+
+    private void SetOidcMessage(string message, bool isError)
+    {
+        oidcMessage = message;
+        oidcMessageIsError = isError;
+    }
+
+    private static List<string> SplitScopes(string value)
+        => value.Split([' ', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
     private static string QuoteShellArgument(string value)
         => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
 
     private static string GetServerUpdateBadge(bool updateAvailable)
         => updateAvailable ? "bg-warning text-dark" : "bg-success";
 
+    private static string GetUserSourceBadge(string source)
+        => source == RunnerRunnerUserSources.Oidc ? "bg-info text-dark" : "bg-primary";
+
+    private static string FormatDate(DateTime? value)
+        => value?.ToLocalTime().ToString("g") ?? "Never";
+
     private sealed record ServerUpdateTarget(string Version, string? CommitSha, string Image, bool UpdateAvailable);
+
+    private sealed record UserRoleRow(RunnerRunnerUser User, HashSet<string> Roles);
 }

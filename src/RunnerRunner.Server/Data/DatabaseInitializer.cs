@@ -1,5 +1,6 @@
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Models;
 using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Data;
@@ -31,6 +32,7 @@ public static class DatabaseInitializer
         await EnsureTable<WebhookEvent>(store, () => new WebhookEvent { Id = "__init__" });
         await EnsureTable<WebhookBinding>(store, () => new WebhookBinding { Id = "__init__", Name = "__init__" });
         await EnsureTable<ProvisioningRule>(store, () => new ProvisioningRule { Id = "__init__", Name = "__init__" });
+        await EnsureTable<RunnerRunnerAuthSettings>(store, () => new RunnerRunnerAuthSettings { Id = "__init__" });
 
         await MigrateLegacyWebhookBindings(store);
         await CleanupLegacyRunnerInstances(store);

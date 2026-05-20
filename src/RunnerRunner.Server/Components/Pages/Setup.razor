@@ -1,0 +1,63 @@
+@page "/setup"
+@layout AuthLayout
+@inject RunnerRunner.Server.Services.Auth.FirstRunSetupService SetupService
+@inject NavigationManager Navigation
+
+<PageTitle>First-run setup - RunnerRunner</PageTitle>
+
+<div class="auth-card auth-card-wide">
+    <div class="auth-brand">
+        <span class="auth-brand-icon"><i class="bi bi-shield-lock-fill"></i></span>
+        <div>
+            <h1>Secure RunnerRunner</h1>
+            <p>Create the first administrator account before opening the control plane.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Error))
+    {
+        <div class="alert alert-danger py-2">@Error</div>
+    }
+
+    <form method="post" action="/auth/setup" class="auth-form">
+        <AntiforgeryToken />
+
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label" for="displayName">Display name</label>
+                <input id="displayName" name="displayName" class="form-control" autocomplete="name" required />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="userName">Username</label>
+                <input id="userName" name="userName" class="form-control" autocomplete="username" required />
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="email">Email</label>
+                <input id="email" name="email" type="email" class="form-control" autocomplete="email" required />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="password">Password</label>
+                <input id="password" name="password" type="password" class="form-control" autocomplete="new-password" required />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label" for="confirmPassword">Confirm password</label>
+                <input id="confirmPassword" name="confirmPassword" type="password" class="form-control" autocomplete="new-password" required />
+            </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg w-100 mt-4" type="submit">
+            <i class="bi bi-person-check me-1"></i> Create administrator
+        </button>
+    </form>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (await SetupService.HasEnabledUsersAsync())
+            Navigation.NavigateTo("/auth/login", forceLoad: true);
+    }
+}

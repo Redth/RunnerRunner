@@ -2,6 +2,7 @@ using Shiny.DocumentDb;
 using Shiny.DocumentDb.PostgreSql;
 using HostModel = RunnerRunner.Core.Models.Host;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Models;
 
 namespace RunnerRunner.Server.Data;
 
@@ -29,6 +30,7 @@ public static class DocumentStoreSetup
             opts.MapTypeToTable<WebhookEvent>("webhook_events");
             opts.MapTypeToTable<WebhookBinding>("webhook_bindings");
             opts.MapTypeToTable<ProvisioningRule>("provisioning_rules");
+            opts.MapTypeToTable<RunnerRunnerAuthSettings>("auth_settings");
         });
 
         return services;

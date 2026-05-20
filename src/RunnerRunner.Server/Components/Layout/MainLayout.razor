@@ -22,6 +22,20 @@
             </div>
             <div class="top-bar-right">
                 <LongRunningTasksMenu />
+                <AuthorizeView>
+                    <Authorized>
+                        <div class="user-chip">
+                            <i class="bi bi-person-circle"></i>
+                            <span>@context.User.Identity?.Name</span>
+                        </div>
+                        <form method="post" action="/auth/logout" class="m-0">
+                            <AntiforgeryToken />
+                            <button type="submit" class="theme-toggle" title="Sign out">
+                                <i class="bi bi-box-arrow-right"></i>
+                            </button>
+                        </form>
+                    </Authorized>
+                </AuthorizeView>
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
                     <span class="theme-icon-light"><i class="bi bi-sun-fill"></i></span>
                     <span class="theme-icon-dark"><i class="bi bi-moon-stars-fill"></i></span>
