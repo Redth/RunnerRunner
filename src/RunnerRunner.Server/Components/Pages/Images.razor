@@ -722,12 +722,22 @@
 
     private static string FormatPullProgressStatus(ImagePullProgressEvent evt)
     {
-        if (!string.IsNullOrWhiteSpace(evt.Status))
-            return evt.Status;
+        var status = !string.IsNullOrWhiteSpace(evt.Status)
+            ? evt.Status
+            : evt.BytesDownloaded > 0 && evt.BytesTotal > 0
+                ? $"{FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}"
+                : "Pulling...";
 
-        return evt.BytesDownloaded > 0 && evt.BytesTotal > 0
-            ? $"{FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}"
-            : "Pulling...";
+        if (evt.Layers.Count > 0)
+        {
+            var completed = evt.Layers.Count(l => l.IsComplete || l.ProgressPercent >= 100);
+            var bytes = evt.BytesDownloaded > 0 && evt.BytesTotal > 0
+                ? $" · {FormatSize(evt.BytesDownloaded)} / {FormatSize(evt.BytesTotal)}"
+                : "";
+            return $"{completed}/{evt.Layers.Count} layers complete{bytes} · {status}";
+        }
+
+        return status;
     }
 
     private static string FormatSize(long bytes)

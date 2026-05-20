@@ -83,6 +83,58 @@ public class LongRunningTaskServiceTests
     }
 
     [Fact]
+    public void ImagePullProgressStoresLayerDetails()
+    {
+        using var service = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var command = new PullImageCommand
+        {
+            ImageType = ImageType.Docker,
+            ImageName = "library/ubuntu",
+            Tag = "latest"
+        };
+        var taskId = service.TrackImagePull("host-1", command);
+
+        StreamSubscriptionService.PublishImagePullProgress(new ImagePullProgressEvent
+        {
+            HostId = "host-1",
+            ImageType = ImageType.Docker,
+            ImageName = "library/ubuntu",
+            TaskId = taskId,
+            ProgressPercent = 50,
+            BytesDownloaded = 50,
+            BytesTotal = 100,
+            Status = "abc123def456: Downloading 50B/100B",
+            Layers =
+            [
+                new ImagePullLayerProgress
+                {
+                    Id = "abc123def4567890",
+                    Status = "Pull complete",
+                    ProgressPercent = 100,
+                    BytesDownloaded = 100,
+                    BytesTotal = 100,
+                    IsComplete = true
+                },
+                new ImagePullLayerProgress
+                {
+                    Id = "def456abc123",
+                    Status = "Downloading 50B/100B",
+                    ProgressPercent = 50,
+                    BytesDownloaded = 50,
+                    BytesTotal = 100
+                }
+            ]
+        });
+
+        var task = Assert.Single(service.GetSnapshot());
+        Assert.Contains("1/2 layers complete", task.StatusText);
+        Assert.Equal(2, task.Details.Count);
+        Assert.Equal("abc123def456", task.Details[0].Label);
+        Assert.True(task.Details[0].IsComplete);
+        Assert.Equal(50, task.Details[1].ProgressPercent);
+    }
+
+    [Fact]
     public void MarkFailedCompletesTaskWithError()
     {
         using var service = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);

@@ -406,6 +406,25 @@ public class ImagePullProgressEvent
     public string? Status { get; set; }
     [Id(7)]
     public string? TaskId { get; set; }
+    [Id(8)]
+    public List<ImagePullLayerProgress> Layers { get; set; } = [];
+}
+
+[GenerateSerializer]
+public class ImagePullLayerProgress
+{
+    [Id(0)]
+    public required string Id { get; set; }
+    [Id(1)]
+    public string Status { get; set; } = "";
+    [Id(2)]
+    public double ProgressPercent { get; set; }
+    [Id(3)]
+    public long BytesDownloaded { get; set; }
+    [Id(4)]
+    public long BytesTotal { get; set; }
+    [Id(5)]
+    public bool IsComplete { get; set; }
 }
 
 [GenerateSerializer]

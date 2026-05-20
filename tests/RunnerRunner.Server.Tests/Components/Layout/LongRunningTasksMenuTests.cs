@@ -94,6 +94,62 @@ public class LongRunningTasksMenuTests
         });
     }
 
+    [Fact]
+    public async Task PopoverShowsLayerDetailsForImagePulls()
+    {
+        using var context = new BunitContext();
+        using var taskService = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var store = TestDocumentStore.Create();
+
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "mac-host-01",
+            DisplayName = "Build Mac",
+            Platform = HostPlatform.MacOS
+        });
+
+        var taskId = taskService.TrackImagePull("host-1", new PullImageCommand
+        {
+            ImageType = ImageType.Docker,
+            ImageName = "runner/agent",
+            Tag = "latest"
+        });
+
+        StreamSubscriptionService.PublishImagePullProgress(new ImagePullProgressEvent
+        {
+            HostId = "host-1",
+            ImageType = ImageType.Docker,
+            ImageName = "runner/agent",
+            TaskId = taskId,
+            ProgressPercent = 50,
+            Status = "abc123def456: Downloading 50B/100B",
+            Layers =
+            [
+                new ImagePullLayerProgress
+                {
+                    Id = "abc123def4567890",
+                    Status = "Downloading 50B/100B",
+                    ProgressPercent = 50,
+                    BytesDownloaded = 50,
+                    BytesTotal = 100
+                }
+            ]
+        });
+
+        AddServices(context, store, taskService);
+
+        var cut = context.Render<LongRunningTasksMenu>();
+        cut.Find("button.long-tasks-toggle").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("abc123def456", cut.Markup);
+            Assert.Contains("50% · 50 B / 100 B", cut.Markup);
+            Assert.Contains("Downloading 50B/100B", cut.Markup);
+        });
+    }
+
     private static void AddServices(BunitContext context, IDocumentStore store, LongRunningTaskService taskService)
     {
         context.Services.AddSingleton(store);
