@@ -8,6 +8,9 @@ namespace RunnerRunner.Server.Services.Auth;
 public class RunnerRunnerOidcOptionsConfigurator(RunnerRunnerAuthSettingsService settingsService)
     : IConfigureNamedOptions<OpenIdConnectOptions>
 {
+    private const string DisabledAuthority = "https://localhost";
+    private const string DisabledClientId = "runnerrunner-disabled-oidc";
+
     public void Configure(OpenIdConnectOptions options) => Configure(Options.DefaultName, options);
 
     public void Configure(string? name, OpenIdConnectOptions options)
@@ -24,6 +27,9 @@ public class RunnerRunnerOidcOptionsConfigurator(RunnerRunnerAuthSettingsService
         options.RequireHttpsMetadata = settings.RequireHttpsMetadata;
         options.CallbackPath = settings.CallbackPath;
         options.SignedOutCallbackPath = settings.SignedOutCallbackPath;
+        options.Authority = DisabledAuthority;
+        options.ClientId = DisabledClientId;
+        options.ClientSecret = null;
 
         options.Scope.Clear();
         foreach (var scope in settings.Scopes)

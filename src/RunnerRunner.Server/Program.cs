@@ -73,7 +73,12 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.SlidingExpiration = true;
 });
 
-builder.Services.AddAuthentication()
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = IdentityConstants.ApplicationScheme;
+    options.DefaultChallengeScheme = IdentityConstants.ApplicationScheme;
+    options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
+})
     .AddOpenIdConnect(RunnerRunnerAuthSchemes.Oidc, _ => { });
 builder.Services.AddAuthorization(options => options.AddRunnerRunnerPolicies());
 builder.Services.AddCascadingAuthenticationState();
