@@ -8,9 +8,87 @@
     <script>
         // Theme: restore saved preference or follow system, runs before first paint
         (function() {
-            var saved = localStorage.getItem('rr-theme');
-            var theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-            document.documentElement.setAttribute('data-theme', theme);
+            var storageKey = 'rr-theme';
+            var mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+            var enhancedNavigationRegistered = false;
+
+            function getThemePreference() {
+                var saved = localStorage.getItem(storageKey);
+                return saved === 'light' || saved === 'dark' || saved === 'auto' ? saved : 'auto';
+            }
+
+            function resolveTheme(preference) {
+                return preference === 'light' || preference === 'dark'
+                    ? preference
+                    : mediaQuery.matches ? 'dark' : 'light';
+            }
+
+            function updateThemeToggle(preference) {
+                var toggle = document.querySelector('[data-theme-toggle]');
+                if (!toggle) return;
+
+                var label = 'Theme: ' + preference.charAt(0).toUpperCase() + preference.slice(1);
+                toggle.setAttribute('title', label);
+                toggle.setAttribute('aria-label', label);
+            }
+
+            function applyThemePreference(preference) {
+                var normalizedPreference = preference === 'light' || preference === 'dark' || preference === 'auto'
+                    ? preference
+                    : getThemePreference();
+                var theme = resolveTheme(normalizedPreference);
+
+                document.documentElement.setAttribute('data-theme', theme);
+                document.documentElement.setAttribute('data-theme-preference', normalizedPreference);
+                updateThemeToggle(normalizedPreference);
+            }
+
+            function setThemePreference(preference) {
+                if (preference === 'auto') {
+                    localStorage.removeItem(storageKey);
+                } else {
+                    localStorage.setItem(storageKey, preference);
+                }
+
+                applyThemePreference(preference);
+            }
+
+            function toggleTheme() {
+                var current = document.documentElement.getAttribute('data-theme-preference') || getThemePreference();
+                var next = current === 'auto' ? 'light' : current === 'light' ? 'dark' : 'auto';
+                setThemePreference(next);
+            }
+
+            function registerEnhancedNavigationHandler() {
+                if (enhancedNavigationRegistered) return;
+
+                var blazor = window.Blazor || window.blazor;
+                if (blazor && typeof blazor.addEventListener === 'function') {
+                    blazor.addEventListener('enhancedload', window.rrTheme.apply);
+                    enhancedNavigationRegistered = true;
+                }
+            }
+
+            window.rrTheme = {
+                apply: function() {
+                    applyThemePreference(getThemePreference());
+                },
+                toggle: toggleTheme,
+                registerEnhancedNavigationHandler: registerEnhancedNavigationHandler
+            };
+            window.toggleTheme = toggleTheme;
+
+            applyThemePreference(getThemePreference());
+
+            mediaQuery.addEventListener('change', function() {
+                if (getThemePreference() === 'auto') {
+                    applyThemePreference('auto');
+                }
+            });
+            document.addEventListener('DOMContentLoaded', function() {
+                registerEnhancedNavigationHandler();
+                window.rrTheme.apply();
+            });
         })();
         // Sidebar: persist collapsed state before first paint to prevent flash
         (function() {
@@ -62,19 +140,7 @@
             }
             localStorage.setItem('rr-sidebar-collapsed', collapsed);
         };
-        window.toggleTheme = function() {
-            var html = document.documentElement;
-            var current = html.getAttribute('data-theme');
-            var next = current === 'dark' ? 'light' : 'dark';
-            html.setAttribute('data-theme', next);
-            localStorage.setItem('rr-theme', next);
-        };
-        // Listen for system theme changes (only if user hasn't set a preference)
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
-            if (!localStorage.getItem('rr-theme')) {
-                document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
-            }
-        });
+        if (window.rrTheme) window.rrTheme.registerEnhancedNavigationHandler();
         // Apply sidebar collapsed class after DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
             if (localStorage.getItem('rr-sidebar-collapsed') === 'true') {
