@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RunnerRunner.Server.Data.Auth;
+using RunnerRunner.Server.Models;
 using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Services.Auth;
 
@@ -134,37 +135,24 @@ public static class RunnerRunnerAuthEndpoints
             return Results.LocalRedirect($"/auth/login?returnUrl={Uri.EscapeDataString(SanitizeReturnUrl(returnUrl))}&error=oidc-failed");
         }
 
-        var user = await userManager.FindByLoginAsync(loginInfo.LoginProvider, loginInfo.ProviderKey);
-        var createdUser = false;
-        if (user is null)
+        var settings = await settingsService.GetAsync();
+        var resolution = await GetOrCreateOidcUserAsync(userManager, loginInfo, settings.Oidc);
+        if (!resolution.Succeeded || resolution.User is null)
         {
-            var settings = await settingsService.GetAsync();
-            user = CreateOidcUser(loginInfo);
-            var createResult = await userManager.CreateAsync(user);
-            if (!createResult.Succeeded)
-            {
-                await auditService.LogAsync("OidcUserCreateFailed", "User", details: createResult.Errors.First().Description);
-                return Results.LocalRedirect($"/auth/login?error={Uri.EscapeDataString(createResult.Errors.First().Description)}");
-            }
+            var error = resolution.Result.Errors.FirstOrDefault()?.Description ?? "Unable to complete OIDC sign-in.";
+            await auditService.LogAsync(resolution.FailedAuditAction, "User", resolution.User?.Id, error);
+            return Results.LocalRedirect($"/auth/login?error={Uri.EscapeDataString(error)}");
+        }
 
-            var loginResult = await userManager.AddLoginAsync(user, loginInfo);
-            if (!loginResult.Succeeded)
+        var user = resolution.User;
+        if (resolution.CreatedUser && RunnerRunnerRoles.All.Contains(settings.Oidc.DefaultRole, StringComparer.Ordinal))
+        {
+            var roleResult = await userManager.AddToRoleAsync(user, settings.Oidc.DefaultRole);
+            if (!roleResult.Succeeded)
             {
-                await auditService.LogAsync("OidcUserLinkFailed", "User", user.Id, loginResult.Errors.First().Description);
-                return Results.LocalRedirect($"/auth/login?error={Uri.EscapeDataString(loginResult.Errors.First().Description)}");
+                await auditService.LogAsync("OidcUserRoleAddFailed", "User", user.Id, roleResult.Errors.First().Description);
+                return Results.LocalRedirect($"/auth/login?error={Uri.EscapeDataString(roleResult.Errors.First().Description)}");
             }
-
-            if (RunnerRunnerRoles.All.Contains(settings.Oidc.DefaultRole, StringComparer.Ordinal))
-            {
-                var roleResult = await userManager.AddToRoleAsync(user, settings.Oidc.DefaultRole);
-                if (!roleResult.Succeeded)
-                {
-                    await auditService.LogAsync("OidcUserRoleAddFailed", "User", user.Id, roleResult.Errors.First().Description);
-                    return Results.LocalRedirect($"/auth/login?error={Uri.EscapeDataString(roleResult.Errors.First().Description)}");
-                }
-            }
-
-            createdUser = true;
         }
 
         if (!user.Enabled)
@@ -179,7 +167,7 @@ public static class RunnerRunnerAuthEndpoints
         await userManager.UpdateAsync(user);
         await signInManager.SignInAsync(user, isPersistent: false, loginInfo.LoginProvider);
         await httpContextSafeExternalCookieSignOut(signInManager);
-        await auditService.LogAsync(createdUser ? "OidcUserCreatedAndLoggedIn" : "OidcLoginSucceeded", "User", user.Id, $"user={user.UserName}; provider={loginInfo.LoginProvider}");
+        await auditService.LogAsync(GetSuccessfulOidcAuditAction(resolution), "User", user.Id, $"user={user.UserName}; provider={loginInfo.LoginProvider}");
 
         var sanitizedReturnUrl = SanitizeReturnUrl(returnUrl);
         return RunnerRunnerRoles.ContainsAnyRole(roles)
@@ -226,33 +214,93 @@ public static class RunnerRunnerAuthEndpoints
             : RedirectToPendingAccess(returnUrl, accessChecked: true);
     }
 
-    private static RunnerRunnerUser CreateOidcUser(ExternalLoginInfo loginInfo)
+    internal static async Task<OidcUserResolution> GetOrCreateOidcUserAsync(
+        UserManager<RunnerRunnerUser> userManager,
+        ExternalLoginInfo loginInfo,
+        RunnerRunnerOidcSettings oidcSettings)
+    {
+        var user = await userManager.FindByLoginAsync(loginInfo.LoginProvider, loginInfo.ProviderKey);
+        if (user is not null)
+            return OidcUserResolution.Existing(user);
+
+        var profile = CreateOidcUserProfile(loginInfo, oidcSettings);
+        if (!string.IsNullOrWhiteSpace(profile.Email))
+        {
+            user = await userManager.FindByEmailAsync(profile.Email);
+            if (user is not null)
+            {
+                ApplyOidcMetadata(user, profile);
+                var loginResult = await userManager.AddLoginAsync(user, loginInfo);
+                return loginResult.Succeeded
+                    ? OidcUserResolution.Linked(user)
+                    : OidcUserResolution.Failed(user, loginResult, "OidcUserLinkFailed");
+            }
+        }
+
+        user = CreateOidcUser(profile);
+        var createResult = await userManager.CreateAsync(user);
+        if (!createResult.Succeeded)
+            return OidcUserResolution.Failed(user, createResult, "OidcUserCreateFailed");
+
+        var addLoginResult = await userManager.AddLoginAsync(user, loginInfo);
+        if (!addLoginResult.Succeeded)
+            return OidcUserResolution.Failed(user, addLoginResult, "OidcUserLinkFailed");
+
+        return OidcUserResolution.Created(user);
+    }
+
+    private static RunnerRunnerUser CreateOidcUser(OidcUserProfile profile)
+    {
+        return new RunnerRunnerUser
+        {
+            UserName = profile.UserNameBase,
+            Email = profile.Email,
+            EmailConfirmed = !string.IsNullOrWhiteSpace(profile.Email),
+            DisplayName = profile.Name,
+            Source = RunnerRunnerUserSources.Oidc,
+            Enabled = true,
+            ExternalIssuer = profile.Issuer,
+            ExternalSubject = profile.Subject
+        };
+    }
+
+    private static OidcUserProfile CreateOidcUserProfile(
+        ExternalLoginInfo loginInfo,
+        RunnerRunnerOidcSettings oidcSettings)
     {
         var principal = loginInfo.Principal;
-        var email = principal.FindFirstValue(ClaimTypes.Email)
-            ?? principal.FindFirstValue("email")
-            ?? "";
-        var name = principal.FindFirstValue(ClaimTypes.Name)
-            ?? principal.FindFirstValue("name")
+        var email = FindFirstClaimValue(principal, oidcSettings.EmailClaimType, ClaimTypes.Email, "email");
+        var name = FindFirstClaimValue(principal, oidcSettings.NameClaimType, ClaimTypes.Name, "name")
             ?? email
             ?? loginInfo.ProviderKey;
-        var issuer = principal.FindFirstValue("iss")
+        var issuer = FindFirstClaimValue(principal, "iss")
             ?? principal.Identity?.AuthenticationType
             ?? loginInfo.LoginProvider;
         var userNameBase = !string.IsNullOrWhiteSpace(email) ? email : $"{loginInfo.LoginProvider}-{loginInfo.ProviderKey}";
 
-        return new RunnerRunnerUser
-        {
-            UserName = userNameBase,
-            Email = string.IsNullOrWhiteSpace(email) ? null : email,
-            EmailConfirmed = !string.IsNullOrWhiteSpace(email),
-            DisplayName = name,
-            Source = RunnerRunnerUserSources.Oidc,
-            Enabled = true,
-            ExternalIssuer = issuer,
-            ExternalSubject = loginInfo.ProviderKey
-        };
+        return new OidcUserProfile(
+            UserNameBase: userNameBase,
+            Email: string.IsNullOrWhiteSpace(email) ? null : email,
+            Name: name,
+            Issuer: issuer,
+            Subject: loginInfo.ProviderKey);
     }
+
+    private static void ApplyOidcMetadata(RunnerRunnerUser user, OidcUserProfile profile)
+    {
+        if (string.IsNullOrWhiteSpace(user.DisplayName))
+            user.DisplayName = profile.Name;
+
+        user.ExternalIssuer = profile.Issuer;
+        user.ExternalSubject = profile.Subject;
+        user.UpdatedAt = DateTime.UtcNow;
+    }
+
+    private static string? FindFirstClaimValue(ClaimsPrincipal principal, params string?[] claimTypes)
+        => claimTypes
+            .Where(claimType => !string.IsNullOrWhiteSpace(claimType))
+            .Select(claimType => principal.FindFirstValue(claimType!))
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
     private static async Task<RunnerRunnerUser?> FindByUserNameOrEmailAsync(
         UserManager<RunnerRunnerUser> userManager,
@@ -271,6 +319,14 @@ public static class RunnerRunnerAuthEndpoints
     private static IResult RedirectToLogin(string returnUrl, string error)
         => Results.LocalRedirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}&error={Uri.EscapeDataString(error)}");
 
+    private static string GetSuccessfulOidcAuditAction(OidcUserResolution resolution)
+    {
+        if (resolution.CreatedUser)
+            return "OidcUserCreatedAndLoggedIn";
+
+        return resolution.LinkedExistingUser ? "OidcUserLinkedAndLoggedIn" : "OidcLoginSucceeded";
+    }
+
     private static IResult RedirectToPendingAccess(string returnUrl, bool accessChecked = false)
     {
         var target = $"/auth/pending-access?returnUrl={Uri.EscapeDataString(returnUrl)}";
@@ -287,4 +343,33 @@ public static class RunnerRunnerAuthEndpoints
 
         return returnUrl;
     }
+
+    internal sealed record OidcUserResolution(
+        RunnerRunnerUser? User,
+        IdentityResult Result,
+        bool CreatedUser,
+        bool LinkedExistingUser,
+        string FailedAuditAction)
+    {
+        public bool Succeeded => Result.Succeeded && User is not null;
+
+        public static OidcUserResolution Existing(RunnerRunnerUser user)
+            => new(user, IdentityResult.Success, CreatedUser: false, LinkedExistingUser: false, FailedAuditAction: "OidcLoginFailed");
+
+        public static OidcUserResolution Linked(RunnerRunnerUser user)
+            => new(user, IdentityResult.Success, CreatedUser: false, LinkedExistingUser: true, FailedAuditAction: "OidcUserLinkFailed");
+
+        public static OidcUserResolution Created(RunnerRunnerUser user)
+            => new(user, IdentityResult.Success, CreatedUser: true, LinkedExistingUser: false, FailedAuditAction: "OidcUserCreateFailed");
+
+        public static OidcUserResolution Failed(RunnerRunnerUser? user, IdentityResult result, string failedAuditAction)
+            => new(user, result, CreatedUser: false, LinkedExistingUser: false, failedAuditAction);
+    }
+
+    private sealed record OidcUserProfile(
+        string UserNameBase,
+        string? Email,
+        string Name,
+        string Issuer,
+        string Subject);
 }
