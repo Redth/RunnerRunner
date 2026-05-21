@@ -1,0 +1,94 @@
+@page "/auth/pending-access"
+@layout AuthLayout
+@inject NavigationManager Navigation
+
+<PageTitle>Access pending - RunnerRunner</PageTitle>
+
+<div class="auth-card">
+    <div class="auth-brand">
+        <span class="auth-brand-icon auth-brand-icon-warning"><i class="bi bi-hourglass-split"></i></span>
+        <div>
+            <h1>Access pending</h1>
+            <p>Your account has been created, but no RunnerRunner role has been assigned yet.</p>
+        </div>
+    </div>
+
+    @if (!loaded)
+    {
+        <div class="alert alert-secondary py-2">Checking your account...</div>
+    }
+    else if (isAuthenticated)
+    {
+        @if (AccessChecked)
+        {
+            <div class="alert alert-info py-2">No role has been assigned yet. Please try again after an administrator grants access.</div>
+        }
+        else
+        {
+            <div class="alert alert-info py-2">An administrator can now see @displayName in User Management and assign a role.</div>
+        }
+
+        <div class="d-grid gap-2">
+            <form method="post" action="/auth/refresh-access">
+                <AntiforgeryToken />
+                <input type="hidden" name="returnUrl" value="@ReturnUrlValue" />
+                <button class="btn btn-primary w-100" type="submit">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Check access again
+                </button>
+            </form>
+            <form method="post" action="/auth/logout">
+                <AntiforgeryToken />
+                <button class="btn btn-outline-secondary w-100" type="submit">Sign out</button>
+            </form>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-secondary py-2">Sign in first so an administrator can review your account.</div>
+        <a class="btn btn-primary w-100" href="/auth/login">Sign in</a>
+    }
+</div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = "checked")]
+    public bool AccessChecked { get; set; }
+
+    private bool loaded;
+    private bool isAuthenticated;
+    private string displayName = "your account";
+    private string ReturnUrlValue => SanitizeReturnUrl(ReturnUrl);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        var user = state?.User;
+        isAuthenticated = user?.Identity?.IsAuthenticated == true;
+
+        if (isAuthenticated && user is not null)
+        {
+            if (RunnerRunnerRoles.HasAnyRole(user))
+            {
+                Navigation.NavigateTo(ReturnUrlValue, forceLoad: true);
+                return;
+            }
+
+            displayName = user.Identity?.Name ?? "your account";
+        }
+
+        loaded = true;
+    }
+
+    private static string SanitizeReturnUrl(string? returnUrl)
+    {
+        if (string.IsNullOrWhiteSpace(returnUrl) || !returnUrl.StartsWith('/') || returnUrl.StartsWith("//", StringComparison.Ordinal))
+            return "/";
+
+        return returnUrl;
+    }
+}

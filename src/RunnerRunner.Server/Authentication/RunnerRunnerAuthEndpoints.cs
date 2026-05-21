@@ -20,6 +20,7 @@ public static class RunnerRunnerAuthEndpoints
         auth.MapPost("/setup", SetupAsync).AllowAnonymous();
         auth.MapGet("/oidc", StartOidcAsync).AllowAnonymous();
         auth.MapGet("/oidc-complete", CompleteOidcAsync).AllowAnonymous();
+        auth.MapPost("/refresh-access", RefreshAccessAsync);
 
         return endpoints;
     }
@@ -154,7 +155,14 @@ public static class RunnerRunnerAuthEndpoints
             }
 
             if (RunnerRunnerRoles.All.Contains(settings.Oidc.DefaultRole, StringComparer.Ordinal))
-                await userManager.AddToRoleAsync(user, settings.Oidc.DefaultRole);
+            {
+                var roleResult = await userManager.AddToRoleAsync(user, settings.Oidc.DefaultRole);
+                if (!roleResult.Succeeded)
+                {
+                    await auditService.LogAsync("OidcUserRoleAddFailed", "User", user.Id, roleResult.Errors.First().Description);
+                    return Results.LocalRedirect($"/auth/login?error={Uri.EscapeDataString(roleResult.Errors.First().Description)}");
+                }
+            }
 
             createdUser = true;
         }
@@ -165,6 +173,7 @@ public static class RunnerRunnerAuthEndpoints
             return Results.LocalRedirect("/auth/access-denied");
         }
 
+        var roles = await userManager.GetRolesAsync(user);
         user.LastLoginAt = DateTime.UtcNow;
         user.UpdatedAt = DateTime.UtcNow;
         await userManager.UpdateAsync(user);
@@ -172,10 +181,49 @@ public static class RunnerRunnerAuthEndpoints
         await httpContextSafeExternalCookieSignOut(signInManager);
         await auditService.LogAsync(createdUser ? "OidcUserCreatedAndLoggedIn" : "OidcLoginSucceeded", "User", user.Id, $"user={user.UserName}; provider={loginInfo.LoginProvider}");
 
-        return Results.LocalRedirect(SanitizeReturnUrl(returnUrl));
+        var sanitizedReturnUrl = SanitizeReturnUrl(returnUrl);
+        return RunnerRunnerRoles.ContainsAnyRole(roles)
+            ? Results.LocalRedirect(sanitizedReturnUrl)
+            : RedirectToPendingAccess(sanitizedReturnUrl);
 
         static Task httpContextSafeExternalCookieSignOut(SignInManager<RunnerRunnerUser> signInManager)
             => signInManager.Context.SignOutAsync(IdentityConstants.ExternalScheme);
+    }
+
+    private static async Task<IResult> RefreshAccessAsync(
+        HttpContext httpContext,
+        IAntiforgery antiforgery,
+        UserManager<RunnerRunnerUser> userManager,
+        SignInManager<RunnerRunnerUser> signInManager,
+        AuditService auditService)
+    {
+        await antiforgery.ValidateRequestAsync(httpContext);
+        var form = await httpContext.Request.ReadFormAsync();
+        var returnUrl = SanitizeReturnUrl(form["returnUrl"].ToString());
+
+        if (httpContext.User.Identity?.IsAuthenticated != true)
+            return Results.LocalRedirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
+
+        var user = await userManager.GetUserAsync(httpContext.User);
+        if (user is null)
+        {
+            await signInManager.SignOutAsync();
+            return Results.LocalRedirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}");
+        }
+
+        if (!user.Enabled)
+        {
+            await auditService.LogAsync("AccessRefreshDenied", "User", user.Id, $"user={user.UserName}; reason=disabled");
+            await signInManager.SignOutAsync();
+            return Results.LocalRedirect("/auth/access-denied");
+        }
+
+        await signInManager.RefreshSignInAsync(user);
+        var roles = await userManager.GetRolesAsync(user);
+
+        return RunnerRunnerRoles.ContainsAnyRole(roles)
+            ? Results.LocalRedirect(returnUrl)
+            : RedirectToPendingAccess(returnUrl, accessChecked: true);
     }
 
     private static RunnerRunnerUser CreateOidcUser(ExternalLoginInfo loginInfo)
@@ -222,6 +270,15 @@ public static class RunnerRunnerAuthEndpoints
 
     private static IResult RedirectToLogin(string returnUrl, string error)
         => Results.LocalRedirect($"/auth/login?returnUrl={Uri.EscapeDataString(returnUrl)}&error={Uri.EscapeDataString(error)}");
+
+    private static IResult RedirectToPendingAccess(string returnUrl, bool accessChecked = false)
+    {
+        var target = $"/auth/pending-access?returnUrl={Uri.EscapeDataString(returnUrl)}";
+        if (accessChecked)
+            target += "&checked=true";
+
+        return Results.LocalRedirect(target);
+    }
 
     private static string SanitizeReturnUrl(string? returnUrl)
     {

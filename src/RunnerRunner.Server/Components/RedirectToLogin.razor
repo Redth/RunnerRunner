@@ -9,8 +9,12 @@
     {
         var relativePath = "/" + Navigation.ToBaseRelativePath(Navigation.Uri);
         var state = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
-        var target = state?.User.Identity?.IsAuthenticated == true
-            ? "/auth/access-denied"
+        var user = state?.User;
+        var returnUrl = Uri.EscapeDataString(relativePath);
+        var target = user?.Identity?.IsAuthenticated == true
+            ? RunnerRunnerRoles.HasAnyRole(user)
+                ? "/auth/access-denied"
+                : $"/auth/pending-access?returnUrl={returnUrl}"
             : $"/auth/login?returnUrl={Uri.EscapeDataString(relativePath)}";
 
         Navigation.NavigateTo(target, forceLoad: true);
