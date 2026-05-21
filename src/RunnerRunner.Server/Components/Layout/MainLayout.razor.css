@@ -101,11 +101,11 @@ main {
 }
 .theme-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-/* Show/hide theme icons based on current theme */
-[data-theme="dark"] .theme-icon-dark { display: none; }
-[data-theme="dark"] .theme-icon-light { display: inline; }
-[data-theme="light"] .theme-icon-light { display: none; }
-[data-theme="light"] .theme-icon-dark { display: inline; }
+/* Show the current theme preference. */
+.theme-icon { display: none; }
+[data-theme-preference="auto"] .theme-icon-auto { display: inline; }
+[data-theme-preference="light"] .theme-icon-light { display: inline; }
+[data-theme-preference="dark"] .theme-icon-dark { display: inline; }
 
 .content-area {
     padding: 1rem 1.25rem 2rem;
