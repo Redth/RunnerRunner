@@ -134,6 +134,12 @@
                                                         </label>
                                                     }
                                                 </div>
+                                                @if (row.Roles.Count == 0)
+                                                {
+                                                    <div class="small text-warning mt-1">
+                                                        <i class="bi bi-hourglass-split me-1"></i>Pending role assignment
+                                                    </div>
+                                                }
                                             </td>
                                             <td>
                                                 <span class="badge @(row.User.Enabled ? "bg-success" : "bg-secondary")">@(row.User.Enabled ? "Enabled" : "Disabled")</span>
@@ -256,6 +262,7 @@
                                         <option value="@role">@role</option>
                                     }
                                 </select>
+                                <div class="form-text">No automatic access creates OIDC users without app permissions until an administrator assigns a role.</div>
                             </div>
                         </div>
                         <div class="form-check mt-3">

@@ -1,5 +1,6 @@
 @page "/auth/access-denied"
 @layout AuthLayout
+@inject NavigationManager Navigation
 
 <PageTitle>Access denied - RunnerRunner</PageTitle>
 
@@ -20,3 +21,16 @@
         </form>
     </div>
 </div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        var user = state?.User;
+        if (user?.Identity?.IsAuthenticated == true && !RunnerRunnerRoles.HasAnyRole(user))
+            Navigation.NavigateTo("/auth/pending-access", forceLoad: true);
+    }
+}

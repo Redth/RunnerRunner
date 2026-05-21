@@ -55,6 +55,9 @@ public class RunnerRunnerAuthSettingsService
         settings.Oidc.NameClaimType = NormalizeClaim(settings.Oidc.NameClaimType, "name");
         settings.Oidc.EmailClaimType = NormalizeClaim(settings.Oidc.EmailClaimType, "email");
         settings.Oidc.RoleClaimType = NormalizeClaim(settings.Oidc.RoleClaimType, "role");
+        settings.Oidc.DefaultRole = RunnerRunnerRoles.All.Contains(settings.Oidc.DefaultRole, StringComparer.Ordinal)
+            ? settings.Oidc.DefaultRole
+            : "";
 
         if (!string.IsNullOrWhiteSpace(clientSecret))
             settings.Oidc.ProtectedClientSecret = _protector.Protect(clientSecret);

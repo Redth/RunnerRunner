@@ -42,6 +42,16 @@ public class RunnerRunnerAuthorizationTests
     }
 
     [Fact]
+    public async Task AuthenticatedUserWithoutRunnerRunnerRoleCannotView()
+    {
+        var authorization = CreateAuthorizationService();
+        var user = CreatePrincipal();
+
+        Assert.False((await authorization.AuthorizeAsync(user, RunnerRunnerPolicies.CanView)).Succeeded);
+        Assert.False(RunnerRunnerRoles.HasAnyRole(user));
+    }
+
+    [Fact]
     public void BuiltInRolesAreStableAndUnique()
     {
         Assert.Equal(RunnerRunnerRoles.All.Length, RunnerRunnerRoles.All.Distinct(StringComparer.Ordinal).Count());

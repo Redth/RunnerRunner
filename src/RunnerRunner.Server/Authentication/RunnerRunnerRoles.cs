@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 
 namespace RunnerRunner.Server.Authentication;
@@ -26,6 +27,12 @@ public static class RunnerRunnerRoles
     ];
 
     public static readonly string[] ViewRoles = All;
+
+    public static bool HasAnyRole(ClaimsPrincipal user)
+        => All.Any(user.IsInRole);
+
+    public static bool ContainsAnyRole(IEnumerable<string> roles)
+        => roles.Any(role => All.Contains(role, StringComparer.Ordinal));
 }
 
 public static class RunnerRunnerPolicies
