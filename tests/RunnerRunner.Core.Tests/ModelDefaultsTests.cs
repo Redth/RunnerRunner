@@ -72,6 +72,27 @@ public class ModelDefaultsTests
     }
 
     [Fact]
+    public void RunnerDefinition_ToProfile_CarriesTargetHostRouting()
+    {
+        var rule = new ProvisioningRule
+        {
+            Name = "GitHub",
+            Provider = RunnerProvider.GitHubActions
+        };
+        var runner = new RunnerDefinition
+        {
+            Name = "Windows UI",
+            TargetGroupId = "windows-hosts",
+            RequiredHostCapabilities = ["windows-ui"]
+        };
+
+        var profile = runner.ToProfile(rule);
+
+        Assert.Equal("windows-hosts", profile.TargetGroupId);
+        Assert.Equal(["windows-ui"], profile.RequiredHostCapabilities);
+    }
+
+    [Fact]
     public void ProvisioningRule_ResolvesRunnerTargetBeforeLegacyMatchers()
     {
         var linux = new RunnerDefinition

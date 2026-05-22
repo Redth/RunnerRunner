@@ -223,6 +223,90 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void AnalyzeHostSelection_RespectsTargetSpecificHostCapabilities()
+    {
+        var plainHost = new Host
+        {
+            Name = "windows-build",
+            Platform = HostPlatform.Windows,
+            MaxNativeProcesses = 2,
+            Capabilities = ["native", "windows"]
+        };
+        var uiHost = new Host
+        {
+            Name = "windows-ui",
+            Platform = HostPlatform.Windows,
+            MaxNativeProcesses = 2,
+            Capabilities = ["native", "windows", "windows-ui"]
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "windows-ui-tests",
+            RequiredHostPlatform = HostPlatform.Windows,
+            ExecutionBackend = ExecutionBackend.Native,
+            RequiredHostCapabilities = ["windows-ui"]
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [plainHost, uiHost],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            []);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(uiHost.Id, analysis.SelectedHost!.Id);
+        var candidate = Assert.Single(analysis.Candidates);
+        Assert.Equal(uiHost.Id, candidate.HostId);
+    }
+
+    [Fact]
+    public void BuildSnapshot_UsesRunnerDefinitionHostRoutingForCapacity()
+    {
+        var defaultHost = new Host
+        {
+            Name = "linux-default",
+            Platform = HostPlatform.Linux,
+            GroupId = "default",
+            MaxDockerContainers = 2
+        };
+        var gpuHost = new Host
+        {
+            Name = "linux-gpu",
+            Platform = HostPlatform.Linux,
+            GroupId = "gpu",
+            MaxDockerContainers = 3,
+            Capabilities = ["docker", "gpu"]
+        };
+        var rule = new ProvisioningRule
+        {
+            Name = "linux webhook",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 5,
+            RunnerDefinitions =
+            [
+                new RunnerDefinition
+                {
+                    Id = "runner-gpu",
+                    Name = "GPU Linux",
+                    RequiredHostPlatform = HostPlatform.Linux,
+                    ExecutionBackend = ExecutionBackend.Docker,
+                    TargetGroupId = "gpu",
+                    RequiredHostCapabilities = ["gpu"]
+                }
+            ]
+        };
+
+        var snapshot = CapacityPlanningService.BuildSnapshot([defaultHost, gpuHost], [], [rule], [], []);
+
+        var mapped = Assert.Single(snapshot.Rules[rule.Id].MappedRunners);
+        Assert.Equal(1, mapped.MatchingHosts);
+        Assert.Equal(3, mapped.EffectivePoolLimit);
+    }
+
+    [Fact]
     public void AnalyzeHostSelection_SkipsWindowsHostsWhenDockerIsInLinuxMode()
     {
         var incompatibleHost = new Host

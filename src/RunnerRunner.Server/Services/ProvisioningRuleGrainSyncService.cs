@@ -222,6 +222,8 @@ internal static class ProvisioningRuleGrainConfigMapper
         DockerConfig = runner.DockerConfig,
         TartConfig = runner.TartConfig,
         Labels = [.. runner.Labels],
+        TargetGroupId = runner.TargetGroupId,
+        RequiredHostCapabilities = [.. runner.RequiredHostCapabilities],
         RunnerGroup = runner.RunnerGroup,
         Ephemeral = runner.Ephemeral,
         ProviderConfig = new Dictionary<string, string>(runner.ProviderConfig),

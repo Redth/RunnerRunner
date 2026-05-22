@@ -249,7 +249,9 @@ public sealed class CapacityPlanningService
                 runnerIds.Any(id => InstanceMatchesRunner(i, id))
                 && hosts.Any(h =>
                     string.Equals(h.Id, i.HostId, StringComparison.OrdinalIgnoreCase)
-                    && MatchesRuleHostRequirements(h, rule)));
+                    && MatchesRuleHostRequirements(h, rule)
+                    && (!profilesById.TryGetValue(GetInstanceRunnerId(i), out var instanceProfile)
+                        || MatchesProfileHostRequirements(h, instanceProfile))));
         }
 
         var configuredLimit = rule.Type switch
@@ -502,28 +504,12 @@ public sealed class CapacityPlanningService
         if (rule == null)
             return true;
 
-        if (!string.IsNullOrWhiteSpace(rule.TargetHostId)
-            && !string.Equals(host.Id, rule.TargetHostId, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(rule.TargetGroupId)
-            && !string.Equals(host.GroupId, rule.TargetGroupId, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        foreach (var required in rule.RequiredHostLabels)
-        {
-            if (!host.Labels.TryGetValue(required.Key, out var actualValue)
-                || !string.Equals(actualValue, required.Value, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return MatchesHostRouting(
+            host,
+            rule.TargetHostId,
+            rule.TargetGroupId,
+            rule.RequiredHostLabels,
+            Array.Empty<string>());
     }
 
     private static HostCapacityView BuildHostView(
@@ -670,6 +656,9 @@ public sealed class CapacityPlanningService
 
     private static bool MatchesProfileHostRequirements(Host host, RunnerProfile profile)
     {
+        if (!MatchesHostRouting(host, null, profile.TargetGroupId, null, profile.RequiredHostCapabilities))
+            return false;
+
         if (profile.ExecutionBackend != ExecutionBackend.Docker)
             return true;
 
@@ -685,6 +674,47 @@ public sealed class CapacityPlanningService
 
         return expectedDockerOs == null
             || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesHostRouting(
+        Host host,
+        string? targetHostId,
+        string? targetGroupId,
+        IReadOnlyDictionary<string, string>? requiredHostLabels,
+        IReadOnlyCollection<string> requiredHostCapabilities)
+    {
+        if (!string.IsNullOrWhiteSpace(targetHostId)
+            && !string.Equals(host.Id, targetHostId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetGroupId)
+            && !string.Equals(host.GroupId, targetGroupId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (requiredHostLabels != null)
+        {
+            foreach (var required in requiredHostLabels)
+            {
+                if (!host.Labels.TryGetValue(required.Key, out var actualValue)
+                    || !string.Equals(actualValue, required.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (requiredHostCapabilities.Count == 0)
+            return true;
+
+        var hostCapabilities = host.Capabilities.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return requiredHostCapabilities
+            .Where(capability => !string.IsNullOrWhiteSpace(capability))
+            .Select(capability => capability.Trim())
+            .All(hostCapabilities.Contains);
     }
 
     private static (ProvisioningRule? Rule, RunnerProfile? Profile, string Reason) ResolveProvisioningMatch(
