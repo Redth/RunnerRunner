@@ -4169,6 +4169,9 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     display: grid;
     gap: 0.45rem;
     margin-top: 0.8rem;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .valid-target-list > span {
@@ -4197,7 +4200,9 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     display: flex;
     flex-wrap: wrap;
     gap: 0.35rem;
+    max-width: 100%;
     min-height: 1.7rem;
+    min-width: 0;
 }
 
 .runner-chip {
@@ -4206,6 +4211,7 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     gap: 0.28rem;
     max-width: 100%;
     min-height: 1.7rem;
+    min-width: 0;
     padding: 0.18rem 0.28rem 0.18rem 0.55rem;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-full);
@@ -4216,7 +4222,23 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     line-height: 1.2;
 }
 
+.runner-chip-placeholder {
+    padding-right: 0.55rem;
+    border-style: dashed;
+    background: color-mix(in srgb, var(--bg-card) 68%, transparent);
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
+.runner-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .runner-chip button {
+    flex: 0 0 auto;
     display: inline-grid;
     place-items: center;
     width: 1.22rem;
