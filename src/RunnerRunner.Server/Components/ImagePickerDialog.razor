@@ -73,17 +73,12 @@
                         {
                             <div class="alert alert-warning py-2 mx-3">@searchResults.Warning</div>
                         }
-                        @if (!string.IsNullOrWhiteSpace(searchResults.InfoMessage))
-                        {
-                            <div class="alert alert-secondary py-2 mx-3">@searchResults.InfoMessage</div>
-                        }
-
                         @if (!searchResults.Results.Any())
                         {
                             <div class="image-picker-empty">
                                 <i class="bi bi-box-seam"></i>
-                                <strong>No repositories yet</strong>
-                                <span>Search a configured registry to browse image paths.</span>
+                                <strong>@(string.IsNullOrWhiteSpace(searchText) ? "No repositories yet" : "No repositories found")</strong>
+                                <span>@(string.IsNullOrWhiteSpace(searchResults.InfoMessage) ? "Search a configured registry to browse image paths." : searchResults.InfoMessage)</span>
                             </div>
                         }
                         else
@@ -94,7 +89,10 @@
                                     <button type="button"
                                             class="image-picker-row @(selectedRepository == result.Name ? "active" : "")"
                                             @onclick="() => SelectRepositoryAsync(result.Name)">
-                                        <span>
+                                        <span class="image-picker-row-icon">
+                                            <i class="bi bi-box-seam"></i>
+                                        </span>
+                                        <span class="image-picker-row-main">
                                             <code>@result.Name</code>
                                             <small>@(string.IsNullOrWhiteSpace(result.Description) ? "No description" : result.Description)</small>
                                         </span>
@@ -114,10 +112,19 @@
                                 <h6>Tags</h6>
                                 <p>@(string.IsNullOrWhiteSpace(selectedRepository) ? "Select a repository first." : $"Choose a version for {selectedRepository}.")</p>
                             </div>
-                            @if (tagResults.FromCache)
-                            {
-                                <span class="badge bg-secondary">Cached</span>
-                            }
+                            <div class="image-picker-panel-actions">
+                                @if (!string.IsNullOrWhiteSpace(selectedRepository) && tagResults.Tags.Any())
+                                {
+                                    <div class="input-group input-group-sm image-picker-tag-filter">
+                                        <span class="input-group-text"><i class="bi bi-filter"></i></span>
+                                        <input class="form-control" placeholder="Filter tags..." aria-label="Filter tags" @bind="tagFilter" @bind:event="oninput" />
+                                    </div>
+                                }
+                                @if (tagResults.FromCache)
+                                {
+                                    <span class="badge bg-secondary">Cached</span>
+                                }
+                            </div>
                         </div>
 
                         @if (tagsInProgress)
@@ -148,15 +155,26 @@
                                 <span>This registry did not return tags for the selected repository.</span>
                             </div>
                         }
+                        else if (!FilteredTagResults.Any())
+                        {
+                            <div class="image-picker-empty">
+                                <i class="bi bi-filter"></i>
+                                <strong>No matching tags</strong>
+                                <span>Try a different tag filter.</span>
+                            </div>
+                        }
                         else
                         {
                             <div class="image-picker-list" role="listbox" aria-label="Tag results">
-                                @foreach (var tag in tagResults.Tags)
+                                @foreach (var tag in FilteredTagResults)
                                 {
                                     <button type="button"
                                             class="image-picker-row image-picker-tag-row @(selectedTag == tag.Name ? "active" : "")"
                                             @onclick="() => SelectTag(tag.Name)">
-                                        <span>
+                                        <span class="image-picker-row-icon">
+                                            <i class="bi bi-tag"></i>
+                                        </span>
+                                        <span class="image-picker-row-main">
                                             <code>@tag.Name</code>
                                             <small>@FormatTagMeta(tag)</small>
                                         </span>
@@ -195,6 +213,7 @@
     private string searchText = "";
     private string selectedRepository = "";
     private string selectedTag = "";
+    private string tagFilter = "";
     private string statusText = "";
     private bool statusIsError;
     private bool searchInProgress;
@@ -209,6 +228,20 @@
         SelectedRegistry is not null
         && !string.IsNullOrWhiteSpace(selectedRepository)
         && !string.IsNullOrWhiteSpace(selectedTag);
+
+    private IEnumerable<RegistryTagResult> FilteredTagResults
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(tagFilter))
+                return tagResults.Tags;
+
+            var query = tagFilter.Trim();
+            return tagResults.Tags.Where(tag =>
+                tag.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || FormatTagMeta(tag).Contains(query, StringComparison.OrdinalIgnoreCase));
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -262,6 +295,7 @@
     {
         selectedRepository = "";
         selectedTag = "";
+        tagFilter = "";
         searchResults = new();
         tagResults = new();
         statusText = "";
@@ -284,6 +318,7 @@
         statusText = "Searching registry...";
         selectedRepository = "";
         selectedTag = "";
+        tagFilter = "";
         tagResults = new();
 
         searchResults = await RegistryCatalog.SearchRepositoriesAsync(registry, searchText);
@@ -301,6 +336,7 @@
 
         selectedRepository = repository;
         selectedTag = "";
+        tagFilter = "";
         tagsInProgress = true;
         tagResults = await RegistryCatalog.GetTagsAsync(registry, repository);
         tagsInProgress = false;
