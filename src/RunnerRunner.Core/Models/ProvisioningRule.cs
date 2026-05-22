@@ -45,7 +45,7 @@ public class ProvisioningRule
     [Id(15)]
     public string? DefaultProfileId { get; set; }
     [Id(16)]
-    public int MaxConcurrent { get; set; } = 10;
+    public int MaxConcurrent { get; set; } = 0;
     [Id(17)]
     public int CooldownSeconds { get; set; } = 5;
     [Id(18)]

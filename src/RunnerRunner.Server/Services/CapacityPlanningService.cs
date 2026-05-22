@@ -77,6 +77,7 @@ public sealed class RuleCapacityView
     public required string RuleId { get; init; }
     public required string RuleName { get; init; }
     public int ConfiguredLimit { get; init; }
+    public bool IsUnlimited { get; init; }
     public int ActiveCount { get; init; }
     public int RemainingSlots { get; init; }
     public List<RuleRunnerCapacityView> MappedRunners { get; init; } = [];
@@ -261,6 +262,7 @@ public sealed class CapacityPlanningService
             ProvisioningType.Webhook => Math.Max(0, rule.MaxConcurrent),
             _ => Math.Max(0, rule.DesiredCount)
         };
+        var isUnlimited = rule.Type == ProvisioningType.Webhook && configuredLimit == 0;
 
         var mappedRunners = runnerIds
             .Select(id => profilesById.TryGetValue(id, out var profile) ? profile : null)
@@ -274,8 +276,9 @@ public sealed class CapacityPlanningService
             RuleId = rule.Id,
             RuleName = rule.Name,
             ConfiguredLimit = configuredLimit,
+            IsUnlimited = isUnlimited,
             ActiveCount = activeCount,
-            RemainingSlots = Math.Max(configuredLimit - activeCount, 0),
+            RemainingSlots = isUnlimited ? int.MaxValue : Math.Max(configuredLimit - activeCount, 0),
             MappedRunners = mappedRunners
         };
     }
@@ -465,7 +468,7 @@ public sealed class CapacityPlanningService
         if (rule != null)
         {
             var ruleView = EvaluateRuleCapacity(rule, hosts, profilesById, instances, allEvents);
-            if (ruleView.RemainingSlots <= 0)
+            if (!ruleView.IsUnlimited && ruleView.RemainingSlots <= 0)
             {
                 return new EventCapacityView
                 {

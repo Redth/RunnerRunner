@@ -78,6 +78,61 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void EvaluateRuleCapacity_TreatsZeroWebhookMaxConcurrentAsUnlimited()
+    {
+        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 1 };
+        var profile = new RunnerProfile
+        {
+            Name = "docker-linux",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker
+        };
+        var rule = new ProvisioningRule
+        {
+            Name = "gh-webhook",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 0,
+            LabelMappings =
+            [
+                new LabelProfileMapping
+                {
+                    ProfileId = profile.Id,
+                    RequiredLabels = ["ubuntu"]
+                }
+            ]
+        };
+
+        var activeInstances = new[]
+        {
+            new RunnerInstance
+            {
+                RunnerName = "runner-a",
+                HostId = host.Id,
+                ProfileId = profile.Id,
+                ProvisioningMode = "dynamic",
+                WebhookEventId = "evt-a",
+                Status = RunnerInstanceStatus.Running
+            }
+        };
+        var events = new[]
+        {
+            new WebhookEvent { Id = "evt-a", BindingId = rule.Id, Provider = "GitHubActions", Action = "queued", Repository = "org/repo" }
+        };
+
+        var result = CapacityPlanningService.EvaluateRuleCapacity(
+            rule,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            activeInstances,
+            events);
+
+        Assert.True(result.IsUnlimited);
+        Assert.Equal(0, result.ConfiguredLimit);
+        Assert.Equal(int.MaxValue, result.RemainingSlots);
+    }
+
+    [Fact]
     public void BuildSnapshot_IncludesRuleOwnedRunnerDefinitions()
     {
         var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 2 };

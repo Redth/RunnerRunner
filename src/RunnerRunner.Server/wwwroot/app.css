@@ -4028,6 +4028,16 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     box-shadow: var(--shadow-sm);
 }
 
+.runner-definition-body {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.runner-collapse-toggle {
+    white-space: nowrap;
+}
+
 .runner-definition-card h3,
 .provisioning-rule-card h2,
 .rule-preview-card h3 {

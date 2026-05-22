@@ -71,6 +71,16 @@ public class RunnerDefinition
     public string? TargetGroupId { get; set; }
     [Id(26)]
     public List<string> RequiredHostCapabilities { get; set; } = [];
+    [Id(27)]
+    public int DesiredCount { get; set; } = 1;
+    [Id(28)]
+    public int MinReady { get; set; } = 0;
+    [Id(29)]
+    public int MaxInstances { get; set; } = 5;
+    [Id(30)]
+    public int ScaleDownDelaySeconds { get; set; } = 300;
+    [Id(31)]
+    public int CooldownSeconds { get; set; } = 5;
 
     public RunnerProfile ToProfile(ProvisioningRule rule, IEnumerable<RunnerInitStep>? initSteps = null)
     {

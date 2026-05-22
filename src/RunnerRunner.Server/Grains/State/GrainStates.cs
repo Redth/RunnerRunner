@@ -118,7 +118,7 @@ public class ProvisioningRuleConfig
     [Id(12)] public List<string> AllowedRepos { get; set; } = [];
     [Id(13)] public List<LabelMappingConfig> LabelMappings { get; set; } = [];
     [Id(14)] public string? DefaultProfileId { get; set; }
-    [Id(15)] public int MaxConcurrent { get; set; } = 10;
+    [Id(15)] public int MaxConcurrent { get; set; } = 0;
     [Id(16)] public int CooldownSeconds { get; set; } = 5;
 
     // Host matching
