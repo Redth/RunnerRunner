@@ -150,7 +150,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             ? _state.State.Config.MaxConcurrent
             : _state.State.Config.MaxInstances;
 
-        if (aliveIds.Count >= maxInstances)
+        if (maxInstances > 0 && aliveIds.Count >= maxInstances)
         {
             _logger.LogWarning("Rule {RuleId} at max capacity ({Max}) — cannot provision for job {JobId}",
                 this.GetPrimaryKeyString(), maxInstances, jobId);

@@ -58,7 +58,7 @@
 @if (showForm)
 {
     <div class="modal-backdrop fade show"></div>
-    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="provisioning-rule-title" @onclick="CancelEdit">
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="provisioning-rule-title">
         <div class="modal-dialog modal-xxl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
             <div class="modal-content provisioning-builder-modal">
                 <div class="modal-header">
@@ -127,104 +127,94 @@
                                 </div>
                             </section>
 
-                            <section class="rr-form-section">
-                                <div class="rr-form-section-title"><i class="bi bi-speedometer2"></i>Capacity and lifecycle</div>
-                                <div class="capacity-control-grid">
-                                    @if (editRule.Type == ProvisioningType.Static)
-                                    {
-                                        <div>
-                                            <label class="form-label" for="desiredCount">Desired runners</label>
-                                            <input id="desiredCount" type="number" class="form-control" @bind="editRule.DesiredCount" min="0" />
-                                            <div class="form-text">Keep this many runners alive for the rule.</div>
-                                        </div>
-                                    }
-                                    else if (editRule.Type == ProvisioningType.ScaleSet)
-                                    {
-                                        <div>
-                                            <label class="form-label" for="minReady">Warm runners</label>
-                                            <input id="minReady" type="number" class="form-control" @bind="editRule.MinReady" min="0" />
-                                        </div>
-                                        <div>
-                                            <label class="form-label" for="maxInstances">Max instances</label>
-                                            <input id="maxInstances" type="number" class="form-control" @bind="editRule.MaxInstances" min="1" />
-                                        </div>
-                                        <div>
-                                            <label class="form-label" for="scaleDownDelay">Scale-down delay</label>
-                                            <input id="scaleDownDelay" type="number" class="form-control" @bind="editRule.ScaleDownDelaySeconds" min="0" />
-                                            <div class="form-text">Seconds to wait before retiring idle capacity.</div>
-                                        </div>
-                                    }
-                                    else
-                                    {
-                                        <div>
-                                            <label class="form-label" for="maxConcurrent">Max concurrent jobs</label>
-                                            <input id="maxConcurrent" type="number" class="form-control" @bind="editRule.MaxConcurrent" min="1" />
-                                            <div class="form-text">Global concurrency for jobs accepted by this rule.</div>
-                                        </div>
-                                        <div>
-                                            <label class="form-label" for="webhookWarm">Warm runners</label>
-                                            <input id="webhookWarm" type="number" class="form-control" @bind="editRule.MinReady" min="0" />
-                                            <div class="form-text">Optional idle runners to pre-provision.</div>
-                                        </div>
-                                        <div>
-                                            <label class="form-label" for="cooldownSeconds">Cooldown seconds</label>
-                                            <input id="cooldownSeconds" type="number" class="form-control" @bind="editRule.CooldownSeconds" min="0" />
-                                        </div>
-                                    }
-                                </div>
-                            </section>
-
                             @if (editRule.Type == ProvisioningType.Webhook)
                             {
                                 <section class="rr-form-section">
                                     <div class="rr-form-section-title"><i class="bi bi-broadcast-pin"></i>Webhook scope</div>
-                                    <div class="row g-3">
-                                        <div class="col-lg-7">
-                                            <label class="form-label" for="webhookSecret">@(UsesGitHubAppCredential() ? "Webhook secret override" : "Webhook secret")</label>
-                                            <div class="input-group">
-                                                <input id="webhookSecret" class="form-control" @bind="editRule.WebhookSecret" autocomplete="off" />
-                                                <button class="btn btn-outline-secondary" type="button" @onclick="GenerateSecret">Generate</button>
-                                            </div>
-                                            @if (UsesGitHubAppCredential())
-                                            {
-                                                <div class="form-text">Leave blank to use the selected GitHub App credential's webhook secret.</div>
-                                            }
-                                        </div>
-                                        <div class="col-lg-5">
-                                            <label class="form-label">Webhook endpoint</label>
-                                            <div class="webhook-url-card">
-                                                @if (TryGetWebhookEndpoint(editRule.Provider, out var endpoint))
-                                                {
-                                                    <i class="bi bi-link-45deg"></i>
-                                                    <code>@endpoint</code>
-                                                }
-                                                else
-                                                {
-                                                    <i class="bi bi-exclamation-triangle"></i>
-                                                    <span>No webhook ingress for @editRule.Provider.</span>
-                                                }
-                                            </div>
-                                        </div>
-                                    </div>
-
                                     @if (UsesGitHubAppCredential())
                                     {
-                                        <div class="alert alert-info py-2 mt-3">
+                                        <div class="alert alert-info py-2">
                                             <i class="bi bi-github me-1"></i>
-                                            GitHub App webhooks can fan in from multiple orgs/repos. Runner API calls use the installation ID from each webhook event.
+                                            Using the selected GitHub App credential's webhook secret and endpoint setup. Runner API calls use the installation ID from each webhook event.
+                                        </div>
+
+                                        <details class="advanced-compatibility webhook-app-advanced">
+                                            <summary><i class="bi bi-sliders2"></i>Webhook secret override and endpoint</summary>
+                                            <p class="form-text mb-3">Only expand this if you need to override the GitHub App credential secret or inspect the endpoint URL.</p>
+                                            <div class="row g-3">
+                                                <div class="col-lg-7">
+                                                    <label class="form-label" for="webhookSecret">Webhook secret override</label>
+                                                    <div class="input-group">
+                                                        <input id="webhookSecret" class="form-control" @bind="editRule.WebhookSecret" autocomplete="off" />
+                                                        <button class="btn btn-outline-secondary" type="button" @onclick="GenerateSecret">Generate</button>
+                                                    </div>
+                                                    <div class="form-text">Leave blank to use the selected GitHub App credential's webhook secret.</div>
+                                                </div>
+                                                <div class="col-lg-5">
+                                                    <label class="form-label">Webhook endpoint</label>
+                                                    <div class="webhook-url-card">
+                                                        @if (TryGetWebhookEndpoint(editRule.Provider, out var endpoint))
+                                                        {
+                                                            <i class="bi bi-link-45deg"></i>
+                                                            <code>@endpoint</code>
+                                                        }
+                                                        else
+                                                        {
+                                                            <i class="bi bi-exclamation-triangle"></i>
+                                                            <span>No webhook ingress for @editRule.Provider.</span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </details>
+                                    }
+                                    else
+                                    {
+                                        <div class="row g-3">
+                                            <div class="col-lg-7">
+                                                <label class="form-label" for="webhookSecret">Webhook secret</label>
+                                                <div class="input-group">
+                                                    <input id="webhookSecret" class="form-control" @bind="editRule.WebhookSecret" autocomplete="off" />
+                                                    <button class="btn btn-outline-secondary" type="button" @onclick="GenerateSecret">Generate</button>
+                                                </div>
+                                            </div>
+                                            <div class="col-lg-5">
+                                                <label class="form-label">Webhook endpoint</label>
+                                                <div class="webhook-url-card">
+                                                    @if (TryGetWebhookEndpoint(editRule.Provider, out var endpoint))
+                                                    {
+                                                        <i class="bi bi-link-45deg"></i>
+                                                        <code>@endpoint</code>
+                                                    }
+                                                    else
+                                                    {
+                                                        <i class="bi bi-exclamation-triangle"></i>
+                                                        <span>No webhook ingress for @editRule.Provider.</span>
+                                                    }
+                                                </div>
+                                            </div>
                                         </div>
                                     }
 
                                     <div class="row g-3 mt-1">
                                         <div class="col-lg-6">
-                                            <label class="form-label">Allowed owners / orgs</label>
-                                            <div class="runner-chip-list">
-                                                @foreach (var org in editAllowedOrgs.ToList())
+                                             <label class="form-label">Allowed owners / orgs</label>
+                                             <div class="runner-chip-list">
+                                                @if (editAllowedOrgs.Count == 0)
                                                 {
-                                                    <span class="runner-chip">
-                                                        <i class="bi bi-buildings"></i>@org
-                                                        <button type="button" @onclick="() => editAllowedOrgs.Remove(org)" aria-label="Remove owner @org"><i class="bi bi-x"></i></button>
+                                                    <span class="runner-chip runner-chip-placeholder" title="No owner or org filter">
+                                                        <i class="bi bi-buildings"></i>Any
                                                     </span>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var org in editAllowedOrgs.ToList())
+                                                    {
+                                                        <span class="runner-chip">
+                                                            <i class="bi bi-buildings"></i>@org
+                                                            <button type="button" @onclick="() => editAllowedOrgs.Remove(org)" aria-label="Remove owner @org"><i class="bi bi-x"></i></button>
+                                                        </span>
+                                                    }
                                                 }
                                             </div>
                                             <div class="input-group input-group-sm mt-2">
@@ -237,14 +227,23 @@
                                             </div>
                                         </div>
                                         <div class="col-lg-6">
-                                            <label class="form-label">Allowed repos</label>
-                                            <div class="runner-chip-list">
-                                                @foreach (var repo in editAllowedRepos.ToList())
+                                             <label class="form-label">Allowed repos</label>
+                                             <div class="runner-chip-list">
+                                                @if (editAllowedRepos.Count == 0)
                                                 {
-                                                    <span class="runner-chip">
-                                                        <i class="bi bi-git"></i>@repo
-                                                        <button type="button" @onclick="() => editAllowedRepos.Remove(repo)" aria-label="Remove repo @repo"><i class="bi bi-x"></i></button>
+                                                    <span class="runner-chip runner-chip-placeholder" title="No repository filter">
+                                                        <i class="bi bi-git"></i>Any
                                                     </span>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var repo in editAllowedRepos.ToList())
+                                                    {
+                                                        <span class="runner-chip">
+                                                            <i class="bi bi-git"></i>@repo
+                                                            <button type="button" @onclick="() => editAllowedRepos.Remove(repo)" aria-label="Remove repo @repo"><i class="bi bi-x"></i></button>
+                                                        </span>
+                                                    }
                                                 }
                                             </div>
                                             <div class="input-group input-group-sm mt-2">
@@ -302,6 +301,26 @@
                                 </details>
                             </section>
 
+                            @if (editRule.Type == ProvisioningType.Webhook)
+                            {
+                                <section class="rr-form-section">
+                                    <details class="global-host-routing-panel global-capacity-panel">
+                                        <summary>
+                                            <span><i class="bi bi-speedometer2"></i>Global capacity</span>
+                                            <small>@GetGlobalCapacityDisplay()</small>
+                                        </summary>
+                                        <p class="section-help mb-3">Optional rule-wide concurrency across all runner targets. Leave it at 0 for unlimited jobs, constrained only by target and host capacity.</p>
+                                        <div class="capacity-control-grid">
+                                            <div>
+                                                <label class="form-label" for="maxConcurrent">Max concurrent jobs</label>
+                                                <input id="maxConcurrent" type="number" class="form-control" @bind="editRule.MaxConcurrent" min="0" />
+                                                <div class="form-text">0 means unlimited across every target in this rule.</div>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </section>
+                            }
+
                             <section class="rr-form-section runner-definition-section">
                                 <div class="section-title-row">
                                     <div>
@@ -317,27 +336,39 @@
                                 <div class="runner-definition-stack">
                                     @for (var runnerIndex = 0; runnerIndex < editRule.RunnerDefinitions.Count; runnerIndex++)
                                     {
-                                        var idx = runnerIndex;
-                                        var runner = editRule.RunnerDefinitions[idx];
-                                        EnsureRunnerEditorState(runner);
-                                        <article class="runner-definition-card" @key="runner.Id">
-                                            <div class="runner-definition-header">
-                                                <div>
+                                         var idx = runnerIndex;
+                                         var runner = editRule.RunnerDefinitions[idx];
+                                         EnsureRunnerEditorState(runner);
+                                         var isCollapsed = IsRunnerDefinitionCollapsed(runner);
+                                         <article class="runner-definition-card" @key="runner.Id">
+                                             <div class="runner-definition-header">
+                                                 <div>
                                                     <div class="runner-card-kicker">@GetRunnerCardKicker(runner)</div>
                                                     <h3>@(string.IsNullOrWhiteSpace(runner.Name) ? "Unnamed runner" : runner.Name)</h3>
-                                                </div>
-                                                <div class="runner-definition-actions">
-                                                    <span class="badge @(runner.Enabled ? "bg-success" : "bg-secondary")">@(runner.Enabled ? "Enabled" : "Disabled")</span>
-                                                    @if (editRule.Type == ProvisioningType.Webhook && editRule.RunnerDefinitions.Count > 1)
-                                                    {
-                                                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveRunnerDefinition(idx)" aria-label="Remove runner @runner.Name"><i class="bi bi-trash3"></i></button>
-                                                    }
-                                                </div>
-                                            </div>
+                                                 </div>
+                                                 <div class="runner-definition-actions">
+                                                     <span class="badge @(runner.Enabled ? "bg-success" : "bg-secondary")">@(runner.Enabled ? "Enabled" : "Disabled")</span>
+                                                     <button class="btn btn-sm btn-outline-secondary runner-collapse-toggle"
+                                                             type="button"
+                                                             @onclick="() => ToggleRunnerDefinitionCollapsed(runner)"
+                                                             aria-expanded="@(!isCollapsed)"
+                                                             aria-controls="runner-body-@runner.Id">
+                                                         <i class="bi @(isCollapsed ? "bi-chevron-down" : "bi-chevron-up")"></i>
+                                                         @(isCollapsed ? "Expand" : "Collapse")
+                                                     </button>
+                                                     @if (editRule.Type == ProvisioningType.Webhook && editRule.RunnerDefinitions.Count > 1)
+                                                     {
+                                                         <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveRunnerDefinition(idx)" aria-label="Remove runner @runner.Name"><i class="bi bi-trash3"></i></button>
+                                                     }
+                                                 </div>
+                                             </div>
 
-                                            <div class="row g-3">
-                                                <div class="col-lg-3">
-                                                    <label class="form-label" for="runnerName-@runner.Id">Target name</label>
+                                             @if (!isCollapsed)
+                                             {
+                                                 <div id="runner-body-@runner.Id" class="runner-definition-body">
+                                             <div class="row g-3">
+                                                 <div class="col-lg-3">
+                                                     <label class="form-label" for="runnerName-@runner.Id">Target name</label>
                                                     <input id="runnerName-@runner.Id" class="form-control" @bind="runner.Name" />
                                                 </div>
                                                 <div class="col-lg-3">
@@ -417,11 +448,71 @@
                                                         }
                                                     </div>
                                                 </details>
-                                            }
+                                             }
 
-                                            <div class="runner-subsection">
-                                                <div class="runner-subsection-heading"><span><i class="bi bi-hdd-stack"></i>Execution shape</span></div>
-                                                <div class="row g-3">
+                                             <div class="runner-subsection">
+                                                 <div class="runner-subsection-heading"><span><i class="bi bi-speedometer2"></i>Capacity and lifecycle</span></div>
+                                                 <div class="capacity-control-grid">
+                                                     @if (editRule.Type == ProvisioningType.Static)
+                                                     {
+                                                         <div>
+                                                             <label class="form-label" for="desiredCount-@runner.Id">Desired runners</label>
+                                                             <input id="desiredCount-@runner.Id" type="number" class="form-control" @bind="runner.DesiredCount" min="0" />
+                                                             <div class="form-text">Keep this many runners alive for this target.</div>
+                                                         </div>
+                                                     }
+                                                     else if (editRule.Type == ProvisioningType.ScaleSet)
+                                                     {
+                                                         <div>
+                                                             <label class="form-label" for="minReady-@runner.Id">Warm runners</label>
+                                                             <input id="minReady-@runner.Id" type="number" class="form-control" @bind="runner.MinReady" min="0" />
+                                                         </div>
+                                                         <div>
+                                                             <label class="form-label" for="maxInstances-@runner.Id">Max instances</label>
+                                                             <input id="maxInstances-@runner.Id" type="number" class="form-control" @bind="runner.MaxInstances" min="1" />
+                                                         </div>
+                                                         <div>
+                                                             <label class="form-label" for="scaleDownDelay-@runner.Id">Scale-down delay</label>
+                                                             <input id="scaleDownDelay-@runner.Id" type="number" class="form-control" @bind="runner.ScaleDownDelaySeconds" min="0" />
+                                                             <div class="form-text">Seconds to wait before retiring idle target capacity.</div>
+                                                         </div>
+                                                     }
+                                                     else
+                                                     {
+                                                         <div>
+                                                             <label class="form-label" for="webhookWarm-@runner.Id">Warm runners</label>
+                                                             <input id="webhookWarm-@runner.Id" type="number" class="form-control" @bind="runner.MinReady" min="0" />
+                                                             <div class="form-text">Optional idle runners to pre-provision for this target.</div>
+                                                         </div>
+                                                         <div>
+                                                             <label class="form-label" for="cooldownSeconds-@runner.Id">Cooldown seconds</label>
+                                                             <input id="cooldownSeconds-@runner.Id" type="number" class="form-control" @bind="runner.CooldownSeconds" min="0" />
+                                                             <div class="form-text">Delay before this target retires idle capacity.</div>
+                                                         </div>
+                                                     }
+                                                 </div>
+
+                                                 <div class="lifecycle-choice-grid mt-3" role="radiogroup" aria-label="Runner lifecycle">
+                                                     <label class="lifecycle-choice @(runner.Ephemeral ? "selected" : "")" for="oneJob-@runner.Id">
+                                                         <input id="oneJob-@runner.Id" type="radio" name="lifecycle-@runner.Id" checked="@runner.Ephemeral" @onchange="() => runner.Ephemeral = true" />
+                                                         <span>
+                                                             <strong>One-job runner</strong>
+                                                             <small>Recommended. Fresh registration/resource per job, then deregister and dispose.</small>
+                                                         </span>
+                                                     </label>
+                                                     <label class="lifecycle-choice @(!runner.Ephemeral ? "selected" : "")" for="reusable-@runner.Id">
+                                                         <input id="reusable-@runner.Id" type="radio" name="lifecycle-@runner.Id" checked="@(!runner.Ephemeral)" @onchange="() => runner.Ephemeral = false" />
+                                                         <span>
+                                                             <strong>Reusable runner</strong>
+                                                             <small>Explicit warm/static mode. Local state can persist between jobs.</small>
+                                                         </span>
+                                                     </label>
+                                                 </div>
+                                             </div>
+
+                                             <div class="runner-subsection">
+                                                 <div class="runner-subsection-heading"><span><i class="bi bi-hdd-stack"></i>Execution shape</span></div>
+                                                 <div class="row g-3">
                                                     <div class="col-lg-3">
                                                         <label class="form-label" for="platform-@runner.Id">Host platform</label>
                                                         <select id="platform-@runner.Id" class="form-select" @bind="runner.RequiredHostPlatform">
@@ -454,24 +545,7 @@
                                                         <input id="runnerAgentVersion-@runner.Id" class="form-control" @bind="runner.RunnerAgentVersion" placeholder="latest" />
                                                     </div>
                                                 </div>
-
-                                                <div class="lifecycle-choice-grid mt-3" role="radiogroup" aria-label="Runner lifecycle">
-                                                    <label class="lifecycle-choice @(runner.Ephemeral ? "selected" : "")" for="oneJob-@runner.Id">
-                                                        <input id="oneJob-@runner.Id" type="radio" name="lifecycle-@runner.Id" checked="@runner.Ephemeral" @onchange="() => runner.Ephemeral = true" />
-                                                        <span>
-                                                            <strong>One-job runner</strong>
-                                                            <small>Recommended. Fresh registration/resource per job, then deregister and dispose.</small>
-                                                        </span>
-                                                    </label>
-                                                    <label class="lifecycle-choice @(!runner.Ephemeral ? "selected" : "")" for="reusable-@runner.Id">
-                                                        <input id="reusable-@runner.Id" type="radio" name="lifecycle-@runner.Id" checked="@(!runner.Ephemeral)" @onchange="() => runner.Ephemeral = false" />
-                                                        <span>
-                                                            <strong>Reusable runner</strong>
-                                                            <small>Explicit warm/static mode. Local state can persist between jobs.</small>
-                                                        </span>
-                                                    </label>
-                                                </div>
-                                            </div>
+                                             </div>
 
                                             <div class="runner-subsection">
                                                 <div class="runner-subsection-heading"><span><i class="bi bi-hdd-network"></i>Host routing for this target</span></div>
@@ -836,9 +910,11 @@
                                                         <input type="checkbox" @bind="runner.AllowWebhookImageTagOverride" />
                                                         <span><strong>Allow image tag override</strong><small>Honor <code>rr-image-tag=&lt;tag&gt;</code> labels for this runner's image tag only.</small></span>
                                                     </label>
-                                                </div>
-                                            </div>
-                                        </article>
+                                                 </div>
+                                             </div>
+                                                 </div>
+                                             }
+                                         </article>
                                     }
                                 </div>
                             </section>
@@ -854,7 +930,7 @@
                                 </div>
                                 <div class="preview-list">
                                     <div><span>Provider</span><strong>@GetProviderLabel(editRule.Provider)</strong></div>
-                                    <div><span>Capacity</span><strong>@GetScaleDisplay(editRule)</strong></div>
+                                    <div><span>Capacity</span><strong>@GetEditCapacityDisplay()</strong></div>
                                     <div><span>Targets</span><strong>@editRule.RunnerDefinitions.Count(r => r.Enabled)</strong></div>
                                     <div><span>Global host route</span><strong>@GetEditTargetDisplay()</strong></div>
                                 </div>
@@ -1084,6 +1160,7 @@ else
     private readonly Dictionary<string, bool> envOverrideSecretInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<string>> imageTagSuggestions = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> imageTagSuggestionLookups = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> collapsedRunnerDefinitionIds = new(StringComparer.OrdinalIgnoreCase);
     private bool showImagePicker;
     private RunnerDefinition? imagePickerRunner;
     private RegistryType imagePickerType = RegistryType.Docker;
@@ -1121,7 +1198,7 @@ else
             Name = "",
             Type = ProvisioningType.Webhook,
             Provider = RunnerProvider.GitHubActions,
-            MaxConcurrent = 10,
+            MaxConcurrent = 0,
             CooldownSeconds = 5,
             RunnerDefinitions = [CreateDefaultRunnerDefinition("Linux Docker", includeCatchAllMatcher: false)]
         };
@@ -1138,6 +1215,7 @@ else
         editRule = CloneRule(rule);
         HydrateLegacyRunnerDefinitions(editRule);
         EnsureRunnersForType();
+        BackfillSingleTargetCapacityFromRule(editRule);
 
         editAllowedOrgs = [.. editRule.AllowedOrgs];
         editAllowedRepos = [.. editRule.AllowedRepos];
@@ -1167,6 +1245,7 @@ else
         envOverrideKeyInputs.Clear();
         envOverrideValueInputs.Clear();
         envOverrideSecretInputs.Clear();
+        collapsedRunnerDefinitionIds.Clear();
         selectedWorkflowTargetId = null;
     }
 
@@ -1189,6 +1268,7 @@ else
         EnsureRunnersForType();
 
         NormalizeRunnerDefinitions();
+        ApplyTargetCapacityToRule();
         if (!ValidateRunnerDefinitions())
             return;
 
@@ -1302,6 +1382,11 @@ else
                 .Where(capability => !string.IsNullOrWhiteSpace(capability))
                 .Select(capability => capability.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)];
+            runner.DesiredCount = Math.Max(0, runner.DesiredCount);
+            runner.MinReady = Math.Max(0, runner.MinReady);
+            runner.MaxInstances = Math.Max(1, runner.MaxInstances);
+            runner.ScaleDownDelaySeconds = Math.Max(0, runner.ScaleDownDelaySeconds);
+            runner.CooldownSeconds = Math.Max(0, runner.CooldownSeconds);
             runner.EnvironmentOverrides = runner.EnvironmentOverrides
                 .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key))
                 .ToDictionary(kvp => kvp.Key.Trim(), kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
@@ -1324,6 +1409,35 @@ else
         }
 
         editRule.RunnerDefinitions = [.. editRule.RunnerDefinitions.Where(runner => !string.IsNullOrWhiteSpace(runner.Name))];
+    }
+
+    private void ApplyTargetCapacityToRule()
+    {
+        editRule.MaxConcurrent = Math.Max(0, editRule.MaxConcurrent);
+        if (editRule.RunnerDefinitions.Count == 0)
+            return;
+
+        var firstRunner = editRule.RunnerDefinitions[0];
+        if (editRule.Type == ProvisioningType.Static)
+        {
+            editRule.DesiredCount = firstRunner.DesiredCount;
+            return;
+        }
+
+        if (editRule.Type == ProvisioningType.ScaleSet)
+        {
+            editRule.MinReady = firstRunner.MinReady;
+            editRule.MaxInstances = firstRunner.MaxInstances;
+            editRule.ScaleDownDelaySeconds = firstRunner.ScaleDownDelaySeconds;
+            return;
+        }
+
+        editRule.MinReady = editRule.RunnerDefinitions.Where(runner => runner.Enabled).Sum(runner => runner.MinReady);
+        editRule.CooldownSeconds = editRule.RunnerDefinitions
+            .Where(runner => runner.Enabled)
+            .Select(runner => runner.CooldownSeconds)
+            .DefaultIfEmpty(firstRunner.CooldownSeconds)
+            .Max();
     }
 
     private List<LabelProfileMapping> BuildLegacyLabelMappings(IEnumerable<RunnerDefinition> runners)
@@ -1384,6 +1498,35 @@ else
             runner.Matchers.Add(new RunnerLabelMatcher { RequiredLabels = ["*"], Priority = 0 });
 
         return runner;
+    }
+
+    private static void BackfillSingleTargetCapacityFromRule(ProvisioningRule rule)
+    {
+        if (rule.RunnerDefinitions.Count != 1)
+            return;
+
+        var runner = rule.RunnerDefinitions[0];
+        var shouldBackfill = rule.Type switch
+        {
+            ProvisioningType.Static => runner.DesiredCount == 1 && rule.DesiredCount != 1,
+            ProvisioningType.ScaleSet => runner.MinReady == 0
+                && runner.MaxInstances == 5
+                && runner.ScaleDownDelaySeconds == 300
+                && (rule.MinReady != 0 || rule.MaxInstances != 5 || rule.ScaleDownDelaySeconds != 300),
+            ProvisioningType.Webhook => runner.MinReady == 0
+                && runner.CooldownSeconds == 5
+                && (rule.MinReady != 0 || rule.CooldownSeconds != 5),
+            _ => false
+        };
+
+        if (!shouldBackfill)
+            return;
+
+        runner.DesiredCount = Math.Max(0, rule.DesiredCount);
+        runner.MinReady = Math.Max(0, rule.MinReady);
+        runner.MaxInstances = Math.Max(1, rule.MaxInstances);
+        runner.ScaleDownDelaySeconds = Math.Max(0, rule.ScaleDownDelaySeconds);
+        runner.CooldownSeconds = Math.Max(0, rule.CooldownSeconds);
     }
 
     private void HydrateLegacyRunnerDefinitions(ProvisioningRule rule)
@@ -1623,9 +1766,19 @@ else
         editRule.RunnerDefinitions.Add(runner);
         ApplyProviderDefaultsToRunnerGroups();
         EnsureRunnerEditorState(runner);
+        collapsedRunnerDefinitionIds.Remove(runner.Id);
         selectedWorkflowTargetId = runner.Id;
         foreach (var matcher in runner.Matchers)
             EnsureMatcherEditorState(matcher);
+    }
+
+    private bool IsRunnerDefinitionCollapsed(RunnerDefinition runner) =>
+        collapsedRunnerDefinitionIds.Contains(runner.Id);
+
+    private void ToggleRunnerDefinitionCollapsed(RunnerDefinition runner)
+    {
+        if (!collapsedRunnerDefinitionIds.Remove(runner.Id))
+            collapsedRunnerDefinitionIds.Add(runner.Id);
     }
 
     private void OpenImagePicker(RunnerDefinition runner, RegistryType registryType)
@@ -1801,6 +1954,7 @@ else
             return;
 
         editRule.RunnerDefinitions.RemoveAt(index);
+        collapsedRunnerDefinitionIds.RemoveWhere(id => !editRule.RunnerDefinitions.Any(r => string.Equals(r.Id, id, StringComparison.OrdinalIgnoreCase)));
         if (!editRule.RunnerDefinitions.Any(r => string.Equals(r.Id, selectedWorkflowTargetId, StringComparison.OrdinalIgnoreCase)))
             selectedWorkflowTargetId = editRule.RunnerDefinitions.FirstOrDefault(r => r.Enabled)?.Id;
     }
@@ -2539,14 +2693,35 @@ else
         return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Any target host";
     }
 
+    private string GetGlobalCapacityDisplay() =>
+        editRule.MaxConcurrent <= 0
+            ? "Unlimited across all targets"
+            : $"{editRule.MaxConcurrent} across all targets";
+
+    private string GetEditCapacityDisplay()
+    {
+        var firstRunner = editRule.RunnerDefinitions.FirstOrDefault();
+        return editRule.Type switch
+        {
+            ProvisioningType.Static => $"{firstRunner?.DesiredCount ?? editRule.DesiredCount} desired",
+            ProvisioningType.ScaleSet => $"{firstRunner?.MinReady ?? editRule.MinReady} warm / {firstRunner?.MaxInstances ?? editRule.MaxInstances} max",
+            ProvisioningType.Webhook => $"{FormatMaxConcurrent(editRule.MaxConcurrent)} · {editRule.RunnerDefinitions.Where(runner => runner.Enabled).Sum(runner => runner.MinReady)} warm",
+            ProvisioningType.Scheduled => $"{firstRunner?.DesiredCount ?? editRule.DesiredCount} desired",
+            _ => "Configured"
+        };
+    }
+
     private static string GetScaleDisplay(ProvisioningRule rule) => rule.Type switch
     {
         ProvisioningType.Static => $"{rule.DesiredCount} desired",
         ProvisioningType.ScaleSet => $"{rule.MinReady} warm / {rule.MaxInstances} max",
-        ProvisioningType.Webhook => $"{rule.MaxConcurrent} max · {rule.MinReady} warm",
+        ProvisioningType.Webhook => $"{FormatMaxConcurrent(rule.MaxConcurrent)} · {rule.MinReady} warm",
         ProvisioningType.Scheduled => $"{rule.DesiredCount} desired",
         _ => "Configured"
     };
+
+    private static string FormatMaxConcurrent(int maxConcurrent) =>
+        maxConcurrent <= 0 ? "Unlimited max" : $"{maxConcurrent} max";
 
     private static string GetTypeLabel(ProvisioningType type) => type switch
     {
@@ -2671,6 +2846,11 @@ else
         Labels = [.. runner.Labels],
         TargetGroupId = runner.TargetGroupId,
         RequiredHostCapabilities = [.. runner.RequiredHostCapabilities],
+        DesiredCount = runner.DesiredCount,
+        MinReady = runner.MinReady,
+        MaxInstances = runner.MaxInstances,
+        ScaleDownDelaySeconds = runner.ScaleDownDelaySeconds,
+        CooldownSeconds = runner.CooldownSeconds,
         RunnerGroup = runner.RunnerGroup,
         Ephemeral = runner.Ephemeral,
         ProviderConfig = new Dictionary<string, string>(runner.ProviderConfig),

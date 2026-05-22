@@ -49,7 +49,7 @@ public class WebhookBinding
     public string WebhookSecret { get; set; } = "";
 
     [Id(9)]
-    public int MaxConcurrentJobs { get; set; } = 10;
+    public int MaxConcurrentJobs { get; set; } = 0;
     [Id(10)]
     public int CooldownSeconds { get; set; } = 5;
 
