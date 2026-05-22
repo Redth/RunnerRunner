@@ -9,6 +9,7 @@
 @inject IJSRuntime JS
 @inject CapacityPlanningService CapacityService
 @inject ProvisioningRuleGrainSyncService RuleGrainSync
+@inject IRegistryCatalogService RegistryCatalog
 
 <PageTitle>Provisioning Rules - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -520,13 +521,22 @@
                                                     <div class="col-lg-8">
                                                         <label class="form-label">Required HostWorker capabilities</label>
                                                         <div class="runner-chip-list mb-2">
-                                                            @foreach (var capability in runner.RequiredHostCapabilities.ToList())
+                                                            @if (runner.RequiredHostCapabilities.Count == 0)
                                                             {
-                                                                var capabilityValue = capability;
-                                                                <span class="runner-chip">
-                                                                    <i class="bi bi-stars"></i>@capabilityValue
-                                                                    <button type="button" @onclick="() => runner.RequiredHostCapabilities.Remove(capabilityValue)" aria-label="Remove required host capability @capabilityValue"><i class="bi bi-x"></i></button>
+                                                                <span class="runner-chip runner-chip-placeholder" title="No required HostWorker capability filter">
+                                                                    <i class="bi bi-stars"></i>any
                                                                 </span>
+                                                            }
+                                                            else
+                                                            {
+                                                                @foreach (var capability in runner.RequiredHostCapabilities.ToList())
+                                                                {
+                                                                    var capabilityValue = capability;
+                                                                    <span class="runner-chip">
+                                                                        <i class="bi bi-stars"></i>@capabilityValue
+                                                                        <button type="button" @onclick="() => runner.RequiredHostCapabilities.Remove(capabilityValue)" aria-label="Remove required host capability @capabilityValue"><i class="bi bi-x"></i></button>
+                                                                    </span>
+                                                                }
                                                             }
                                                         </div>
                                                         <div class="input-group input-group-sm runner-label-input">
@@ -581,31 +591,31 @@
                                                         </div>
                                                     }
                                                     <div class="row g-3">
-                                                        <div class="col-lg-3">
+                                                        <div class="col-lg-4">
                                                             <label class="form-label" for="dockerRegistry-@runner.Id">Registry</label>
                                                             <SmartAutocomplete Value="@docker.RegistryUrl"
-                                                                               ValueChanged="value => docker.RegistryUrl = value ?? string.Empty"
+                                                                               ValueChanged="@(value => OnDockerRegistryChangedAsync(docker, value))"
                                                                                Suggestions="@GetRegistrySuggestions(RegistryType.Docker)"
                                                                                Placeholder="ghcr.io"
                                                                                AriaLabel="Docker registry" />
                                                         </div>
-                                                        <div class="col-lg-4">
+                                                        <div class="col-lg-8">
                                                             <label class="form-label" for="dockerImage-@runner.Id">Image</label>
                                                             <SmartAutocomplete Value="@docker.ImageName"
-                                                                               ValueChanged="value => docker.ImageName = value ?? string.Empty"
+                                                                               ValueChanged="@(value => OnDockerImageNameChangedAsync(docker, value))"
                                                                                Suggestions="@GetImageNameSuggestions(RegistryType.Docker)"
                                                                                Placeholder="org/runner-image"
                                                                                AriaLabel="Docker image" />
                                                         </div>
-                                                        <div class="col-lg-2">
+                                                        <div class="col-lg-8">
                                                             <label class="form-label" for="dockerTag-@runner.Id">Tag</label>
                                                             <SmartAutocomplete Value="@docker.Tag"
                                                                                ValueChanged="value => docker.Tag = value ?? string.Empty"
-                                                                               Suggestions="@GetImageTagSuggestions(RegistryType.Docker)"
+                                                                               Suggestions="@GetImageTagSuggestions(RegistryType.Docker, docker.RegistryUrl, docker.ImageName, docker.Tag)"
                                                                                Placeholder="latest"
                                                                                AriaLabel="Docker image tag" />
                                                         </div>
-                                                        <div class="col-lg-3">
+                                                        <div class="col-lg-4">
                                                             <label class="form-label" for="pullPolicy-@runner.Id">Pull policy</label>
                                                             <select id="pullPolicy-@runner.Id" class="form-select" @bind="docker.PullPolicy">
                                                                 @foreach (var policy in Enum.GetValues<PullPolicy>())
@@ -631,7 +641,7 @@
                                                         <div class="col-lg-3">
                                                             <label class="form-label" for="tartRegistry-@runner.Id">OCI registry</label>
                                                             <SmartAutocomplete Value="@tart.RegistryUrl"
-                                                                               ValueChanged="value => tart.RegistryUrl = value ?? string.Empty"
+                                                                               ValueChanged="@(value => OnTartRegistryChangedAsync(tart, value))"
                                                                                Suggestions="@GetRegistrySuggestions(RegistryType.Tart)"
                                                                                Placeholder="ghcr.io"
                                                                                AriaLabel="Tart OCI registry" />
@@ -639,7 +649,7 @@
                                                         <div class="col-lg-4">
                                                             <label class="form-label" for="tartImage-@runner.Id">Image</label>
                                                             <SmartAutocomplete Value="@tart.ImageName"
-                                                                               ValueChanged="value => tart.ImageName = value ?? string.Empty"
+                                                                               ValueChanged="@(value => OnTartImageNameChangedAsync(tart, value))"
                                                                                Suggestions="@GetImageNameSuggestions(RegistryType.Tart)"
                                                                                Placeholder="cirruslabs/macos-sequoia-base"
                                                                                AriaLabel="Tart image" />
@@ -648,7 +658,7 @@
                                                             <label class="form-label" for="tartTag-@runner.Id">Tag</label>
                                                             <SmartAutocomplete Value="@tart.Tag"
                                                                                ValueChanged="value => tart.Tag = value ?? string.Empty"
-                                                                               Suggestions="@GetImageTagSuggestions(RegistryType.Tart)"
+                                                                               Suggestions="@GetImageTagSuggestions(RegistryType.Tart, tart.RegistryUrl, tart.ImageName, tart.Tag)"
                                                                                Placeholder="latest"
                                                                                AriaLabel="Tart image tag" />
                                                         </div>
@@ -892,7 +902,7 @@
                                             <div class="runner-chip-list">
                                                 @foreach (var targetKey in editRule.GetValidRunnerTargetKeys())
                                                 {
-                                                    <span class="runner-chip"><i class="bi bi-bullseye"></i>@targetKey</span>
+                                                    <span class="runner-chip" title="@targetKey"><i class="bi bi-bullseye"></i><span class="runner-chip-text">@targetKey</span></span>
                                                 }
                                             </div>
                                         </div>
@@ -1070,6 +1080,8 @@ else
     private readonly Dictionary<string, string> envOverrideKeyInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> envOverrideValueInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> envOverrideSecretInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<string>> imageTagSuggestions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> imageTagSuggestionLookups = new(StringComparer.OrdinalIgnoreCase);
     private bool showImagePicker;
     private RunnerDefinition? imagePickerRunner;
     private RegistryType imagePickerType = RegistryType.Docker;
@@ -1098,7 +1110,7 @@ else
             .ToList();
     }
 
-    private void ShowCreateForm()
+    private async Task ShowCreateForm()
     {
         editRule = new ProvisioningRule
         {
@@ -1114,9 +1126,10 @@ else
         PrepareEditorState();
         isEditing = false;
         showForm = true;
+        await LoadImageTagSuggestionsForRuleAsync();
     }
 
-    private void EditRule(ProvisioningRule rule)
+    private async Task EditRule(ProvisioningRule rule)
     {
         editRule = CloneRule(rule);
         HydrateLegacyRunnerDefinitions(editRule);
@@ -1132,6 +1145,7 @@ else
         PrepareEditorState();
         isEditing = true;
         showForm = true;
+        await LoadImageTagSuggestionsForRuleAsync();
     }
 
     private void ResetFormState()
@@ -1623,10 +1637,10 @@ else
         imagePickerRunner = null;
     }
 
-    private Task ApplyImagePickerSelection(ImagePickerSelection selection)
+    private async Task ApplyImagePickerSelection(ImagePickerSelection selection)
     {
         if (imagePickerRunner is null)
-            return Task.CompletedTask;
+            return;
 
         if (selection.RegistryType == RegistryType.Docker)
         {
@@ -1634,6 +1648,7 @@ else
             docker.RegistryUrl = selection.RegistryUrl;
             docker.ImageName = selection.ImageName;
             docker.Tag = selection.Tag;
+            await LoadDockerTagSuggestionsAsync(docker);
         }
         else
         {
@@ -1641,10 +1656,10 @@ else
             tart.RegistryUrl = selection.RegistryUrl;
             tart.ImageName = selection.ImageName;
             tart.Tag = selection.Tag;
+            await LoadTartTagSuggestionsAsync(tart);
         }
 
         CloseImagePicker();
-        return Task.CompletedTask;
     }
 
     private string? GetImagePickerRegistryUrl() =>
@@ -1791,6 +1806,87 @@ else
             runner.RequiredHostCapabilities.Add(value);
 
         runnerHostCapabilityInputs[runner.Id] = "";
+    }
+
+    private async Task OnDockerRegistryChangedAsync(DockerImageConfig docker, string? value)
+    {
+        docker.RegistryUrl = value ?? string.Empty;
+        await LoadDockerTagSuggestionsAsync(docker);
+    }
+
+    private async Task OnDockerImageNameChangedAsync(DockerImageConfig docker, string? value)
+    {
+        docker.ImageName = value ?? string.Empty;
+        await LoadDockerTagSuggestionsAsync(docker);
+    }
+
+    private async Task OnTartRegistryChangedAsync(TartImageConfig tart, string? value)
+    {
+        tart.RegistryUrl = value ?? string.Empty;
+        await LoadTartTagSuggestionsAsync(tart);
+    }
+
+    private async Task OnTartImageNameChangedAsync(TartImageConfig tart, string? value)
+    {
+        tart.ImageName = value ?? string.Empty;
+        await LoadTartTagSuggestionsAsync(tart);
+    }
+
+    private async Task LoadImageTagSuggestionsForRuleAsync()
+    {
+        foreach (var runner in editRule.RunnerDefinitions)
+        {
+            if (runner.ExecutionBackend == ExecutionBackend.Docker && runner.DockerConfig is { } docker)
+                await LoadDockerTagSuggestionsAsync(docker);
+            else if (runner.ExecutionBackend == ExecutionBackend.Tart && runner.TartConfig is { } tart)
+                await LoadTartTagSuggestionsAsync(tart);
+        }
+    }
+
+    private Task LoadDockerTagSuggestionsAsync(DockerImageConfig docker) =>
+        LoadImageTagSuggestionsAsync(
+            RegistryType.Docker,
+            docker.RegistryUrl,
+            docker.ImageName,
+            ResolveDockerRegistryCredential(docker));
+
+    private Task LoadTartTagSuggestionsAsync(TartImageConfig tart) =>
+        LoadImageTagSuggestionsAsync(
+            RegistryType.Tart,
+            tart.RegistryUrl,
+            tart.ImageName,
+            ResolveRegistryCredential(RegistryType.Tart, tart.RegistryUrl, tart.ImageName));
+
+    private async Task LoadImageTagSuggestionsAsync(
+        RegistryType registryType,
+        string? registryUrl,
+        string? imageName,
+        RegistryCredential? registry)
+    {
+        var normalizedRegistry = NormalizeRegistryUrl(registryUrl);
+        var normalizedImage = NormalizeImageName(imageName);
+        if (string.IsNullOrWhiteSpace(normalizedRegistry) || string.IsNullOrWhiteSpace(normalizedImage))
+            return;
+
+        var key = BuildImageTagSuggestionKey(registryType, normalizedRegistry, normalizedImage);
+        if (imageTagSuggestions.ContainsKey(key) || !imageTagSuggestionLookups.Add(key))
+            return;
+
+        try
+        {
+            registry ??= ResolveRegistryCredential(registryType, registryUrl, imageName);
+            if (registry is null)
+                return;
+
+            var tags = await RegistryCatalog.GetTagsAsync(registry, normalizedImage);
+            imageTagSuggestions[key] = OrderedDistinct(tags.Tags.Select(tag => tag.Name));
+        }
+        finally
+        {
+            imageTagSuggestionLookups.Remove(key);
+        }
+
+        StateHasChanged();
     }
 
     private void OnRunnerLabelKeyDown(KeyboardEventArgs e, RunnerDefinition runner)
@@ -2145,8 +2241,15 @@ else
     private IReadOnlyList<string> GetImageNameSuggestions(RegistryType registryType) =>
         OrderedDistinct(GetImageConfigs(registryType).Select(config => config.ImageName));
 
-    private IReadOnlyList<string> GetImageTagSuggestions(RegistryType registryType) =>
-        OrderedDistinct(GetImageConfigs(registryType).Select(config => config.Tag).Concat(new[] { "latest" }));
+    private IReadOnlyList<string> GetImageTagSuggestions(RegistryType registryType, string? registryUrl, string? imageName, string? currentTag)
+    {
+        var key = BuildImageTagSuggestionKey(registryType, registryUrl, imageName);
+        var registryTags = imageTagSuggestions.TryGetValue(key, out var tags)
+            ? tags
+            : Enumerable.Empty<string?>();
+
+        return OrderedDistinct(registryTags.Concat(new[] { currentTag, "latest" }));
+    }
 
     private IReadOnlyList<string> GetTartDisplaySuggestions() =>
         OrderedDistinct(
@@ -2196,6 +2299,105 @@ else
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private RegistryCredential? ResolveDockerRegistryCredential(DockerImageConfig docker)
+    {
+        if (!string.IsNullOrWhiteSpace(docker.CredentialId))
+        {
+            var explicitCredential = registryCredentials.FirstOrDefault(credential =>
+                string.Equals(credential.Id, docker.CredentialId, StringComparison.OrdinalIgnoreCase)
+                && credential.RegistryType == RegistryType.Docker);
+
+            if (explicitCredential is not null)
+                return explicitCredential;
+        }
+
+        return ResolveRegistryCredential(RegistryType.Docker, docker.RegistryUrl, docker.ImageName);
+    }
+
+    private RegistryCredential? ResolveRegistryCredential(RegistryType registryType, string? registryUrl, string? imageName)
+    {
+        var normalizedRegistry = NormalizeRegistryUrl(registryUrl);
+        if (string.IsNullOrWhiteSpace(normalizedRegistry))
+            return null;
+
+        var registryMatches = registryCredentials
+            .Where(credential =>
+                credential.RegistryType == registryType
+                && string.Equals(NormalizeRegistryUrl(credential.RegistryUrl), normalizedRegistry, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var normalizedImage = NormalizeImageName(imageName);
+        var imageOrganization = GetImageOrganization(normalizedImage);
+        if (!string.IsNullOrWhiteSpace(imageOrganization))
+        {
+            var organizationMatch = registryMatches.FirstOrDefault(credential =>
+                !string.IsNullOrWhiteSpace(credential.DefaultNamespace)
+                && string.Equals(credential.DefaultNamespace, imageOrganization, StringComparison.OrdinalIgnoreCase));
+
+            if (organizationMatch is not null)
+                return organizationMatch;
+        }
+
+        var imageOwner = GetImageOwner(normalizedImage);
+        if (!string.IsNullOrWhiteSpace(imageOwner))
+        {
+            var ownerMatch = registryMatches.FirstOrDefault(credential =>
+                !string.IsNullOrWhiteSpace(credential.DefaultNamespace)
+                && string.Equals(credential.DefaultNamespace, imageOwner, StringComparison.OrdinalIgnoreCase));
+
+            if (ownerMatch is not null)
+                return ownerMatch;
+        }
+
+        var configuredCredential = registryMatches.FirstOrDefault(credential => credential.IsDefault)
+            ?? registryMatches.FirstOrDefault(credential => !string.IsNullOrWhiteSpace(credential.Username) || !string.IsNullOrWhiteSpace(credential.Password))
+            ?? registryMatches.FirstOrDefault();
+
+        if (configuredCredential is not null)
+            return configuredCredential;
+
+        return new RegistryCredential
+        {
+            Id = $"inline-{registryType}-{normalizedRegistry.ToLowerInvariant()}",
+            Name = normalizedRegistry,
+            RegistryUrl = normalizedRegistry,
+            RegistryType = registryType
+        };
+    }
+
+    private static string BuildImageTagSuggestionKey(RegistryType registryType, string? registryUrl, string? imageName) =>
+        $"{registryType}:{NormalizeRegistryUrl(registryUrl).ToLowerInvariant()}:{NormalizeImageName(imageName).ToLowerInvariant()}";
+
+    private static string NormalizeRegistryUrl(string? registryUrl)
+    {
+        if (string.IsNullOrWhiteSpace(registryUrl))
+            return string.Empty;
+
+        var trimmed = registryUrl.Trim().TrimEnd('/');
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absolute) && !string.IsNullOrWhiteSpace(absolute.Authority))
+            return absolute.Authority;
+
+        return trimmed
+            .Replace("https://", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
+            .TrimEnd('/');
+    }
+
+    private static string NormalizeImageName(string? imageName) =>
+        (imageName ?? "").Trim().Trim('/').Replace("\\", "/");
+
+    private static string? GetImageOrganization(string imageName)
+    {
+        var lastSlash = imageName.LastIndexOf('/');
+        return lastSlash > 0 ? imageName[..lastSlash] : null;
+    }
+
+    private static string? GetImageOwner(string imageName)
+    {
+        var firstSlash = imageName.IndexOf('/');
+        return firstSlash > 0 ? imageName[..firstSlash] : null;
+    }
 
     private sealed record ImageAutocompleteSource(string? RegistryUrl, string? ImageName, string? Tag, string? Display, string? SshUser);
 
