@@ -1,0 +1,48 @@
+<RadzenAutoComplete Name="@InputId"
+                    class="@CssClass"
+                    Value="@CurrentValue"
+                    ValueChanged="OnValueChanged"
+                    Data="@NormalizedSuggestions"
+                    FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                    FilterOperator="StringFilterOperator.Contains"
+                    FilterDelay="150"
+                    MinLength="0"
+                    OpenOnFocus="true"
+                    Placeholder="@Placeholder"
+                    PopupStyle="@PopupStyle"
+                    InputAttributes="@InputAttributes">
+    <Template Context="option">
+        <span class="rr-autocomplete-option">@option</span>
+    </Template>
+    <EmptyTemplate>
+        <span class="rr-autocomplete-empty">No saved values yet. You can still type a new one.</span>
+    </EmptyTemplate>
+</RadzenAutoComplete>
+
+@code {
+    private readonly string inputId = $"autocomplete-{Guid.NewGuid():N}";
+
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public IEnumerable<string?> Suggestions { get; set; } = [];
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public string CssClass { get; set; } = "rr-autocomplete";
+    [Parameter] public string PopupStyle { get; set; } = "display:none; transform: none; box-sizing: border-box; max-height: 16rem;";
+
+    private string InputId => inputId;
+    private string CurrentValue => Value ?? "";
+    private IReadOnlyDictionary<string, object>? InputAttributes => string.IsNullOrWhiteSpace(AriaLabel)
+        ? null
+        : new Dictionary<string, object> { ["aria-label"] = AriaLabel };
+
+    private IReadOnlyList<string> NormalizedSuggestions => Suggestions
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Select(value => value!.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    private Task OnValueChanged(string value) =>
+        ValueChanged.InvokeAsync(value);
+}

@@ -17,6 +17,7 @@ using RunnerRunner.Server.Authentication;
 using RunnerRunner.Server.Data.Auth;
 using RunnerRunner.Server.Services.Auth;
 using Microsoft.Extensions.Logging;
+using Radzen;
 using RunnerRunner.Server.Services.Logs;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -83,6 +84,7 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization(options => options.AddRunnerRunnerPolicies());
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddRadzenComponents();
 builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, RunnerRunnerOidcOptionsConfigurator>();
 builder.Services.AddSingleton<RunnerRunnerAuthSettingsService>();
 builder.Services.AddScoped<FirstRunSetupService>();

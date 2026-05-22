@@ -7,7 +7,7 @@ namespace RunnerRunner.Server.Tests.Services;
 public class CapacityPlanningServiceTests
 {
     [Fact]
-    public void EvaluateRuleCapacity_ShowsWhenProfilePoolIsTighterThanRuleLimit()
+    public void EvaluateRuleCapacity_UsesHostBackendPoolWithoutProfilePerHostLimit()
     {
         var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 2 };
         var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 1 };
@@ -72,13 +72,46 @@ public class CapacityPlanningServiceTests
         Assert.Equal(10, result.ConfiguredLimit);
         Assert.Equal(2, result.ActiveCount);
         Assert.Equal(8, result.RemainingSlots);
-        Assert.Single(result.MappedProfiles);
-        Assert.Equal(2, result.MappedProfiles[0].EffectivePoolLimit);
-        Assert.Equal(0, result.MappedProfiles[0].AvailableNow);
+        Assert.Single(result.MappedRunners);
+        Assert.Equal(3, result.MappedRunners[0].EffectivePoolLimit);
+        Assert.Equal(1, result.MappedRunners[0].AvailableNow);
     }
 
     [Fact]
-    public void AnalyzeHostSelection_BlocksWhenProfilePerHostLimitIsReached()
+    public void BuildSnapshot_IncludesRuleOwnedRunnerDefinitions()
+    {
+        var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 2 };
+        var rule = new ProvisioningRule
+        {
+            Name = "mac webhook",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 5,
+            RunnerDefinitions =
+            [
+                new RunnerDefinition
+                {
+                    Id = "runner-macos",
+                    Name = "macOS Tart",
+                    RequiredHostPlatform = HostPlatform.MacOS,
+                    ExecutionBackend = ExecutionBackend.Tart,
+                    Matchers = [new RunnerLabelMatcher { RequiredLabels = ["mac*"] }]
+                }
+            ]
+        };
+
+        var snapshot = CapacityPlanningService.BuildSnapshot([host], [], [rule], [], []);
+
+        Assert.True(snapshot.Profiles.ContainsKey("runner-macos"));
+        var ruleView = snapshot.Rules[rule.Id];
+        var mapped = Assert.Single(ruleView.MappedRunners);
+        Assert.Equal("macOS Tart", mapped.RunnerName);
+        Assert.Equal(2, mapped.EffectivePoolLimit);
+        Assert.Equal(2, mapped.AvailableNow);
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_IgnoresLegacyProfilePerHostLimitWhenBackendHasCapacity()
     {
         var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 3 };
         var profile = new RunnerProfile
@@ -107,9 +140,9 @@ public class CapacityPlanningServiceTests
             new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
             instances);
 
-        Assert.True(analysis.CapacityBlocked);
-        Assert.Equal(CapacityBlockerKind.Profile, analysis.BlockedBy);
-        Assert.Contains("per-host", analysis.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(host.Id, analysis.SelectedHost!.Id);
     }
 
     [Fact]
@@ -431,8 +464,8 @@ public class CapacityPlanningServiceTests
         Assert.Equal(2, result.ConfiguredLimit);
         Assert.Equal(1, result.ActiveCount);
         Assert.Equal(1, result.RemainingSlots);
-        Assert.Single(result.MappedProfiles);
-        Assert.Equal(1, result.MappedProfiles[0].MatchingHosts);
+        Assert.Single(result.MappedRunners);
+        Assert.Equal(1, result.MappedRunners[0].MatchingHosts);
     }
 
     [Theory]

@@ -58,6 +58,43 @@ public class ProvisioningRuleGrainSyncServiceTests
     }
 
     [Fact]
+    public async Task ConfigureRuleAsync_CopiesRuleOwnedRunnerDefinitions()
+    {
+        var (service, grainFactory) = CreateService();
+        var grain = Substitute.For<IProvisioningRuleGrain>();
+        grainFactory.GetGrain<IProvisioningRuleGrain>("rule-1", null).Returns(grain);
+
+        await service.ConfigureRuleAsync(new ProvisioningRule
+        {
+            Id = "rule-1",
+            Name = "mac webhook",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            ProviderCredentialId = "credential-1",
+            RunnerDefinitions =
+            [
+                new RunnerDefinition
+                {
+                    Id = "runner-1",
+                    Name = "macOS",
+                    RequiredHostPlatform = HostPlatform.MacOS,
+                    ExecutionBackend = ExecutionBackend.Tart,
+                    Matchers = [new RunnerLabelMatcher { RequiredLabels = ["mac*"], Priority = 10 }]
+                }
+            ]
+        });
+
+        await grain.Received(1).SetConfig(Arg.Is<ProvisioningRuleConfig>(config =>
+            config.Provider == RunnerProvider.GitHubActions
+            && config.ProviderCredentialId == "credential-1"
+            && config.RunnerDefinitions.Count == 1
+            && config.RunnerDefinitions[0].Id == "runner-1"
+            && config.RunnerDefinitions[0].Ephemeral
+            && config.RunnerDefinitions[0].Matchers.Single().RequiredLabels.Single() == "mac*"));
+    }
+
+
+    [Fact]
     public async Task StartupSync_ConfiguresPersistedRules()
     {
         var store = TestDocumentStore.Create();

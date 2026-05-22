@@ -162,6 +162,8 @@ internal static class ProvisioningRuleGrainConfigMapper
         ProfileId = ResolveProfileId(rule),
         Type = rule.Type,
         Enabled = rule.Enabled,
+        Provider = rule.Provider,
+        ProviderCredentialId = rule.ProviderCredentialId,
         DesiredCount = rule.DesiredCount,
         TargetHostId = rule.TargetHostId,
         MinReady = rule.MinReady,
@@ -181,7 +183,8 @@ internal static class ProvisioningRuleGrainConfigMapper
         CooldownSeconds = rule.CooldownSeconds,
         RequiredHostLabels = new Dictionary<string, string>(rule.RequiredHostLabels),
         TargetGroupId = rule.TargetGroupId,
-        CronExpression = rule.CronExpression
+        CronExpression = rule.CronExpression,
+        RunnerDefinitions = [.. rule.RunnerDefinitions.Select(CloneRunnerDefinition)]
     };
 
     private static string ResolveProfileId(ProvisioningRule rule)
@@ -202,4 +205,47 @@ internal static class ProvisioningRuleGrainConfigMapper
             .FirstOrDefault()
             ?? "";
     }
+
+    private static RunnerDefinition CloneRunnerDefinition(RunnerDefinition runner) => new()
+    {
+        Id = runner.Id,
+        Name = runner.Name,
+        TargetKey = runner.TargetKey,
+        Description = runner.Description,
+        Enabled = runner.Enabled,
+        RequiredHostPlatform = runner.RequiredHostPlatform,
+        ExecutionBackend = runner.ExecutionBackend,
+        RunnerAgentVersion = runner.RunnerAgentVersion,
+        EnvironmentVariableSetIds = [.. runner.EnvironmentVariableSetIds],
+        EnvironmentOverrides = new Dictionary<string, string>(runner.EnvironmentOverrides),
+        EnvironmentOverrideSecretKeys = [.. runner.EnvironmentOverrideSecretKeys],
+        DockerConfig = runner.DockerConfig,
+        TartConfig = runner.TartConfig,
+        Labels = [.. runner.Labels],
+        RunnerGroup = runner.RunnerGroup,
+        Ephemeral = runner.Ephemeral,
+        ProviderConfig = new Dictionary<string, string>(runner.ProviderConfig),
+        EmitMetadataLabels = runner.EmitMetadataLabels,
+        EmitJobStartedBanner = runner.EmitJobStartedBanner,
+        AllowWebhookImageTagOverride = runner.AllowWebhookImageTagOverride,
+        Matchers = [.. runner.Matchers.Select(m => new RunnerLabelMatcher
+        {
+            Id = m.Id,
+            RequiredLabels = [.. m.RequiredLabels],
+            Priority = m.Priority,
+            Enabled = m.Enabled
+        })],
+        InitStepRefs = [.. runner.InitStepRefs.Select(r => new RunnerInitStepRef
+        {
+            InitStepId = r.InitStepId,
+            Order = r.Order,
+            EnabledOverride = r.EnabledOverride,
+            TimeoutSecondsOverride = r.TimeoutSecondsOverride,
+            EnvironmentOverrides = new Dictionary<string, string>(r.EnvironmentOverrides),
+            EnvironmentOverrideSecretKeys = [.. r.EnvironmentOverrideSecretKeys]
+        })],
+        InlineInitSteps = [.. runner.InlineInitSteps.Select(RunnerDefinition.CloneInitStep)],
+        CreatedAt = runner.CreatedAt,
+        UpdatedAt = runner.UpdatedAt
+    };
 }

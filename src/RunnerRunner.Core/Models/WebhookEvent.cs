@@ -45,6 +45,11 @@ public class WebhookEvent
 
     public string? MatchedProfileId { get; set; }
     public string? MatchedProfileName { get; set; }
+    public string? MatchedRunnerDefinitionId { get; set; }
+    public string? MatchedRunnerDefinitionName { get; set; }
+    public string? RequestedRunnerTargetKey { get; set; }
+    public List<string> ValidRunnerTargetKeys { get; set; } = [];
+    public string? RunnerTargetSelectionReason { get; set; }
 
     /// <summary>RunnerInstance ID created for this event (if provisioned)</summary>
     public string? InstanceId { get; set; }

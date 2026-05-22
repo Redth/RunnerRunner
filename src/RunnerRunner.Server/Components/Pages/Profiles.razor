@@ -7,7 +7,6 @@
 @inject IDocumentStore Store
 @inject IJSRuntime JS
 @inject IGrainFactory GrainFactory
-@inject CapacityPlanningService CapacityService
 
 <PageTitle>Runner Profiles - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -87,7 +86,7 @@
                         <h5 id="profile-form-title" class="modal-title">
                             <i class="bi bi-clipboard2-check-fill me-2"></i>@(isEditing ? "Edit" : "Create") Runner Profile
                         </h5>
-                        <div class="modal-kicker">Define provider, backend image, labels, environment, and init steps in a focused dialog.</div>
+                        <div class="modal-kicker">Define provider, backend image, labels, environment, and custom steps in a focused dialog.</div>
                     </div>
                     <button type="button" class="btn-close" @onclick="CloseProfileForm" aria-label="Close"></button>
                 </div>
@@ -132,10 +131,6 @@
                         }
                     </select>
                 </div>
-                <div class="col-md-3 mb-3">
-                    <label class="form-label">Max Parallel Per Host</label>
-                    <input type="number" class="form-control" @bind="editProfile.MaxParallelPerHost" min="1" />
-                </div>
             </div>
 
             @* Provider credential *@
@@ -151,8 +146,9 @@
                     </select>
                 </div>
                 <div class="col-md-3 mb-3">
-                    <label class="form-label">Runner Group</label>
+                    <label class="form-label">Provider group/pool</label>
                     <input class="form-control" @bind="editProfile.RunnerGroup" />
+                    <div class="form-text">GitHub runner group or Azure agent pool. Host placement is configured separately.</div>
                 </div>
             </div>
 
@@ -240,6 +236,9 @@
             @if (editProfile.ExecutionBackend == ExecutionBackend.Docker)
             {
                 <h6 class="mt-3">Docker Image Configuration</h6>
+                <button type="button" class="btn btn-sm btn-outline-primary mb-3" @onclick="() => OpenProfileImagePicker(RegistryType.Docker)">
+                    <i class="bi bi-search me-1"></i>Find image and tag
+                </button>
                 @if (editProfile.RequiredHostPlatform == HostPlatform.Windows)
                 {
                     <div class="alert alert-warning py-2" style="font-size: 0.85rem;">
@@ -277,6 +276,9 @@
             @if (editProfile.ExecutionBackend == ExecutionBackend.Tart)
             {
                 <h6 class="mt-3">Tart VM Image Configuration</h6>
+                <button type="button" class="btn btn-sm btn-outline-primary mb-3" @onclick="() => OpenProfileImagePicker(RegistryType.Tart)">
+                    <i class="bi bi-search me-1"></i>Find image and tag
+                </button>
                 <div class="row">
                     <div class="col-md-3 mb-3">
                         <label class="form-label">OCI Registry URL</label>
@@ -430,8 +432,8 @@
                 </div>
             </div>
 
-            @* Init Steps *@
-            <h6 class="mt-3">Init Steps</h6>
+            @* Custom steps *@
+            <h6 class="mt-3">Custom Steps</h6>
             <p class="text-muted small">
                 Custom scripts executed as part of runner provisioning. PreRunner steps run
                 before the runner starts; PostExit steps run after it exits, before cleanup.
@@ -494,7 +496,7 @@
                     }
                 </tbody>
             </table>
-            <button class="btn btn-sm btn-outline-success mb-3" @onclick="AddInitStep"><i class="bi bi-plus-lg"></i> Add init step</button>
+            <button class="btn btn-sm btn-outline-success mb-3" @onclick="AddInitStep"><i class="bi bi-plus-lg"></i> Add custom step</button>
 
                 </div>
                 <div class="modal-footer">
@@ -508,6 +510,16 @@
     </div>
 }
 
+@if (showImagePicker)
+{
+    <ImagePickerDialog RegistryType="@imagePickerType"
+                       CurrentRegistryUrl="@GetProfileImagePickerRegistryUrl()"
+                       CurrentImageName="@GetProfileImagePickerImageName()"
+                       CurrentTag="@GetProfileImagePickerTag()"
+                       OnSelected="ApplyProfileImagePickerSelection"
+                       OnClose="CloseProfileImagePicker" />
+}
+
 @if (showForm && editingStepIndex is int initStepIndex && initStepIndex >= 0 && initStepIndex < editInitSteps.Count)
 {
     var step = editInitSteps[initStepIndex];
@@ -518,7 +530,7 @@
                 <div class="modal-header">
                     <div>
                         <h5 id="init-step-title" class="modal-title">
-                            <i class="bi bi-code-slash me-2"></i>Edit init step
+                            <i class="bi bi-code-slash me-2"></i>Edit custom step
                         </h5>
                         <div class="modal-kicker">Configure script, timing, environment sets, and step-level overrides.</div>
                     </div>
@@ -643,7 +655,6 @@
             <th role="button" data-col-kind="related" data-col-min="150" data-col-preferred="210" data-col-priority="2" @onclick='() => SetSort("Provider")' style="cursor:pointer; user-select:none;">Provider / Platform @SortIndicator("Provider")</th>
             <th data-col-kind="optional" data-col-min="110" data-col-preferred="150" data-col-priority="5">Labels</th>
             <th data-col-kind="compact" data-col-min="92" data-col-preferred="112" data-col-priority="3">Env Sets</th>
-            <th data-col-kind="compact" data-col-min="108" data-col-preferred="132" data-col-priority="3">Max Parallel</th>
             <th class="actions-col" data-col-min="132" data-col-preferred="154">Actions</th>
         </tr>
     </thead>
@@ -699,20 +710,7 @@
                     }
                     @if (profile.InitSteps.Any())
                     {
-                        <span class="badge bg-info ms-1" title="Init steps">@profile.InitSteps.Count init step(s)</span>
-                    }
-                </td>
-                <td>
-                    <strong>@profile.MaxParallelPerHost / host</strong>
-                    @if (capacitySnapshot.Profiles.TryGetValue(profile.Id, out var profileCapacity))
-                    {
-                        <div class="small text-muted mt-1">
-                            Active: @profileCapacity.TotalActive
-                            @if (profileCapacity.TotalActive > 0)
-                            {
-                                <span> · saturated on @profileCapacity.SaturatedHostCount host(s)</span>
-                            }
-                        </div>
+                        <span class="badge bg-info ms-1" title="Custom steps">@profile.InitSteps.Count custom step(s)</span>
                     }
                 </td>
                 <td class="actions-cell">
@@ -729,7 +727,6 @@
     private List<RunnerProfile> profiles = [];
     private List<EnvironmentVariableSet> allEnvVarSets = [];
     private List<ProviderCredential> credentials = [];
-    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private RunnerProfile editProfile = new() { Name = "" };
     private bool showForm;
     private bool isEditing;
@@ -841,6 +838,8 @@
     private string newOverrideValue = "";
     private bool newOverrideIsSecret;
     private bool showProfileRrHelp;
+    private bool showImagePicker;
+    private RegistryType imagePickerType = RegistryType.Docker;
 
     // Init steps editor state
     private List<RunnerInitStep> editInitSteps = [];
@@ -864,7 +863,6 @@
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         allEnvVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
         credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
-        capacitySnapshot = await CapacityService.GetSnapshotAsync();
     }
 
     private void ShowCreateForm()
@@ -928,7 +926,47 @@
         showForm = false;
         showProfileRrHelp = false;
         editingStepIndex = null;
+        CloseProfileImagePicker();
     }
+
+    private void OpenProfileImagePicker(RegistryType registryType)
+    {
+        imagePickerType = registryType;
+        showImagePicker = true;
+    }
+
+    private void CloseProfileImagePicker()
+    {
+        showImagePicker = false;
+    }
+
+    private Task ApplyProfileImagePickerSelection(ImagePickerSelection selection)
+    {
+        if (selection.RegistryType == RegistryType.Docker)
+        {
+            dockerRegistry = selection.RegistryUrl;
+            dockerImage = selection.ImageName;
+            dockerTag = selection.Tag;
+        }
+        else
+        {
+            tartRegistry = selection.RegistryUrl;
+            tartImage = selection.ImageName;
+            tartTag = selection.Tag;
+        }
+
+        CloseProfileImagePicker();
+        return Task.CompletedTask;
+    }
+
+    private string? GetProfileImagePickerRegistryUrl() =>
+        imagePickerType == RegistryType.Docker ? dockerRegistry : tartRegistry;
+
+    private string? GetProfileImagePickerImageName() =>
+        imagePickerType == RegistryType.Docker ? dockerImage : tartImage;
+
+    private string? GetProfileImagePickerTag() =>
+        imagePickerType == RegistryType.Docker ? dockerTag : tartTag;
 
     private void CloseInitStepEditor()
     {

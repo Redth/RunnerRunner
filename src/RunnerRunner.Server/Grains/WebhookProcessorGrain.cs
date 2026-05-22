@@ -244,11 +244,31 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         // Handle "queued"
         if (action == "queued")
         {
-            // Label matching: find profile from rule's label mappings
-            var profileId = matchedRule.ResolveWebhookProfileId(labels);
+            var requestedTargetKey = matchedRule.ResolveRequestedTargetKey(labels);
+            var validTargetKeys = matchedRule.GetValidRunnerTargetKeys();
 
-            if (string.IsNullOrEmpty(profileId))
+            // Target matching: find the rule-owned runner target (or legacy profile) from workflow selection.
+            var (runnerDefinition, profile) = await ProvisioningRuleRunnerResolver.ResolveProfileAsync(
+                store,
+                matchedRule,
+                labels);
+
+            if (profile == null && matchedRule.RunnerDefinitions.Count == 0)
             {
+                var legacyProfileId = matchedRule.ResolveWebhookProfileId(labels);
+                if (!string.IsNullOrWhiteSpace(legacyProfileId))
+                {
+                    var profileGrain = GrainFactory.GetGrain<IProfileGrain>(legacyProfileId);
+                    profile = await profileGrain.GetProfile();
+                }
+            }
+
+            if (profile == null)
+            {
+                var selectionReason = matchedRule.RunnerDefinitions.Count > 0
+                    ? matchedRule.BuildNoRunnerTargetMatchReason(labels)
+                    : $"No current label mapping matches labels [{string.Join(", ", labels)}]";
+
                 _logger.LogInformation("No profile match for labels [{Labels}] in rule {RuleName}",
                     string.Join(", ", labels), matchedRule.Name);
 
@@ -264,17 +284,19 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                     WorkflowName = workflowName,
                     Labels = labels,
                     Status = "no_match",
+                    RequestedRunnerTargetKey = requestedTargetKey,
+                    ValidRunnerTargetKeys = validTargetKeys,
+                    RunnerTargetSelectionReason = selectionReason,
+                    Error = selectionReason,
                     ImageTagOverride = imageTagOverride,
                     ImageTagOverrideRejectedReason = imageTagOverrideRejectedReason
                 });
 
-                return new WebhookProcessResult { Success = false, Status = "no_match", Message = "No profile matched" };
+                return new WebhookProcessResult { Success = false, Status = "no_match", Message = selectionReason };
             }
 
-            // Resolve profile name for audit
-            var profileGrain = GrainFactory.GetGrain<IProfileGrain>(profileId);
-            var profile = await profileGrain.GetProfile();
-            var profileName = profile?.Name;
+            var profileId = profile.Id;
+            var profileName = profile.Name;
 
             // Apply opt-in gate for tag override: when the profile didn't opt
             // in, drop the accepted tag and surface a rejection reason in the
@@ -304,6 +326,13 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 Labels = labels,
                 MatchedProfileId = profileId,
                 MatchedProfileName = profileName,
+                MatchedRunnerDefinitionId = runnerDefinition?.Id,
+                MatchedRunnerDefinitionName = runnerDefinition?.Name,
+                RequestedRunnerTargetKey = requestedTargetKey,
+                ValidRunnerTargetKeys = validTargetKeys,
+                RunnerTargetSelectionReason = runnerDefinition == null
+                    ? "Matched legacy profile mapping"
+                    : $"Selected runner target '{runnerDefinition.TargetKey}'",
                 Status = "provisioned",
                 ImageTagOverride = effectiveOverride,
                 ImageTagOverrideRejectedReason = effectiveRejection

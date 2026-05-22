@@ -32,9 +32,11 @@ public static class DatabaseInitializer
         await EnsureTable<WebhookEvent>(store, () => new WebhookEvent { Id = "__init__" });
         await EnsureTable<WebhookBinding>(store, () => new WebhookBinding { Id = "__init__", Name = "__init__" });
         await EnsureTable<ProvisioningRule>(store, () => new ProvisioningRule { Id = "__init__", Name = "__init__" });
+        await EnsureTable<RunnerInitStepDefinition>(store, () => new RunnerInitStepDefinition { Id = "__init__", Name = "__init__" });
         await EnsureTable<RunnerRunnerAuthSettings>(store, () => new RunnerRunnerAuthSettings { Id = "__init__" });
 
         await MigrateLegacyWebhookBindings(store);
+        await MigrateLegacyProvisioningRuleRunnerDefinitions(store);
         await CleanupLegacyRunnerInstances(store);
     }
 
@@ -121,6 +123,63 @@ public static class DatabaseInitializer
 
             await store.Insert(migratedRule);
             existingRules.Add(migratedRule);
+        }
+    }
+
+    private static async Task MigrateLegacyProvisioningRuleRunnerDefinitions(IDocumentStore store)
+    {
+        var rules = (await store.Query<ProvisioningRule>().ToList())
+            .Where(rule => rule.RunnerDefinitions.Count == 0)
+            .ToList();
+        if (rules.Count == 0)
+            return;
+
+        var profiles = (await store.Query<RunnerProfile>().ToList())
+            .ToDictionary(profile => profile.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rule in rules)
+        {
+            var changed = false;
+
+            if (rule.Type == ProvisioningType.Webhook)
+            {
+                var mappingsByProfile = rule.LabelMappings
+                    .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ProfileId))
+                    .GroupBy(mapping => mapping.ProfileId, StringComparer.OrdinalIgnoreCase);
+
+                foreach (var group in mappingsByProfile)
+                {
+                    if (!profiles.TryGetValue(group.Key, out var profile))
+                        continue;
+
+                    var runner = RunnerDefinition.FromProfile(profile, $"{rule.Id}-{profile.Id}");
+                    runner.Matchers = [.. group.Select(mapping => new RunnerLabelMatcher
+                    {
+                        RequiredLabels = [.. mapping.RequiredLabels],
+                        Priority = mapping.Priority
+                    })];
+                    runner.Ephemeral = true;
+                    rule.RunnerDefinitions.Add(runner);
+                    changed = true;
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(rule.ProfileId)
+                && profiles.TryGetValue(rule.ProfileId, out var profile))
+            {
+                var runner = RunnerDefinition.FromProfile(profile, $"{rule.Id}-{profile.Id}");
+                if (runner.Name == profile.Name)
+                    runner.Name = string.IsNullOrWhiteSpace(rule.Name) ? profile.Name : rule.Name;
+                rule.RunnerDefinitions.Add(runner);
+                rule.Provider = profile.Provider;
+                rule.ProviderCredentialId ??= profile.ProviderCredentialId;
+                changed = true;
+            }
+
+            if (!changed)
+                continue;
+
+            rule.UpdatedAt = DateTime.UtcNow;
+            await store.Update(rule);
         }
     }
 }

@@ -30,6 +30,7 @@ public static class DocumentStoreSetup
             opts.MapTypeToTable<WebhookEvent>("webhook_events");
             opts.MapTypeToTable<WebhookBinding>("webhook_bindings");
             opts.MapTypeToTable<ProvisioningRule>("provisioning_rules");
+            opts.MapTypeToTable<RunnerInitStepDefinition>("runner_init_steps");
             opts.MapTypeToTable<RunnerRunnerAuthSettings>("auth_settings");
         });
 

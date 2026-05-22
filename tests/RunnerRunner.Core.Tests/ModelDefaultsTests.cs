@@ -41,6 +41,86 @@ public class ModelDefaultsTests
     }
 
     [Fact]
+    public void RunnerDefinition_DefaultsToOneJobRunner()
+    {
+        var runner = new RunnerDefinition { Name = "linux" };
+
+        Assert.True(runner.Ephemeral);
+        Assert.True(runner.Enabled);
+        Assert.Equal("Default", runner.RunnerGroup);
+        Assert.Equal("rr-linux", runner.TargetKey);
+    }
+
+    [Fact]
+    public void RunnerDefinition_ToProfile_IncludesTargetKeyAsAdvertisedLabel()
+    {
+        var rule = new ProvisioningRule
+        {
+            Name = "GitHub",
+            Provider = RunnerProvider.GitHubActions
+        };
+        var runner = new RunnerDefinition
+        {
+            Name = "macOS ARM64",
+            TargetKey = "rr-macos-arm64",
+            Labels = ["self-hosted", "macOS", "rr-macos-arm64"]
+        };
+
+        var profile = runner.ToProfile(rule);
+
+        Assert.Equal(["rr-macos-arm64", "self-hosted", "macOS"], profile.Labels);
+    }
+
+    [Fact]
+    public void ProvisioningRule_ResolvesRunnerTargetBeforeLegacyMatchers()
+    {
+        var linux = new RunnerDefinition
+        {
+            Name = "Linux Docker",
+            TargetKey = "rr-linux-docker",
+            Matchers = [new RunnerLabelMatcher { RequiredLabels = ["*"], Priority = 100 }]
+        };
+        var mac = new RunnerDefinition
+        {
+            Name = "macOS",
+            TargetKey = "rr-macos-arm64",
+            Matchers = [new RunnerLabelMatcher { RequiredLabels = ["*"], Priority = 0 }]
+        };
+        var rule = new ProvisioningRule
+        {
+            Name = "Webhook",
+            Type = ProvisioningType.Webhook,
+            RunnerDefinitions = [linux, mac]
+        };
+
+        var resolved = rule.ResolveWebhookRunnerDefinition(["self-hosted", "rr-macos-arm64"]);
+
+        Assert.Same(mac, resolved);
+        Assert.Equal("rr-macos-arm64", rule.ResolveRequestedTargetKey(["self-hosted", "rr-macos-arm64"]));
+    }
+
+    [Fact]
+    public void ProvisioningRule_RejectsMissingTargetWhenMultipleTargetsExist()
+    {
+        var rule = new ProvisioningRule
+        {
+            Name = "Webhook",
+            Type = ProvisioningType.Webhook,
+            RunnerDefinitions =
+            [
+                new RunnerDefinition { Name = "Linux Docker", TargetKey = "rr-linux-docker" },
+                new RunnerDefinition { Name = "macOS", TargetKey = "rr-macos-arm64" }
+            ]
+        };
+
+        var resolved = rule.ResolveWebhookRunnerDefinition(["self-hosted", "linux"]);
+
+        Assert.Null(resolved);
+        Assert.Contains("rr-linux-docker", rule.BuildNoRunnerTargetMatchReason(["self-hosted", "linux"]));
+        Assert.Contains("rr-macos-arm64", rule.BuildNoRunnerTargetMatchReason(["self-hosted", "linux"]));
+    }
+
+    [Fact]
     public void RunnerInstance_DefaultValues()
     {
         var instance = new RunnerInstance { RunnerName = "test-runner" };
@@ -250,6 +330,33 @@ public class ModelDefaultsTests
 
         rule.LabelMappings.Clear();
         Assert.Null(rule.ResolveWebhookProfileId(["self-hosted", "linux"]));
+    }
+
+    [Fact]
+    public void ProvisioningRule_ResolveWebhookRunnerDefinition_UsesRuleOwnedMatchers()
+    {
+        var linux = new RunnerDefinition
+        {
+            Id = "linux-runner",
+            Name = "Linux",
+            Matchers = [new RunnerLabelMatcher { RequiredLabels = ["linux"], Priority = 1 }]
+        };
+        var mac = new RunnerDefinition
+        {
+            Id = "mac-runner",
+            Name = "macOS",
+            Matchers = [new RunnerLabelMatcher { RequiredLabels = ["mac*"], Priority = 10 }]
+        };
+        var rule = new ProvisioningRule
+        {
+            Name = "Webhook",
+            Type = ProvisioningType.Webhook,
+            RunnerDefinitions = [linux, mac]
+        };
+
+        Assert.Same(mac, rule.ResolveWebhookRunnerDefinition(["self-hosted", "macOS"]));
+        Assert.Equal("linux-runner", rule.ResolveWebhookProfileId(["self-hosted", "linux"]));
+        Assert.Null(rule.ResolveWebhookRunnerDefinition(["self-hosted", "windows"]));
     }
 
     [Fact]

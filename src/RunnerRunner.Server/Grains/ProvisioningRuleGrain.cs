@@ -343,10 +343,31 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
         using var scope = _serviceProvider.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
 
-        var profile = await store.Get<RunnerProfile>(_state.State.Config.ProfileId);
+        var ruleModel = new ProvisioningRule
+        {
+            Id = this.GetPrimaryKeyString(),
+            Name = _state.State.Config.Name,
+            ProfileId = _state.State.Config.ProfileId,
+            Type = _state.State.Config.Type,
+            Provider = _state.State.Config.Provider,
+            ProviderCredentialId = _state.State.Config.ProviderCredentialId,
+            DesiredCount = _state.State.Config.DesiredCount,
+            TargetHostId = _state.State.Config.TargetHostId,
+            MinReady = _state.State.Config.MinReady,
+            MaxInstances = _state.State.Config.MaxInstances,
+            MaxConcurrent = _state.State.Config.MaxConcurrent,
+            RequiredHostLabels = new Dictionary<string, string>(_state.State.Config.RequiredHostLabels),
+            TargetGroupId = _state.State.Config.TargetGroupId,
+            RunnerDefinitions = [.. _state.State.Config.RunnerDefinitions]
+        };
+
+        var (runnerDefinition, profile) = await ProvisioningRuleRunnerResolver.ResolveProfileAsync(
+            store,
+            ruleModel,
+            preferredRunnerOrProfileId: _state.State.Config.ProfileId);
         if (profile == null)
         {
-            _logger.LogWarning("Rule {RuleId} references missing profile {ProfileId}",
+            _logger.LogWarning("Rule {RuleId} references missing runner/profile configuration {ProfileId}",
                 this.GetPrimaryKeyString(),
                 _state.State.Config.ProfileId);
             return null;
@@ -356,22 +377,8 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
         var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
         var profilesById = (await store.Query<RunnerProfile>().ToList())
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        ProvisioningRuleRunnerResolver.AddMaterializedRunnerProfiles(profilesById, [ruleModel]);
         profilesById[profile.Id] = profile;
-
-        var ruleModel = new ProvisioningRule
-        {
-            Id = this.GetPrimaryKeyString(),
-            Name = _state.State.Config.Name,
-            ProfileId = _state.State.Config.ProfileId,
-            Type = _state.State.Config.Type,
-            DesiredCount = _state.State.Config.DesiredCount,
-            TargetHostId = _state.State.Config.TargetHostId,
-            MinReady = _state.State.Config.MinReady,
-            MaxInstances = _state.State.Config.MaxInstances,
-            MaxConcurrent = _state.State.Config.MaxConcurrent,
-            RequiredHostLabels = new Dictionary<string, string>(_state.State.Config.RequiredHostLabels),
-            TargetGroupId = _state.State.Config.TargetGroupId
-        };
 
         var analysis = CapacityPlanningService.AnalyzeHostSelection(profile, ruleModel, hosts, profilesById, instances);
         var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
@@ -437,7 +444,14 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             host.Platform);
         var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
 
-        await runnerGrain.Initialize(host.Id, _state.State.Config.ProfileId, runnerName, provisioningMode, jobId, provisioningRuleId: this.GetPrimaryKeyString());
+        await runnerGrain.Initialize(
+            host.Id,
+            profile.Id,
+            runnerName,
+            provisioningMode,
+            jobId,
+            provisioningRuleId: this.GetPrimaryKeyString(),
+            runnerDefinitionId: runnerDefinition?.Id);
         await runnerGrain.MarkStarting("Sending deploy command to host");
 
         _state.State.ManagedInstanceIds.Add(instanceId);
@@ -531,7 +545,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
     private static bool ShouldRunReconcileReminder(ProvisioningRuleConfig config) =>
         config.Enabled
         && !string.IsNullOrWhiteSpace(config.Name)
-        && !string.IsNullOrWhiteSpace(config.ProfileId)
+        && (!string.IsNullOrWhiteSpace(config.ProfileId) || config.RunnerDefinitions.Any(r => r.Enabled))
         && config.Type is ProvisioningType.Static or ProvisioningType.ScaleSet;
 
     private async Task<Dictionary<string, string>> ComposeEnvironmentVariablesAsync(

@@ -78,8 +78,11 @@ public class LabelProfileMapping
     public int Priority { get; set; } = 0;
 
     public bool Matches(IEnumerable<string> labels)
+        => MatchesRequiredLabels(RequiredLabels, labels);
+
+    public static bool MatchesRequiredLabels(IEnumerable<string> requiredLabels, IEnumerable<string> labels)
     {
-        var patterns = RequiredLabels
+        var patterns = requiredLabels
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim())
             .ToList();

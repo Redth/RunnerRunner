@@ -284,11 +284,13 @@ public class DynamicProvisioningService : BackgroundService
                     ExpiresAt = null
                 };
 
-                var (_, profile, reason) = await ResolveProvisioningMatchAsync(store, evt, null);
+                var (_, profile, runnerDefinition, reason) = await ResolveProvisioningMatchAsync(store, evt, null);
                 if (profile != null)
                 {
                     evt.MatchedProfileId = profile.Id;
                     evt.MatchedProfileName = profile.Name;
+                    evt.MatchedRunnerDefinitionId = runnerDefinition?.Id;
+                    evt.MatchedRunnerDefinitionName = runnerDefinition?.Name;
                 }
                 else
                 {
@@ -612,7 +614,7 @@ public class DynamicProvisioningService : BackgroundService
             if (await TryBindExistingInstanceAsync(store, currentEvent, now))
                 return QueueProcessingOutcome.Advanced;
 
-            var (rule, profile, profileError) = await ResolveProvisioningMatchAsync(store, currentEvent, requestedProfileId);
+            var (rule, profile, matchedRunnerDefinition, profileError) = await ResolveProvisioningMatchAsync(store, currentEvent, requestedProfileId);
             if (profile == null)
             {
                 await ScheduleRetryAsync(
@@ -642,6 +644,8 @@ public class DynamicProvisioningService : BackgroundService
             currentEvent.BindingId = rule?.Id ?? currentEvent.BindingId;
             currentEvent.MatchedProfileId = profile.Id;
             currentEvent.MatchedProfileName = profile.Name;
+            currentEvent.MatchedRunnerDefinitionId = matchedRunnerDefinition?.Id;
+            currentEvent.MatchedRunnerDefinitionName = matchedRunnerDefinition?.Name;
             await UpdateEventProgressAsync(
                 store,
                 currentEvent,
@@ -779,7 +783,16 @@ public class DynamicProvisioningService : BackgroundService
                 envVars[kv.Key] = kv.Value;
 
             var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
-            await runnerGrain.Initialize(hostSelection.Host.Id, profile.Id, runnerName, "dynamic", currentEvent.JobId, currentEvent.Id, currentEvent.BindingId, appliedTagOverride);
+            await runnerGrain.Initialize(
+                hostSelection.Host.Id,
+                profile.Id,
+                runnerName,
+                "dynamic",
+                currentEvent.JobId,
+                currentEvent.Id,
+                currentEvent.BindingId,
+                appliedTagOverride,
+                matchedRunnerDefinition?.Id);
             await runnerGrain.MarkStarting("Sending dynamic deploy command to host");
 
             await UpdateEventProgressAsync(
@@ -819,7 +832,7 @@ public class DynamicProvisioningService : BackgroundService
                 DockerConfig = dockerConfig,
                 TartConfig = tartConfig,
                 Labels = effectiveLabels,
-                RunnerGroup = profile.RunnerGroup,
+                RunnerGroup = GetEffectiveRunnerGroup(profile, credential),
                 Ephemeral = true,
                 JitConfig = jitResult?.JitConfig,
                 RegistrationToken = jitResult?.RegistrationToken,
@@ -837,6 +850,8 @@ public class DynamicProvisioningService : BackgroundService
             currentEvent.LastAttemptAt = now;
             currentEvent.MatchedProfileId = profile.Id;
             currentEvent.MatchedProfileName = profile.Name;
+            currentEvent.MatchedRunnerDefinitionId = matchedRunnerDefinition?.Id;
+            currentEvent.MatchedRunnerDefinitionName = matchedRunnerDefinition?.Name;
             await store.Update(currentEvent);
 
             try
@@ -931,6 +946,18 @@ public class DynamicProvisioningService : BackgroundService
             RunnerProvider.AzureDevOps => credential.AzDoOrgUrl?.TrimEnd('/'),
             _ => null
         };
+    }
+
+    internal static string GetEffectiveRunnerGroup(RunnerProfile profile, ProviderCredential? credential)
+    {
+        if (profile.Provider == RunnerProvider.AzureDevOps
+            && (string.IsNullOrWhiteSpace(profile.RunnerGroup) || string.Equals(profile.RunnerGroup, "Default", StringComparison.OrdinalIgnoreCase))
+            && !string.IsNullOrWhiteSpace(credential?.AzDoPoolName))
+        {
+            return credential.AzDoPoolName;
+        }
+
+        return string.IsNullOrWhiteSpace(profile.RunnerGroup) ? "Default" : profile.RunnerGroup;
     }
 
     internal static List<string> BuildDynamicRunnerLabels(WebhookEvent evt, RunnerProfile profile)
@@ -1163,13 +1190,13 @@ public class DynamicProvisioningService : BackgroundService
         return TimeSpan.FromSeconds(Math.Min(baseSeconds * backoffMultiplier, 120));
     }
 
-    private static async Task<(ProvisioningRule? Rule, RunnerProfile? Profile, string Reason)> ResolveProvisioningMatchAsync(
+    private static async Task<(ProvisioningRule? Rule, RunnerProfile? Profile, RunnerDefinition? RunnerDefinition, string Reason)> ResolveProvisioningMatchAsync(
         IDocumentStore store,
         WebhookEvent evt,
         string? requestedProfileId)
     {
         if (!Enum.TryParse<RunnerProvider>(evt.Provider, true, out var provider))
-            return (null, null, $"Unsupported provider '{evt.Provider}'");
+            return (null, null, null, $"Unsupported provider '{evt.Provider}'");
 
         var repo = evt.Repository;
         var org = repo.Contains('/') ? repo.Split('/')[0] : "";
@@ -1187,24 +1214,52 @@ public class DynamicProvisioningService : BackgroundService
             .ToList();
 
         if (candidateRules.Count == 0)
-            return (null, null, $"No provisioning rule currently matches repository '{repo}'");
+            return (null, null, null, $"No provisioning rule currently matches repository '{repo}'");
 
         foreach (var rule in candidateRules)
         {
-            var profileId = ResolveProfileId(rule, evt.Labels, requestedProfileId);
-            if (string.IsNullOrWhiteSpace(profileId))
-                continue;
+            evt.RequestedRunnerTargetKey = rule.ResolveRequestedTargetKey(evt.Labels);
+            evt.ValidRunnerTargetKeys = rule.GetValidRunnerTargetKeys();
 
-            var profile = await store.Get<RunnerProfile>(profileId);
-            if (profile != null)
-                return (rule, profile, "");
+            RunnerDefinition? runnerDefinition;
+            RunnerProfile? profile;
+            try
+            {
+                (runnerDefinition, profile) = await ProvisioningRuleRunnerResolver.ResolveProfileAsync(
+                    store,
+                    rule,
+                    evt.Labels,
+                    requestedProfileId);
+            }
+            catch (InvalidOperationException ex)
+            {
+                evt.RunnerTargetSelectionReason = ex.Message;
+                return (rule, null, null, ex.Message);
+            }
+
+            if (profile == null)
+            {
+                evt.RunnerTargetSelectionReason = rule.RunnerDefinitions.Count > 0
+                    ? rule.BuildNoRunnerTargetMatchReason(evt.Labels)
+                    : $"No current label mapping matches labels [{string.Join(", ", evt.Labels)}]";
+                continue;
+            }
+
+            evt.RunnerTargetSelectionReason = runnerDefinition == null
+                ? "Matched legacy profile mapping"
+                : $"Selected runner target '{runnerDefinition.TargetKey}'";
+            return (rule, profile, runnerDefinition, "");
         }
 
-        return (candidateRules[0], null, $"No current label mapping matches labels [{string.Join(", ", evt.Labels)}]");
+        var fallbackRule = candidateRules[0];
+        var reason = fallbackRule.RunnerDefinitions.Count > 0
+            ? fallbackRule.BuildNoRunnerTargetMatchReason(evt.Labels)
+            : $"No current label mapping matches labels [{string.Join(", ", evt.Labels)}]";
+        evt.RequestedRunnerTargetKey = fallbackRule.ResolveRequestedTargetKey(evt.Labels);
+        evt.ValidRunnerTargetKeys = fallbackRule.GetValidRunnerTargetKeys();
+        evt.RunnerTargetSelectionReason = reason;
+        return (fallbackRule, null, null, reason);
     }
-
-    private static string? ResolveProfileId(ProvisioningRule rule, List<string> labels, string? preferredProfileId)
-        => rule.ResolveWebhookProfileId(labels, preferredProfileId);
 
     private static async Task<bool> IsRuleAtCapacityAsync(
         IDocumentStore store,
@@ -1213,8 +1268,10 @@ public class DynamicProvisioningService : BackgroundService
         string profileId)
     {
         var hosts = (await store.Query<Host>().ToList()).ToList();
+        var allRules = (await store.Query<ProvisioningRule>().ToList()).ToList();
         var profiles = (await store.Query<RunnerProfile>().ToList())
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        ProvisioningRuleRunnerResolver.AddMaterializedRunnerProfiles(profiles, allRules);
         var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
         var events = (await store.Query<WebhookEvent>().ToList()).ToList();
 
@@ -1232,6 +1289,7 @@ public class DynamicProvisioningService : BackgroundService
             .ToDictionary(r => r.Id, r => r, StringComparer.OrdinalIgnoreCase);
         var profiles = (await store.Query<RunnerProfile>().ToList())
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        ProvisioningRuleRunnerResolver.AddMaterializedRunnerProfiles(profiles, rules.Values);
         var events = (await store.Query<WebhookEvent>().ToList()).ToList();
 
         return CapacityPlanningService.HasEarlierQueuedWorkAhead(
@@ -1252,6 +1310,8 @@ public class DynamicProvisioningService : BackgroundService
     {
         var profilesById = (await store.Query<RunnerProfile>().ToList())
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
+        var rules = (await store.Query<ProvisioningRule>().ToList()).ToList();
+        ProvisioningRuleRunnerResolver.AddMaterializedRunnerProfiles(profilesById, rules);
         var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
         var analysis = CapacityPlanningService.AnalyzeHostSelection(profile, rule, hosts, profilesById, instances);
 

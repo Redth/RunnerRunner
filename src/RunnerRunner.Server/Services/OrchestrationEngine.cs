@@ -268,7 +268,7 @@ public class OrchestrationEngine : BackgroundService
             DockerConfig = profile.DockerConfig,
             TartConfig = profile.TartConfig,
             Labels = effectiveLabels,
-            RunnerGroup = profile.RunnerGroup,
+            RunnerGroup = GetEffectiveRunnerGroup(profile, credential),
             Ephemeral = profile.Ephemeral,
             RegistrationToken = registrationToken,
             RunnerUrl = runnerUrl,
@@ -436,6 +436,18 @@ public class OrchestrationEngine : BackgroundService
         RunnerProvider.AzureDevOps => credential.AzDoOrgUrl?.TrimEnd('/'),
         _ => null
     };
+
+    private static string GetEffectiveRunnerGroup(RunnerProfile profile, ProviderCredential? credential)
+    {
+        if (profile.Provider == RunnerProvider.AzureDevOps
+            && (string.IsNullOrWhiteSpace(profile.RunnerGroup) || string.Equals(profile.RunnerGroup, "Default", StringComparison.OrdinalIgnoreCase))
+            && !string.IsNullOrWhiteSpace(credential?.AzDoPoolName))
+        {
+            return credential.AzDoPoolName;
+        }
+
+        return string.IsNullOrWhiteSpace(profile.RunnerGroup) ? "Default" : profile.RunnerGroup;
+    }
 
     private static string? GetGitHubRunnerUrl(ProviderCredential credential)
         => GitHubCredentialResolver.GetRunnerUrl(credential);

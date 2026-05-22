@@ -1,6 +1,6 @@
 # RunnerRunner Architecture
 
-RunnerRunner is a self-hosted CI/CD runner orchestration platform for GitHub Actions, Gitea Actions, and Azure DevOps runners. It separates the desired state of runners from the machines that execute them, then continuously reconciles rules, profiles, hosts, and runner instances until the fleet matches demand.
+RunnerRunner is a self-hosted CI/CD runner orchestration platform for GitHub Actions, Gitea Actions, and Azure DevOps runners. It separates the desired state of runners from the machines that execute them, then continuously reconciles rules, runner targets, hosts, and runner instances until the fleet matches demand.
 
 ## System overview
 
@@ -29,7 +29,7 @@ RunnerRunner is a self-hosted CI/CD runner orchestration platform for GitHub Act
 
 The current system uses HostWorker as the only supported host-worker runtime:
 
-- **Orleans grains** own durable control-plane state for hosts, profiles, provisioning rules, and runner lifecycle.
+- **Orleans grains** own durable control-plane state for hosts, provisioning rules, rule-owned runner targets, and runner lifecycle.
 - **Shiny DocumentDB** stores queryable PostgreSQL read projections used by the Blazor UI and orchestration services.
 - **gRPC HostWorker streams** carry host commands, worker heartbeats, runner events, image events, and log frames between the server and workers.
 - **HostWorker** executes runner work locally without joining the Orleans cluster or needing database credentials.
@@ -52,27 +52,27 @@ RunnerRunner's orchestration model is easiest to understand as four layers:
 
 | Layer | Model | Purpose |
 |-------|-------|---------|
-| What to run | `RunnerProfile` | Provider, labels, backend, images, environment variables, runner group, init steps, metadata behavior |
-| How to run it | `ProvisioningRule` or `RunnerAssignment` | Desired count, scaling bounds, webhook mappings, host filters, concurrency ceilings |
-| Where it can run | `Host` and host groups | Platform, labels, backend slot limits, environment overrides, connection status |
-| What is running | `RunnerInstance` | Concrete runner lifecycle, host/profile link, provider job link, status history, resource handles |
+| What to run | Rule-owned `RunnerDefinition` | Workflow target key, advertised labels/capabilities, backend, images, environment variables, provider group/pool, custom-step references, metadata behavior |
+| How to run it | `ProvisioningRule` or `RunnerAssignment` | Provider, desired count, scaling bounds, webhook scope, host filters, concurrency ceilings |
+| Where it can run | `Host` and host routing groups | Platform, labels, backend slot limits, environment overrides, connection status |
+| What is running | `RunnerInstance` | Concrete runner lifecycle, host/runner-definition link, provider job link, status history, resource handles |
 
-### Runner profiles
+### Rule-owned runner targets
 
-A `RunnerProfile` defines the reusable runner template:
+A `ProvisioningRule` owns the runner target(s) it can provision:
 
-- CI provider: GitHub Actions, Gitea Actions, or Azure DevOps.
+- Stable workflow target key, for example `rr-linux-docker`.
 - Required host platform and execution backend: Docker, Tart, or Native.
-- Provider credential and optional runner agent version.
-- Runner labels and runner group.
+- Optional runner agent version.
+- Advertised runner labels/capabilities and provider runner group/pool.
 - Docker/Tart image config.
-- Environment variable sets plus profile-level overrides.
-- `MaxParallelPerHost`, the maximum number of runners for this profile allowed on one host.
-- Optional init steps executed during provisioning.
+- Environment variable sets plus runner-level overrides.
+- Live references to reusable custom steps plus optional inline steps.
 - Optional metadata labels and job-started banner hook.
 - Optional webhook image tag override support.
+- Runner lifecycle: **one-job runner** by default, or explicit reusable runner mode for multi-job static/warm pools.
 
-Profiles answer "what should a runner look like?"
+Runner targets answer "what should this rule provision, and what key should workflow authors request?" The CI provider and credential are rule-level settings so webhook authentication, JIT config, cleanup, and static/scale-set registration use the same source of truth.
 
 ### Provisioning rules
 
@@ -80,12 +80,20 @@ Profiles answer "what should a runner look like?"
 
 | Type | Key settings | Behavior |
 |------|--------------|----------|
-| Static | `DesiredCount`, optional target host/group/labels | Maintain a fixed number of instances for one profile |
-| ScaleSet | `MinReady`, `MaxInstances`, scale-down delay | Keep a warm pool and cap total instances |
-| Webhook | provider, allowed orgs/repos, label mappings, `MinReady`, `MaxConcurrent` | Match queued provider jobs to profiles and provision JIT runners |
+| Static | provider, runner target, `DesiredCount`, optional target host/group/labels | Maintain a fixed number of instances for one runner target |
+| ScaleSet | provider, runner target, `MinReady`, `MaxInstances`, scale-down delay | Keep a warm pool and cap total instances |
+| Webhook | provider, allowed orgs/repos, runner target keys, `MinReady`, `MaxConcurrent` | Match queued provider jobs to rule-owned runner targets and provision JIT runners |
 | Scheduled | cron expression | Reserved for future scheduled capacity |
 
-Webhook rules can map different `runs-on` label sets to different profiles. Mappings are ordered by priority; a preferred profile can win only if its mapping still matches the job labels.
+Webhook rules already know the incoming DevOps provider from the webhook endpoint and signature. Workflow authors request a runner target key such as `rr-macos-arm64`, and RunnerRunner selects the enabled target in that rule with the same key. GitHub and Gitea use the target key as a self-hosted runner label, for example `runs-on: [self-hosted, rr-macos-arm64]`; Azure DevOps uses the same product concept through pool demands, for example `rr.target -equals rr-windows-native`.
+
+Legacy label matchers remain available as an advanced compatibility path, but the primary routing model is the explicit target key. Advertised labels/capabilities are still attached to created runners for provider dispatch and diagnostics; they are not the main product-level selector.
+
+Keep similarly named concepts at different layers:
+
+- **Runner targets** are workflow selectors.
+- **Host routing groups and host labels** decide where RunnerRunner may place work.
+- **Provider runner groups / Azure pools** decide where the registered runner is visible inside the CI provider.
 
 `RunnerAssignment` is the legacy static model: one host, one profile, one desired count. It is still reconciled by `OrchestrationEngine`.
 
@@ -95,8 +103,8 @@ A `Host` represents a physical or virtual machine. It carries:
 
 - Platform (`Linux`, `MacOS`, `Windows`) and optional architecture.
 - Capability labels such as `os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`.
-- Optional `GroupId`.
-- Environment overrides applied after profile env vars.
+- Optional routing `GroupId`.
+- Environment overrides applied after runner target env vars.
 - Backend slot limits:
   - `MaxDockerContainers`
   - `MaxTartVMs`
@@ -141,7 +149,7 @@ Orleans `ProvisioningRuleGrain` reconciles rule-owned capacity:
 5. Webhook rules can keep `MinReady` idle warm runners.
 6. Dead instances are removed from the rule's managed instance list.
 
-When a rule needs a runner, it resolves the profile, analyzes matching host capacity, initializes a `RunnerInstanceGrain`, and tracks the instance ID in the rule state.
+When a rule needs a runner, it resolves the runner target, analyzes matching host capacity, initializes a `RunnerInstanceGrain`, and tracks the instance ID in the rule state.
 
 ### Webhook/JIT provisioning
 
@@ -150,8 +158,8 @@ Webhook provisioning is job-driven:
 1. Provider sends a `workflow_job` event to `/api/webhooks/{provider}`.
 2. The server validates the signature and records a `WebhookEvent`.
 3. The event is matched to an enabled webhook provisioning rule by provider and allowed org/repo.
-4. The job's labels are matched against the rule's label mappings to resolve a profile.
-5. FIFO, rule, profile, and host capacity checks run.
+4. The job's runner selection is matched to a runner target key, with legacy label matchers used only as fallback.
+5. FIFO, rule, and host capacity checks run.
 6. A host is selected.
 7. JIT config or registration token is generated for the provider.
 8. A dynamic `RunnerInstance` is initialized.
@@ -167,11 +175,10 @@ RunnerRunner calculates whether work can start by applying capacity in this orde
 
 1. **FIFO fairness**
 2. **Provisioning rule capacity**
-3. **Profile per-host capacity**
-4. **Host backend capacity**
-5. **Connected execution channel**
+3. **Host backend capacity**
+4. **Connected execution channel**
 
-The first exhausted layer becomes the visible blocker: `FIFO`, `ProvisioningRule`, `Profile`, `Host`, `Matching`, or `Configuration`.
+The first exhausted layer becomes the visible blocker: `FIFO`, `ProvisioningRule`, `Host`, `Matching`, or `Configuration`.
 
 ### 1. FIFO fairness
 
@@ -197,13 +204,7 @@ For webhook rules, active dynamic instances linked to events for the rule count 
 
 For ScaleSet rules, `MinReady` is the warm-pool floor and `MaxInstances` is the ceiling. The warm pool cannot exceed the max.
 
-### 3. Profile per-host capacity
-
-`RunnerProfile.MaxParallelPerHost` limits how many active instances of that profile may exist on a single host.
-
-This is intentionally separate from host backend capacity. A large host might allow 10 Docker containers, but a profile can still cap itself at 1 runner per host to avoid noisy-neighbor contention or provider label ambiguity.
-
-### 4. Host backend capacity
+### 3. Host backend capacity
 
 Each host has a backend-specific slot limit:
 
@@ -213,15 +214,15 @@ Each host has a backend-specific slot limit:
 | Tart | `MaxTartVMs` |
 | Native | `MaxNativeProcesses` |
 
-Only instances whose profile uses that backend consume the backend slots. A Docker runner does not consume Tart or Native capacity.
+Only instances whose runner target uses that backend consume the backend slots. A Docker runner does not consume Tart or Native capacity.
 
-### 5. Host matching and execution availability
+### 4. Host matching and execution availability
 
 Before capacity is summed, hosts must match:
 
-- host platform equals `RunnerProfile.RequiredHostPlatform`;
+- host platform equals the runner target's required host platform;
 - rule `TargetHostId`, if set;
-- rule `TargetGroupId`, if set;
+- rule host routing `TargetGroupId`, if set;
 - every rule `RequiredHostLabels` key/value pair;
 - Docker host compatibility, when a host advertises `docker_os`.
 
@@ -229,13 +230,10 @@ HostWorker execution also requires the selected host to be online in the Orleans
 
 ### Effective pool math
 
-For a single profile under a rule:
+For a single runner target under a rule:
 
 ```
-per-host usable slots = min(
-  profile.MaxParallelPerHost - active profile instances on host,
-  host backend limit - active backend instances on host
-)
+per-host usable slots = host backend limit - active backend instances on host
 
 available pool slots = sum(per-host usable slots across matching hosts)
 
@@ -250,10 +248,10 @@ can start now = FIFO is clear
 The configured pool limit shown in UI is:
 
 ```
-sum(min(profile.MaxParallelPerHost, host backend limit) across matching hosts)
+sum(host backend limit across matching hosts)
 ```
 
-The available-now value subtracts active profile and backend usage first.
+The available-now value subtracts active backend usage first.
 
 Example:
 
@@ -261,36 +259,33 @@ Example:
 |---------|-------|
 | Webhook rule `MaxConcurrent` | 10 |
 | Matching hosts | 3 Linux Docker hosts |
-| Profile `MaxParallelPerHost` | 1 |
 | Each host `MaxDockerContainers` | 4 |
 
-The rule appears to allow 10 concurrent jobs, but the effective pool limit is `3 * min(1, 4) = 3`. If all three hosts already run that profile, new matching webhook jobs are blocked by `Profile`, not by the rule or host backend.
-
-If `MaxParallelPerHost` is raised to 4, the effective pool limit becomes `3 * min(4, 4) = 12`, and the rule's `MaxConcurrent = 10` becomes the narrower limit.
+The host route can run up to `3 * 4 = 12` Docker runners, but the rule's `MaxConcurrent = 10` is narrower, so only 10 matching jobs can run at once for that rule. If all Docker slots on those hosts are already consumed, new matching webhook jobs are blocked by `Host`.
 
 ### Host selection
 
-When at least one host can run the profile, host candidates are ordered by:
+When at least one host can run the runner target, host candidates are ordered by:
 
 1. can run now before blocked candidates;
 2. lowest total active host load;
 3. host label/name for deterministic tie-breaking.
 
-If every matching host is saturated by `MaxParallelPerHost`, the blocker is `Profile`. If at least one host still has profile room but all are out of backend slots, the blocker is `Host`.
+If every matching host is out of backend slots, the blocker is `Host`.
 
 ## Environment variable composition
 
 Runner environment variables are layered with later layers overriding earlier ones:
 
 1. Provider credential variables injected as `RR_*`.
-2. Profile-selected `EnvironmentVariableSet` documents ordered by ascending priority.
-3. Profile-level environment overrides.
+2. Runner-target-selected `EnvironmentVariableSet` documents ordered by ascending priority.
+3. Runner-target-level environment overrides.
 4. Host-level environment overrides.
 5. Instance variables such as `RR_INSTANCE_ID` and `RR_RUNNER_NAME`.
 
 After composition, `$VAR` and `${VAR}` references are expanded for up to three passes so values can chain through other variables.
 
-Init steps receive the runner environment plus their own environment variable sets and overrides. `Auto` shell resolves by platform/backend before commands are sent to the agent.
+Custom steps receive the runner environment plus their own environment variable sets and overrides. `Auto` shell resolves by platform/backend before commands are sent to the agent.
 
 ## Execution backends
 
@@ -300,7 +295,7 @@ Init steps receive the runner environment plus their own environment variable se
 | Tart | macOS | Clones/starts a VM image, copies config/scripts, then runs the provider runner inside the guest |
 | Native | Any | Downloads/configures the runner and starts it as a local process with PID/log tracking |
 
-All backends receive the same `DeployRunnerCommand` shape: instance ID, profile ID, runner name, backend, provider, labels, environment variables, image config, runner URL/token/JIT config, work paths, registry credentials, and resolved init steps.
+All backends receive the same `DeployRunnerCommand` shape: instance ID, runner target/profile compatibility ID, runner name, backend, provider, labels, environment variables, image config, runner URL/token/JIT config, work paths, registry credentials, and resolved custom steps.
 
 ## Runner lifecycle and health
 
@@ -340,10 +335,10 @@ Key UI pages map directly to the domain model:
 |------|---------|
 | Dashboard | Fleet overview and connected hosts |
 | Hosts | Host labels, backend limits, approval, assignments |
-| Runners | Runner instances grouped by host/profile/status |
+| Runners | Runner instances grouped by host/runner target/status |
 | Jobs | Job-centric lifecycle and webhook context |
-| Profiles | Runner templates, labels, env vars, init steps, images |
-| Provisioning Rules | Static, ScaleSet, Webhook, and future Scheduled rules |
+| Provisioning Rules | Static, ScaleSet, Webhook, and future Scheduled rules with rule-owned runner targets |
+| Custom Steps | Reusable provisioning scripts referenced by runner targets |
 | Images | Docker/Tart image management |
 | Logs | HostWorker and runner log viewing |
 | Env Variables | Reusable environment variable sets |
@@ -351,7 +346,7 @@ Key UI pages map directly to the domain model:
 | Settings | Provider and registry credentials |
 | Orleans Dashboard | Grain/silo observability |
 
-Capacity views on rules, profiles, hosts, runners, and events use the same `CapacityPlanningService` calculations described above, so blockers in the UI reflect actual scheduling decisions.
+Capacity views on rules, runner targets, hosts, runners, and events use the same `CapacityPlanningService` calculations described above, so blockers in the UI reflect actual scheduling decisions.
 
 ## Runtime status
 
