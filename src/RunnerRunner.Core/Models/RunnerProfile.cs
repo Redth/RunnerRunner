@@ -91,4 +91,18 @@ public class RunnerProfile
     /// </summary>
     [Id(23)]
     public bool AllowWebhookImageTagOverride { get; set; }
+
+    /// <summary>
+    /// Optional host routing group required by this runner target. Rule-level routing
+    /// is still applied first, then this target-specific filter is applied.
+    /// </summary>
+    [Id(24)]
+    public string? TargetGroupId { get; set; }
+
+    /// <summary>
+    /// HostWorker capabilities required by this runner target, such as
+    /// <c>windows-ui</c>, <c>gpu</c>, or <c>xcode16</c>.
+    /// </summary>
+    [Id(25)]
+    public List<string> RequiredHostCapabilities { get; set; } = [];
 }

@@ -67,6 +67,10 @@ public class RunnerDefinition
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     [Id(24)]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    [Id(25)]
+    public string? TargetGroupId { get; set; }
+    [Id(26)]
+    public List<string> RequiredHostCapabilities { get; set; } = [];
 
     public RunnerProfile ToProfile(ProvisioningRule rule, IEnumerable<RunnerInitStep>? initSteps = null)
     {
@@ -93,6 +97,8 @@ public class RunnerDefinition
             EmitJobStartedBanner = EmitJobStartedBanner,
             InitSteps = initSteps?.Select(CloneInitStep).ToList() ?? [.. InlineInitSteps.Select(CloneInitStep)],
             AllowWebhookImageTagOverride = AllowWebhookImageTagOverride,
+            TargetGroupId = TargetGroupId,
+            RequiredHostCapabilities = [.. RequiredHostCapabilities],
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt
         };
@@ -124,6 +130,8 @@ public class RunnerDefinition
             EmitMetadataLabels = profile.EmitMetadataLabels,
             EmitJobStartedBanner = profile.EmitJobStartedBanner,
             AllowWebhookImageTagOverride = profile.AllowWebhookImageTagOverride,
+            TargetGroupId = profile.TargetGroupId,
+            RequiredHostCapabilities = [.. profile.RequiredHostCapabilities],
             InlineInitSteps = [.. profile.InitSteps.Select(CloneInitStep)],
             CreatedAt = profile.CreatedAt,
             UpdatedAt = profile.UpdatedAt

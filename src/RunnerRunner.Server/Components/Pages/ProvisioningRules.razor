@@ -65,7 +65,7 @@
                         <h5 id="provisioning-rule-title" class="modal-title">
                             <i class="bi bi-diagram-3-fill me-2"></i>@(isEditing ? "Edit" : "Create") provisioning rule
                         </h5>
-                        <div class="modal-kicker">Define the CI connection, rule capacity, host routing, and the runner targets workflow authors can request.</div>
+                        <div class="modal-kicker">Define the CI connection, rule capacity, global host routing, and the runner targets workflow authors can request.</div>
                     </div>
                     <button type="button" class="btn-close" @onclick="CancelEdit" aria-label="Close"></button>
                 </div>
@@ -261,8 +261,8 @@
                             }
 
                             <section class="rr-form-section">
-                                <div class="rr-form-section-title"><i class="bi bi-hdd-network"></i>Host routing</div>
-                                <p class="section-help mb-3">Host routing is RunnerRunner placement: which connected machines are allowed to run this rule. It is separate from the workflow target key and provider runner group/pool.</p>
+                                <div class="rr-form-section-title"><i class="bi bi-hdd-network"></i>Global host routing</div>
+                                <p class="section-help mb-3">Optional rule-wide placement filters. They are applied before each runner target's own host routing, so put target-specific capabilities like <code>windows-ui</code> on the target below.</p>
                                 <div class="row g-3">
                                     <div class="col-lg-5">
                                         <label class="form-label" for="targetGroup">Host routing group</label>
@@ -273,7 +273,7 @@
                                                            AriaLabel="Host routing group" />
                                     </div>
                                     <div class="col-lg-7">
-                                        <label class="form-label">Required host capability labels</label>
+                                        <label class="form-label">Global host labels</label>
                                         <div class="runner-chip-list mb-2">
                                             @foreach (var requirement in editHostLabels.OrderBy(kvp => kvp.Key))
                                             {
@@ -289,7 +289,7 @@
                                                                ValueChanged="value => newHostLabelInput = value ?? string.Empty"
                                                                Suggestions="@GetHostCapabilityLabelSuggestions()"
                                                                Placeholder="pool=mac-builders"
-                                                               AriaLabel="Required host capability label" />
+                                                               AriaLabel="Global required host label" />
                                             <button class="btn btn-outline-secondary" type="button" @onclick="AddHostLabel"><i class="bi bi-plus-lg me-1"></i>Add</button>
                                         </div>
                                     </div>
@@ -297,7 +297,7 @@
                                 <div class="host-match-preview">
                                     <div class="host-match-preview-header">
                                         <span><i class="bi bi-radar"></i>Matching hosts preview</span>
-                                        <small>Calculated from this host routing plus each target's platform/backend.</small>
+                                        <small>Calculated from global routing, target routing, platform, and backend.</small>
                                     </div>
                                     <div class="host-match-preview-grid">
                                         @foreach (var runner in editRule.RunnerDefinitions.Where(r => r.Enabled).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
@@ -311,7 +311,7 @@
                                                 <small>@runner.RequiredHostPlatform · @runner.ExecutionBackend</small>
                                                 @if (matches.Count == 0)
                                                 {
-                                                    <p>No hosts match this target yet. Check platform, backend limits, routing group, and required labels.</p>
+                                                    <p>No hosts match this target yet. Check platform, backend limits, global routing, target routing, and required capabilities.</p>
                                                 }
                                                 else
                                                 {
@@ -502,6 +502,42 @@
                                                             <small>Explicit warm/static mode. Local state can persist between jobs.</small>
                                                         </span>
                                                     </label>
+                                                </div>
+                                            </div>
+
+                                            <div class="runner-subsection">
+                                                <div class="runner-subsection-heading"><span><i class="bi bi-hdd-network"></i>Host routing for this target</span></div>
+                                                <div class="form-text mb-2">Target-specific placement filters are combined with the rule's global host routing.</div>
+                                                <div class="row g-3">
+                                                    <div class="col-lg-4">
+                                                        <label class="form-label" for="runnerTargetGroup-@runner.Id">Host routing group</label>
+                                                        <SmartAutocomplete Value="@runner.TargetGroupId"
+                                                                           ValueChanged="value => runner.TargetGroupId = string.IsNullOrWhiteSpace(value) ? null : value"
+                                                                           Suggestions="@GetHostGroupSuggestions()"
+                                                                           Placeholder="Any host routing group"
+                                                                           AriaLabel="Target host routing group" />
+                                                    </div>
+                                                    <div class="col-lg-8">
+                                                        <label class="form-label">Required HostWorker capabilities</label>
+                                                        <div class="runner-chip-list mb-2">
+                                                            @foreach (var capability in runner.RequiredHostCapabilities.ToList())
+                                                            {
+                                                                var capabilityValue = capability;
+                                                                <span class="runner-chip">
+                                                                    <i class="bi bi-stars"></i>@capabilityValue
+                                                                    <button type="button" @onclick="() => runner.RequiredHostCapabilities.Remove(capabilityValue)" aria-label="Remove required host capability @capabilityValue"><i class="bi bi-x"></i></button>
+                                                                </span>
+                                                            }
+                                                        </div>
+                                                        <div class="input-group input-group-sm runner-label-input">
+                                                            <SmartAutocomplete Value="@runnerHostCapabilityInputs[runner.Id]"
+                                                                               ValueChanged="value => runnerHostCapabilityInputs[runner.Id] = value ?? string.Empty"
+                                                                               Suggestions="@GetRunnerHostCapabilitySuggestions(runner)"
+                                                                               Placeholder="windows-ui, gpu, xcode16"
+                                                                               AriaLabel="Required HostWorker capability" />
+                                                            <button class="btn btn-outline-primary" type="button" @onclick="() => AddRunnerHostCapability(runner)"><i class="bi bi-plus-lg me-1"></i>Add capability</button>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
 
@@ -808,7 +844,7 @@
                                     <div><span>Provider</span><strong>@GetProviderLabel(editRule.Provider)</strong></div>
                                     <div><span>Capacity</span><strong>@GetScaleDisplay(editRule)</strong></div>
                                     <div><span>Targets</span><strong>@editRule.RunnerDefinitions.Count(r => r.Enabled)</strong></div>
-                                    <div><span>Host route</span><strong>@GetTargetDisplay(editRule)</strong></div>
+                                    <div><span>Global host route</span><strong>@GetTargetDisplay(editRule)</strong></div>
                                 </div>
                             </div>
 
@@ -846,6 +882,7 @@
                                     <div class="preview-list">
                                         <div><span>Target key</span><strong>@workflowPreviewTarget.TargetKey</strong></div>
                                         <div><span>Runner shape</span><strong>@workflowPreviewTarget.RequiredHostPlatform · @workflowPreviewTarget.ExecutionBackend</strong></div>
+                                        <div><span>Target host route</span><strong>@GetRunnerHostRoutingDisplay(workflowPreviewTarget)</strong></div>
                                         <div><span>@GetProviderGroupDisplayLabel()</span><strong>@GetProviderGroupDisplay(workflowPreviewTarget)</strong></div>
                                     </div>
                                     @if (editRule.RunnerDefinitions.Count(r => r.Enabled) > 1)
@@ -940,7 +977,7 @@ else
                         <strong>@GetScaleDisplay(rule)</strong>
                     </div>
                     <div>
-                        <span>Host route</span>
+                        <span>Global host route</span>
                         <strong>@GetTargetDisplay(rule)</strong>
                     </div>
                 </div>
@@ -970,15 +1007,15 @@ else
                         }
                     }
                     else if (displayRunners.Any())
-                    {
-                        @foreach (var runner in displayRunners.Take(4))
-                        {
-                            <div class="runner-mini-card">
-                                <strong>@runner.Name</strong>
-                                <span>@runner.TargetKey · @runner.RequiredHostPlatform · @runner.ExecutionBackend · @(runner.Ephemeral ? "one-job" : "reusable")</span>
-                            </div>
-                        }
-                    }
+                                 {
+                                     @foreach (var runner in displayRunners.Take(4))
+                                     {
+                                         <div class="runner-mini-card">
+                                             <strong>@runner.Name</strong>
+                                             <span>@runner.TargetKey · @runner.RequiredHostPlatform · @runner.ExecutionBackend · @GetRunnerHostRoutingDisplay(runner) · @(runner.Ephemeral ? "one-job" : "reusable")</span>
+                                         </div>
+                                     }
+                                 }
                     else
                     {
                         <span class="rule-profile-empty"><i class="bi bi-exclamation-triangle"></i>No runner targets</span>
@@ -1028,6 +1065,7 @@ else
     private string newHostLabelInput = "";
     private string? selectedWorkflowTargetId;
     private readonly Dictionary<string, string> runnerLabelInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> runnerHostCapabilityInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> matcherLabelInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> envOverrideKeyInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> envOverrideValueInputs = new(StringComparer.OrdinalIgnoreCase);
@@ -1106,6 +1144,7 @@ else
         newRepoInput = "";
         newHostLabelInput = "";
         runnerLabelInputs.Clear();
+        runnerHostCapabilityInputs.Clear();
         matcherLabelInputs.Clear();
         envOverrideKeyInputs.Clear();
         envOverrideValueInputs.Clear();
@@ -1240,6 +1279,11 @@ else
                 : RunnerDefinition.NormalizeTargetKey(runner.TargetKey);
             runner.RunnerGroup = string.IsNullOrWhiteSpace(runner.RunnerGroup) ? "Default" : runner.RunnerGroup.Trim();
             runner.Labels = [.. runner.Labels.Where(label => !string.IsNullOrWhiteSpace(label)).Select(label => label.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)];
+            runner.TargetGroupId = string.IsNullOrWhiteSpace(runner.TargetGroupId) ? null : runner.TargetGroupId.Trim();
+            runner.RequiredHostCapabilities = [.. runner.RequiredHostCapabilities
+                .Where(capability => !string.IsNullOrWhiteSpace(capability))
+                .Select(capability => capability.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)];
             runner.EnvironmentOverrides = runner.EnvironmentOverrides
                 .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key))
                 .ToDictionary(kvp => kvp.Key.Trim(), kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
@@ -1376,6 +1420,7 @@ else
     private void EnsureRunnerEditorState(RunnerDefinition runner)
     {
         runnerLabelInputs.TryAdd(runner.Id, "");
+        runnerHostCapabilityInputs.TryAdd(runner.Id, "");
         envOverrideKeyInputs.TryAdd(runner.Id, "");
         envOverrideValueInputs.TryAdd(runner.Id, "");
         envOverrideSecretInputs.TryAdd(runner.Id, false);
@@ -1621,6 +1666,7 @@ else
     {
         return hosts
             .Where(host => HostMatchesRulePreview(host))
+            .Where(host => HostMatchesRunnerRouting(host, runner))
             .Where(host => host.Platform == runner.RequiredHostPlatform)
             .Where(host => CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
             .Where(host => HostMatchesDockerOs(host, runner))
@@ -1646,6 +1692,22 @@ else
         }
 
         return true;
+    }
+
+    private static bool HostMatchesRunnerRouting(Host host, RunnerDefinition runner)
+    {
+        if (!string.IsNullOrWhiteSpace(runner.TargetGroupId)
+            && !string.Equals(host.GroupId, runner.TargetGroupId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (runner.RequiredHostCapabilities.Count == 0)
+            return true;
+
+        var hostCapabilities = host.Capabilities.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return runner.RequiredHostCapabilities
+            .Where(capability => !string.IsNullOrWhiteSpace(capability))
+            .Select(capability => capability.Trim())
+            .All(hostCapabilities.Contains);
     }
 
     private static bool HostMatchesDockerOs(Host host, RunnerDefinition runner)
@@ -1720,6 +1782,15 @@ else
             runner.Labels.Add(value);
 
         runnerLabelInputs[runner.Id] = "";
+    }
+
+    private void AddRunnerHostCapability(RunnerDefinition runner)
+    {
+        var value = runnerHostCapabilityInputs.GetValueOrDefault(runner.Id, "").Trim();
+        if (!string.IsNullOrWhiteSpace(value) && !runner.RequiredHostCapabilities.Contains(value, StringComparer.OrdinalIgnoreCase))
+            runner.RequiredHostCapabilities.Add(value);
+
+        runnerHostCapabilityInputs[runner.Id] = "";
     }
 
     private void OnRunnerLabelKeyDown(KeyboardEventArgs e, RunnerDefinition runner)
@@ -1978,7 +2049,16 @@ else
             hostGroups
                 .Concat(hosts.Select(host => host.GroupId))
                 .Concat(rules.Select(rule => rule.TargetGroupId))
+                .Concat(SavedRunnerDefinitions().Select(runner => runner.TargetGroupId))
+                .Concat(editRule.RunnerDefinitions.Select(runner => runner.TargetGroupId))
                 .Concat(new[] { editRule.TargetGroupId }));
+
+    private IReadOnlyList<string> GetRunnerHostCapabilitySuggestions(RunnerDefinition runner) =>
+        OrderedDistinct(
+            hosts.SelectMany(host => host.Capabilities)
+                .Concat(SavedRunnerDefinitions().SelectMany(savedRunner => savedRunner.RequiredHostCapabilities))
+                .Concat(editRule.RunnerDefinitions.SelectMany(editRunner => editRunner.RequiredHostCapabilities))
+                .Concat(new[] { runner.RequiredHostPlatform.ToString().ToLowerInvariant(), runner.ExecutionBackend.ToString().ToLowerInvariant() }));
 
     private IReadOnlyList<string> GetAllowedOrgSuggestions()
     {
@@ -2184,6 +2264,18 @@ else
         return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Any eligible host";
     }
 
+    private static string GetRunnerHostRoutingDisplay(RunnerDefinition runner)
+    {
+        var targetParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(runner.TargetGroupId))
+            targetParts.Add(runner.TargetGroupId);
+
+        if (runner.RequiredHostCapabilities.Count > 0)
+            targetParts.Add($"{runner.RequiredHostCapabilities.Count} host cap(s)");
+
+        return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Any target host";
+    }
+
     private static string GetScaleDisplay(ProvisioningRule rule) => rule.Type switch
     {
         ProvisioningType.Static => $"{rule.DesiredCount} desired",
@@ -2314,6 +2406,8 @@ else
         DockerConfig = runner.DockerConfig,
         TartConfig = runner.TartConfig,
         Labels = [.. runner.Labels],
+        TargetGroupId = runner.TargetGroupId,
+        RequiredHostCapabilities = [.. runner.RequiredHostCapabilities],
         RunnerGroup = runner.RunnerGroup,
         Ephemeral = runner.Ephemeral,
         ProviderConfig = new Dictionary<string, string>(runner.ProviderConfig),

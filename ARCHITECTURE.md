@@ -52,8 +52,8 @@ RunnerRunner's orchestration model is easiest to understand as four layers:
 
 | Layer | Model | Purpose |
 |-------|-------|---------|
-| What to run | Rule-owned `RunnerDefinition` | Workflow target key, advertised labels/capabilities, backend, images, environment variables, provider group/pool, custom-step references, metadata behavior |
-| How to run it | `ProvisioningRule` or `RunnerAssignment` | Provider, desired count, scaling bounds, webhook scope, host filters, concurrency ceilings |
+| What to run | Rule-owned `RunnerDefinition` | Workflow target key, advertised labels/capabilities, backend, images, environment variables, provider group/pool, target-specific host routing, custom-step references, metadata behavior |
+| How to run it | `ProvisioningRule` or `RunnerAssignment` | Provider, desired count, scaling bounds, webhook scope, optional global host filters, concurrency ceilings |
 | Where it can run | `Host` and host routing groups | Platform, labels, backend slot limits, environment overrides, connection status |
 | What is running | `RunnerInstance` | Concrete runner lifecycle, host/runner-definition link, provider job link, status history, resource handles |
 
@@ -65,6 +65,7 @@ A `ProvisioningRule` owns the runner target(s) it can provision:
 - Required host platform and execution backend: Docker, Tart, or Native.
 - Optional runner agent version.
 - Advertised runner labels/capabilities and provider runner group/pool.
+- Optional target-specific host routing, such as a required host group or HostWorker capabilities like `windows-ui`.
 - Docker/Tart image config.
 - Environment variable sets plus runner-level overrides.
 - Live references to reusable custom steps plus optional inline steps.
@@ -80,7 +81,7 @@ Runner targets answer "what should this rule provision, and what key should work
 
 | Type | Key settings | Behavior |
 |------|--------------|----------|
-| Static | provider, runner target, `DesiredCount`, optional target host/group/labels | Maintain a fixed number of instances for one runner target |
+| Static | provider, runner target, `DesiredCount`, optional global target host/group/labels | Maintain a fixed number of instances for one runner target |
 | ScaleSet | provider, runner target, `MinReady`, `MaxInstances`, scale-down delay | Keep a warm pool and cap total instances |
 | Webhook | provider, allowed orgs/repos, runner target keys, `MinReady`, `MaxConcurrent` | Match queued provider jobs to rule-owned runner targets and provision JIT runners |
 | Scheduled | cron expression | Reserved for future scheduled capacity |
@@ -92,7 +93,7 @@ Legacy label matchers remain available as an advanced compatibility path, but th
 Keep similarly named concepts at different layers:
 
 - **Runner targets** are workflow selectors.
-- **Host routing groups and host labels** decide where RunnerRunner may place work.
+- **Global host routing groups/labels** narrow all work accepted by a rule; **target host routing** adds per-runner requirements such as `windows-ui`.
 - **Provider runner groups / Azure pools** decide where the registered runner is visible inside the CI provider.
 
 `RunnerAssignment` is the legacy static model: one host, one profile, one desired count. It is still reconciled by `OrchestrationEngine`.
@@ -102,7 +103,8 @@ Keep similarly named concepts at different layers:
 A `Host` represents a physical or virtual machine. It carries:
 
 - Platform (`Linux`, `MacOS`, `Windows`) and optional architecture.
-- Capability labels such as `os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`.
+- Advertised capabilities such as `docker`, `native`, `tart`, `gpu`, or `windows-ui`.
+- Key/value host labels such as `os=linux`, `arch=x64`, `docker=true`, `pool=build-farm`.
 - Optional routing `GroupId`.
 - Environment overrides applied after runner target env vars.
 - Backend slot limits:
