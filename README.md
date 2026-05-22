@@ -8,8 +8,8 @@ A self-hosted CI/CD runner orchestration platform for managing GitHub Actions, G
 
 RunnerRunner lets you:
 
-- **Declare runner profiles** — pick a CI provider, execution backend, env vars, image config, and labels
-- **Assign profiles to hosts** — say "run 3 instances of this profile on that machine" and the system converges
+- **Declare provisioning rules** — pick a CI provider, webhook/static/scale behavior, capacity, and host routing
+- **Create runner targets** — give workflow authors a stable target key such as `rr-linux-docker`, then define its backend, env vars, image config, and advertised labels
 - **Compose environment variables** — build reusable env var sets (e.g. `dotnet-8-sdk`, `xcode-15-env`) and layer them with priority
 - **Auto-register/deregister runners** — runners register with GitHub/Gitea/AzDO on startup, deregister on shutdown
 - **Orchestrate multiple hosts** — agents connect to the central server from macOS, Linux, or Windows machines
@@ -25,7 +25,7 @@ PostgreSQL
 
 RunnerRunner.Server
   |-- Blazor UI and webhook API
-  `-- Orleans grains for hosts, profiles, provisioning rules, runners
+  `-- Orleans grains for hosts, provisioning rules, runner targets, runners
 
 Host machines
     `-- RunnerRunner.HostWorker
@@ -33,11 +33,11 @@ Host machines
         `-- Docker, Tart, or Native runner backends
 ```
 
-**Server** - Blazor web UI for managing profiles, hosts, env vars, credentials, provisioning rules, and webhook routing. It owns the shared PostgreSQL-backed control plane and sends runner lifecycle commands to hosts.
+**Server** - Blazor web UI for managing provisioning rules, runner targets, hosts, env vars, credentials, and webhook routing. It owns the shared PostgreSQL-backed control plane and sends runner lifecycle commands to hosts.
 
 **HostWorker** - Per-host worker. `HostWorker` connects outbound to the server over authenticated gRPC, receives host commands, writes durable local journals/logs, and executes Docker, Tart, or native runner lifecycles locally.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how provisioning rules, profiles, hosts, and runner instances combine to calculate capacity and concurrency.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system model, including how provisioning rules, runner targets, hosts, and runner instances combine to calculate capacity and concurrency.
 
 ## Prerequisites
 
@@ -220,7 +220,7 @@ powershell -ExecutionPolicy Bypass -File .\Install-HostWorker.ps1 `
   -EnrollmentToken '<host-token-from-hosts-page>'
 ```
 
-Then create runner profiles with **Host Platform** = `Windows` and **Execution Backend** = `Docker`.
+Then create a runner target with **Host Platform** = `Windows` and **Execution Backend** = `Docker`.
 
 Or run the HostWorker itself as a Windows container on a Windows Docker host. This uses the separate Windows HostWorker image and the Docker named pipe to launch actual Windows-based runner containers:
 
@@ -295,50 +295,69 @@ Variables:
   ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
 ```
 
-Higher priority sets win when keys conflict. Profiles compose multiple sets.
+Higher priority sets win when keys conflict. Runner targets compose multiple sets.
 
-### 3. Create Runner Profiles
+### 3. Create Provisioning Rules and Runner Targets
 
-Go to **Runner Profiles** and create a profile:
+Go to **Provisioning Rules** and create a rule with one or more runner targets:
 
 | Field | Example |
 |---|---|
-| Name | `github-linux-builder` |
+| Rule name | `GitHub builders` |
+| Type | Webhook |
 | Provider | GitHub Actions |
 | Credential | (select from dropdown) |
+| Target name | `Linux Docker` |
+| Workflow target key | `rr-linux-docker` |
 | Host Platform | Linux |
 | Execution Backend | Docker |
-| Labels | `linux, docker, x64` |
-| Max Parallel Per Host | 4 |
+| Advertised labels | `self-hosted, linux, docker, x64` |
+| Capacity | `MaxConcurrent = 10` |
 | Docker Registry | `ghcr.io` |
 | Docker Image | `myorg/runner-image` |
 | Docker Tag | `latest` |
 | Env Var Sets | ✅ dotnet-8-sdk, ✅ android-sdk |
 
-### 4. Assign Profiles to Hosts
+For GitHub Actions and Gitea Actions, copy the generated workflow snippet into your workflow:
 
-Go to **Hosts**, click **Assign** on a connected host, select a profile and desired instance count. The orchestration engine will automatically deploy runners.
+```yaml
+runs-on: [self-hosted, rr-linux-docker]
+```
+
+For Azure DevOps, use the generated pool/demands snippet instead:
+
+```yaml
+pool:
+  name: Default
+  demands:
+    - rr.target -equals rr-windows-native
+```
+
+### 4. Route Targets to Hosts
+
+Use the rule's host routing controls to restrict placement by host platform, host routing group, or host labels. Static and scale-set rules maintain warm capacity automatically; webhook rules provision runners when matching workflow jobs arrive.
 
 ### 5. Understand provisioning and concurrency
 
 RunnerRunner has two provisioning paths:
 
 - **Static assignments** - host/profile pairs with a fixed desired count. These are reconciled by the legacy orchestration engine.
-- **Provisioning rules** - the newer model for Static, ScaleSet, Webhook/JIT, and future Scheduled provisioning. Rules can target hosts by platform, host ID, host group, or labels.
+- **Provisioning rules** - the primary model for Static, ScaleSet, Webhook/JIT, and future Scheduled provisioning. Rules own runner targets and can route them to hosts by platform, host ID, host routing group, or host labels.
+
+The naming is intentionally split by layer: runner targets are what workflows request, host routing groups/labels decide which machines may run the work, and provider runner groups or Azure pools decide where the registered runner is visible inside the CI provider.
 
 Capacity is calculated from the narrowest remaining limit:
 
 1. FIFO ordering for queued webhook jobs in the same rule or platform/backend lane.
 2. Rule-level capacity: `DesiredCount`, `MaxInstances`, or `MaxConcurrent`.
-3. Profile-level per-host capacity: `MaxParallelPerHost`.
-4. Host backend capacity: `MaxDockerContainers`, `MaxTartVMs`, or `MaxNativeProcesses`.
+3. Host backend capacity: `MaxDockerContainers`, `MaxTartVMs`, or `MaxNativeProcesses`.
 
-For a profile mapped to a rule, the effective pool limit is the sum across matching hosts of `min(profile per-host limit, host backend limit)`. If a webhook rule allows 10 concurrent jobs, but the matching pool has 3 hosts and the profile allows 1 runner per host, only 3 runners can start at once. A backend limit of `0` disables that backend on that host.
+For a runner target in a rule, the effective host capacity is the sum of matching hosts' backend limits. If a webhook rule allows 10 concurrent jobs, and the matching host route has 3 Docker hosts with 4 Docker slots each, the rule cap of 10 is narrower than the host route's 12 slots. A backend limit of `0` disables that backend on that host.
 
 ### 6. Runner image/backend info in the GHA job log
 
 Every runner deployed by RunnerRunner surfaces its backend, image, host, and
-profile info into the provider's job log through two complementary channels:
+target info into the provider's job log through two complementary channels:
 
 1. **`rr-*` metadata labels** — appended to the runner's label set so they
    show up in the "Set up job" block's `Labels:` list:
@@ -346,14 +365,14 @@ profile info into the provider's job log through two complementary channels:
    ```
    rr-backend:docker
    rr-provider:GitHubActions
-   rr-profile:github-linux-builder
+   rr-target:github-linux-builder
    rr-host:mac-studio-01
    rr-image:ghcr.io-myorg-runner-image
    rr-tag:latest
    ```
 
    These are informational only — don't match them with `runs-on`. Toggle
-   per-profile via **Emit `rr-*` metadata labels** on the profile editor
+   per-target via **Emit `rr-*` metadata labels** on the provisioning rule target editor
    (default: on).
 
 2. **Job-started banner hook** — RunnerRunner installs an
@@ -365,7 +384,7 @@ profile info into the provider's job log through two complementary channels:
    ▸ RunnerRunner environment
      Backend:         docker
      Host:            mac-studio-01
-     Profile:         github-linux-builder
+     Target:          github-linux-builder
      Provider:        GitHubActions
      Image:           ghcr.io/myorg/runner-image:latest
      Agent version:   2.333.1
@@ -375,7 +394,7 @@ profile info into the provider's job log through two complementary channels:
    The hook script itself is static and reads `RR_META_*` env vars the
    server seeds into the deploy command, so it works identically across
    Docker (bind-mounted read-only), Tart (SCP'd into the guest), and
-   Native (written to the per-instance directory). Toggle per-profile
+   Native (written to the per-instance directory). Toggle per-target
    via **Install job-started banner hook** (default: on).
 
 **Caveats**
@@ -498,7 +517,7 @@ Layer 2: Env Var Sets (ordered by priority)
    dotnet-8-sdk (priority 1): DOTNET_ROOT=/usr/share/dotnet
    android-sdk (priority 2): ANDROID_HOME=/opt/android
 
-Layer 3: Profile overrides
+Layer 3: Runner target overrides
    DOTNET_ROOT=/custom/dotnet
 
 Layer 4: Host overrides

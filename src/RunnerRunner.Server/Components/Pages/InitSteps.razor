@@ -1,0 +1,255 @@
+@page "/custom-steps"
+@page "/init-steps"
+@attribute [Authorize(Policy = RunnerRunnerPolicies.ManageProfiles)]
+@rendermode InteractiveServer
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@inject IDocumentStore Store
+@inject IJSRuntime JS
+
+<PageTitle>Custom Steps - RunnerRunner</PageTitle>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-code-slash"></i> Custom Steps</h1>
+        <span class="page-desc">Define reusable scripts that provisioning rules can reference in runner lifecycle order.</span>
+    </div>
+</SectionContent>
+
+<div class="mb-3 d-flex flex-wrap gap-2">
+    <button class="btn btn-primary" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Custom Step</button>
+</div>
+
+<div class="alert alert-info py-2 d-flex align-items-center gap-2 mb-3" style="font-size: 0.9rem;">
+    <i class="bi bi-info-circle"></i>
+    <span>Custom steps are live shared definitions. Editing a step updates every provisioning rule that references it.</span>
+</div>
+
+@if (showForm)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="init-step-form-title" @onclick="CancelEdit">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="init-step-form-title" class="modal-title">
+                            <i class="bi bi-code-slash me-2"></i>@(isEditing ? "Edit" : "Create") custom step
+                        </h5>
+                        <div class="modal-kicker">Reusable script step referenced by provisioning rule runner definitions.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CancelEdit" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrWhiteSpace(formError))
+                    {
+                        <div class="alert alert-danger py-2">@formError</div>
+                    }
+
+                    <div class="row g-3">
+                        <div class="col-md-5">
+                            <label class="form-label">Name</label>
+                            <input class="form-control" @bind="editStep.Name" />
+                        </div>
+                        <div class="col-md-7">
+                            <label class="form-label">Description</label>
+                            <input class="form-control" @bind="editStep.Description" />
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Phase</label>
+                            <select class="form-select" @bind="editStep.Phase">
+                                @foreach (var phase in Enum.GetValues<InitStepPhase>())
+                                {
+                                    <option value="@phase">@phase</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Shell</label>
+                            <select class="form-select" @bind="editStep.Shell">
+                                @foreach (var shell in Enum.GetValues<InitStepShell>())
+                                {
+                                    <option value="@shell">@shell</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Timeout (seconds)</label>
+                            <input type="number" class="form-control" min="1" @bind="editStep.TimeoutSeconds" />
+                        </div>
+                        <div class="col-md-3 d-flex align-items-end">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" @bind="editStep.Enabled" id="initStepEnabled" />
+                                <label class="form-check-label" for="initStepEnabled">Enabled by default</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Working directory (optional)</label>
+                            <input class="form-control" @bind="editStep.WorkingDirectory" />
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" @bind="editStep.ContinueOnError" id="continueOnError" />
+                                <label class="form-check-label" for="continueOnError">Continue on error</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <label class="form-label">Script</label>
+                        <textarea class="form-control font-monospace" rows="12" @bind="editStep.Script"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="CancelEdit">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SaveStep"><i class="bi bi-check2 me-1"></i>Save custom step</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="table-responsive">
+    <table class="table table-striped resizable-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Phase</th>
+                <th>Shell</th>
+                <th>Timeout</th>
+                <th>Status</th>
+                <th class="actions-col">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var step in steps.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                <tr>
+                    <td class="name-cell">
+                        <span class="primary-label">@step.Name</span>
+                        @if (!string.IsNullOrWhiteSpace(step.Description))
+                        {
+                            <small class="secondary-label">@step.Description</small>
+                        }
+                    </td>
+                    <td>@step.Phase</td>
+                    <td>@step.Shell</td>
+                    <td>@step.TimeoutSeconds s</td>
+                    <td>
+                        <span class="badge @(step.Enabled ? "bg-success" : "bg-secondary")">
+                            @(step.Enabled ? "Enabled" : "Disabled")
+                        </span>
+                    </td>
+                    <td class="actions-cell">
+                        <button class="btn btn-sm btn-outline-primary" @onclick="() => EditStep(step)"><i class="bi bi-pencil-square"></i> Edit</button>
+                        <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteStep(step)"><i class="bi bi-trash3"></i> Delete</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<RunnerInitStepDefinition> steps = [];
+    private RunnerInitStepDefinition editStep = new() { Name = "" };
+    private bool showForm;
+    private bool isEditing;
+    private string? formError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        steps = (await Store.Query<RunnerInitStepDefinition>().ToList()).ToList();
+    }
+
+    private void ShowCreateForm()
+    {
+        editStep = new RunnerInitStepDefinition { Name = "" };
+        formError = null;
+        isEditing = false;
+        showForm = true;
+    }
+
+    private void EditStep(RunnerInitStepDefinition step)
+    {
+        editStep = CloneStep(step);
+        formError = null;
+        isEditing = true;
+        showForm = true;
+    }
+
+    private void CancelEdit()
+    {
+        showForm = false;
+        formError = null;
+    }
+
+    private async Task SaveStep()
+    {
+        editStep.Name = (editStep.Name ?? "").Trim();
+        editStep.Description = string.IsNullOrWhiteSpace(editStep.Description) ? null : editStep.Description.Trim();
+
+        if (string.IsNullOrWhiteSpace(editStep.Name))
+        {
+            formError = "Custom step name is required.";
+            return;
+        }
+
+        editStep.UpdatedAt = DateTime.UtcNow;
+
+        if (isEditing)
+            await Store.Update(editStep);
+        else
+            await Store.Insert(editStep);
+
+        await LoadDataAsync();
+        showForm = false;
+    }
+
+    private async Task ConfirmAndDeleteStep(RunnerInitStepDefinition step)
+    {
+        var rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+        var references = rules
+            .Where(rule => rule.RunnerDefinitions.Any(runner =>
+                runner.InitStepRefs.Any(reference =>
+                    string.Equals(reference.InitStepId, step.Id, StringComparison.OrdinalIgnoreCase))))
+            .Select(rule => rule.Name)
+            .ToList();
+
+        if (references.Count > 0)
+        {
+            await JS.InvokeVoidAsync("alert", $"Custom step '{step.Name}' is referenced by: {string.Join(", ", references)}. Remove those references before deleting it.");
+            return;
+        }
+
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete custom step '{step.Name}'?");
+        if (!confirmed)
+            return;
+
+        await Store.Remove<RunnerInitStepDefinition>(step.Id);
+        await LoadDataAsync();
+    }
+
+    private static RunnerInitStepDefinition CloneStep(RunnerInitStepDefinition step) => new()
+    {
+        Id = step.Id,
+        Name = step.Name,
+        Description = step.Description,
+        Phase = step.Phase,
+        Shell = step.Shell,
+        Script = step.Script,
+        ContinueOnError = step.ContinueOnError,
+        TimeoutSeconds = step.TimeoutSeconds,
+        WorkingDirectory = step.WorkingDirectory,
+        EnvironmentVariableSetIds = [.. step.EnvironmentVariableSetIds],
+        EnvironmentOverrides = new Dictionary<string, string>(step.EnvironmentOverrides),
+        EnvironmentOverrideSecretKeys = [.. step.EnvironmentOverrideSecretKeys],
+        Enabled = step.Enabled,
+        CreatedAt = step.CreatedAt,
+        UpdatedAt = step.UpdatedAt
+    };
+}

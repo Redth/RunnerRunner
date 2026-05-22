@@ -50,6 +50,7 @@ public class RunnerInstance
 
     /// <summary>Provisioning rule ID that created this instance (if tracked).</summary>
     public string? ProvisioningRuleId { get; set; }
+    public string? RunnerDefinitionId { get; set; }
 
     /// <summary>Chronological log of status transitions for this instance.</summary>
     public List<StatusHistoryEntry> StatusHistory { get; set; } = [];

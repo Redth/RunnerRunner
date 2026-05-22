@@ -85,8 +85,8 @@
             </select>
         </div>
         <div class="rr-filter-field">
-            <label class="form-label">Profile</label>
-            <input type="search" class="form-control form-control-sm" list="event-profile-options" placeholder="matched profile" @bind="profileFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
+            <label class="form-label">Target</label>
+            <input type="search" class="form-control form-control-sm" list="event-profile-options" placeholder="runner target or profile" @bind="profileFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
         </div>
     </div>
     <div class="rr-filter-summary">Showing @filteredEvents.Count of @allEvents.Count events</div>
@@ -140,7 +140,7 @@ else
                 <th data-col-kind="related" data-col-min="112" data-col-preferred="150" data-col-priority="4">Rule</th>
                 <th data-col-kind="optional" data-col-min="100" data-col-preferred="140" data-col-priority="5">Labels</th>
                 <th data-col-kind="optional" data-col-min="88" data-col-preferred="112" data-col-priority="5">Image Tag</th>
-                <th data-col-kind="related" data-col-min="118" data-col-preferred="150" data-col-priority="4">Matched Profile</th>
+                <th data-col-kind="related" data-col-min="118" data-col-preferred="160" data-col-priority="4">Matched Target</th>
                 <th data-col-kind="description" data-col-min="220" data-col-preferred="320" data-col-priority="2" data-col-weight="1.7">Status</th>
                 <th data-col-kind="optional" data-col-min="98" data-col-preferred="126" data-col-priority="5">Instance</th>
             </tr>
@@ -186,7 +186,24 @@ else
                             <span class="text-muted">—</span>
                         }
                     </td>
-                    <td>@(evt.MatchedProfileName ?? "—")</td>
+                    <td>
+                        @if (!string.IsNullOrWhiteSpace(evt.MatchedRunnerDefinitionName) || !string.IsNullOrWhiteSpace(evt.MatchedProfileName))
+                        {
+                            <span class="primary-label">@(evt.MatchedRunnerDefinitionName ?? evt.MatchedProfileName)</span>
+                            @if (!string.IsNullOrWhiteSpace(evt.RequestedRunnerTargetKey))
+                            {
+                                <small class="secondary-label">@evt.RequestedRunnerTargetKey</small>
+                            }
+                        }
+                        else if (!string.IsNullOrWhiteSpace(evt.RequestedRunnerTargetKey))
+                        {
+                            <span class="badge bg-warning text-dark" title="@evt.RunnerTargetSelectionReason">@evt.RequestedRunnerTargetKey</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted">—</span>
+                        }
+                    </td>
                     <td>
                         @{
                             var insight = GetEventInsight(evt);
@@ -270,7 +287,8 @@ else
 
     private IEnumerable<string> ActionOptions => DistinctOptions(allEvents.Select(e => e.Action));
 
-    private IEnumerable<string> ProfileOptions => DistinctOptions(allEvents.Select(e => e.MatchedProfileName));
+    private IEnumerable<string> ProfileOptions => DistinctOptions(allEvents
+        .SelectMany(e => new[] { e.MatchedRunnerDefinitionName, e.RequestedRunnerTargetKey, e.MatchedProfileName }));
 
     private bool HasActiveFilters =>
         !string.IsNullOrWhiteSpace(searchText)
@@ -320,6 +338,9 @@ else
                 || e.Action.Contains(term, StringComparison.OrdinalIgnoreCase)
                 || e.Provider.Contains(term, StringComparison.OrdinalIgnoreCase)
                 || GetSourceName(e).Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (e.MatchedRunnerDefinitionName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.RequestedRunnerTargetKey?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.RunnerTargetSelectionReason?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || (e.MatchedProfileName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || (e.InstanceId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || e.JobId.Contains(term, StringComparison.OrdinalIgnoreCase)
@@ -358,7 +379,11 @@ else
         {
             var term = profileFilter.Trim();
             q = q.Where(e =>
-                (e.MatchedProfileName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                (e.MatchedRunnerDefinitionName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.MatchedRunnerDefinitionId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.RequestedRunnerTargetKey?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || e.ValidRunnerTargetKeys.Any(target => target.Contains(term, StringComparison.OrdinalIgnoreCase))
+                || (e.MatchedProfileName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || (e.MatchedProfileId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
@@ -547,7 +572,6 @@ else
     {
         CapacityBlockerKind.Fifo => "bg-secondary",
         CapacityBlockerKind.ProvisioningRule => "bg-warning text-dark",
-        CapacityBlockerKind.Profile => "bg-info text-dark",
         CapacityBlockerKind.Host => "bg-danger",
         CapacityBlockerKind.Matching => "bg-dark",
         CapacityBlockerKind.Configuration => "bg-secondary",
@@ -558,7 +582,6 @@ else
     {
         CapacityBlockerKind.Fifo => "event-blocker-neutral",
         CapacityBlockerKind.ProvisioningRule => "event-blocker-warn",
-        CapacityBlockerKind.Profile => "event-blocker-info",
         CapacityBlockerKind.Host => "event-blocker-danger",
         CapacityBlockerKind.Matching => "event-blocker-dark",
         CapacityBlockerKind.Configuration => "event-blocker-neutral",
@@ -569,7 +592,6 @@ else
     {
         CapacityBlockerKind.Fifo => "bi-signpost-split",
         CapacityBlockerKind.ProvisioningRule => "bi-diagram-3",
-        CapacityBlockerKind.Profile => "bi-person-badge",
         CapacityBlockerKind.Host => "bi-hdd-network",
         CapacityBlockerKind.Matching => "bi-filter-circle",
         CapacityBlockerKind.Configuration => "bi-gear",
@@ -580,7 +602,6 @@ else
     {
         CapacityBlockerKind.Fifo => "FIFO",
         CapacityBlockerKind.ProvisioningRule => "Rule",
-        CapacityBlockerKind.Profile => "Profile",
         CapacityBlockerKind.Host => "Host",
         CapacityBlockerKind.Matching => "Match",
         CapacityBlockerKind.Configuration => "Config",

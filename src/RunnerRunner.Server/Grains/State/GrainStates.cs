@@ -82,6 +82,7 @@ public class RunnerInstanceGrainState
     [Id(21)] public string? ProvisioningRuleId { get; set; }
 
     [Id(22)] public string? ImageTagOverride { get; set; }
+    [Id(23)] public string? RunnerDefinitionId { get; set; }
 }
 
 [GenerateSerializer]
@@ -126,6 +127,9 @@ public class ProvisioningRuleConfig
 
     // Scheduled (future)
     [Id(19)] public string? CronExpression { get; set; }
+    [Id(20)] public List<RunnerDefinition> RunnerDefinitions { get; set; } = [];
+    [Id(21)] public RunnerProvider Provider { get; set; }
+    [Id(22)] public string? ProviderCredentialId { get; set; }
 }
 
 [GenerateSerializer]

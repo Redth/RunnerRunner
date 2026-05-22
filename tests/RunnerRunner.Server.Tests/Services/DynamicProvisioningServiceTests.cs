@@ -73,6 +73,48 @@ public class DynamicProvisioningServiceTests
     }
 
     [Fact]
+    public void GetEffectiveRunnerGroup_UsesAzureCredentialPool_WhenProfileUsesDefault()
+    {
+        var profile = new RunnerProfile
+        {
+            Name = "windows-native",
+            Provider = RunnerProvider.AzureDevOps,
+            RunnerGroup = "Default"
+        };
+        var credential = new ProviderCredential
+        {
+            Name = "azdo",
+            Provider = RunnerProvider.AzureDevOps,
+            AzDoPoolName = "RunnerRunner"
+        };
+
+        var result = DynamicProvisioningService.GetEffectiveRunnerGroup(profile, credential);
+
+        Assert.Equal("RunnerRunner", result);
+    }
+
+    [Fact]
+    public void GetEffectiveRunnerGroup_PreservesExplicitRunnerGroup()
+    {
+        var profile = new RunnerProfile
+        {
+            Name = "windows-native",
+            Provider = RunnerProvider.AzureDevOps,
+            RunnerGroup = "CustomPool"
+        };
+        var credential = new ProviderCredential
+        {
+            Name = "azdo",
+            Provider = RunnerProvider.AzureDevOps,
+            AzDoPoolName = "RunnerRunner"
+        };
+
+        var result = DynamicProvisioningService.GetEffectiveRunnerGroup(profile, credential);
+
+        Assert.Equal("CustomPool", result);
+    }
+
+    [Fact]
     public void BuildGitHubRunQueries_IncludesActiveRecoveryQueries()
     {
         var queries = DynamicProvisioningService.BuildGitHubRunQueries("https://api.github.com", "Redth/ailoha");

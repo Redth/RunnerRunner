@@ -14,18 +14,44 @@
 <SectionContent SectionName="page-header">
     <div class="page-header">
         <h1><i class="bi bi-diagram-3-fill"></i> Provisioning Rules</h1>
-        <span class="page-desc">Define how runner profiles are provisioned across hosts.</span>
+        <span class="page-desc">Define what workflows request and where RunnerRunner may place them.</span>
     </div>
 </SectionContent>
 
-<div class="mb-3 d-flex flex-wrap gap-2">
-    <button class="btn btn-primary" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i> New Rule</button>
-    <a class="btn btn-outline-secondary" href="/webhook-events"><i class="bi bi-clock-history me-1"></i> View Event Audit</a>
+<div class="provisioning-hero mb-3">
+    <div>
+        <div class="provisioning-eyebrow">Provisioning control</div>
+        <h2>Turn CI demand into ready runners.</h2>
+        <p>Choose the provider credential, webhook scope, runner targets, provider visibility, host routing, custom steps, and capacity limits for static pools, scale sets, and webhook-triggered jobs.</p>
+    </div>
+    <div class="provisioning-hero-actions">
+        <button class="btn btn-primary" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i>New rule</button>
+        <a class="btn btn-outline-secondary" href="/webhook-events"><i class="bi bi-clock-history me-1"></i>Event audit</a>
+        <a class="btn btn-outline-secondary" href="/custom-steps"><i class="bi bi-code-slash me-1"></i>Custom steps</a>
+    </div>
 </div>
 
-<div class="alert alert-info py-2 d-flex align-items-center gap-2 mb-3" style="font-size: 0.9rem;">
-    <i class="bi bi-info-circle"></i>
-    <span>Static, scale-set, and webhook-triggered runners are all managed here. Effective dispatch follows <strong>FIFO → rule cap → profile per-host cap → host backend slots</strong>.</span>
+<div class="provisioning-metric-grid mb-3" aria-label="Provisioning rule summary">
+    <div class="provisioning-metric-card">
+        <span>Enabled rules</span>
+        <strong>@rules.Count(r => r.Enabled)</strong>
+        <small>@rules.Count total</small>
+    </div>
+    <div class="provisioning-metric-card">
+        <span>Runner targets</span>
+        <strong>@rules.Sum(rule => GetDisplayRunnerDefinitions(rule).Count)</strong>
+        <small>owned by rules</small>
+    </div>
+    <div class="provisioning-metric-card">
+        <span>Matching hosts</span>
+        <strong>@hosts.Count(h => h.AgentStatus == AgentStatus.Online)</strong>
+        <small>@hosts.Count registered</small>
+    </div>
+    <div class="provisioning-metric-card">
+        <span>Webhook rules</span>
+        <strong>@rules.Count(r => r.Type == ProvisioningType.Webhook)</strong>
+        <small>event driven</small>
+    </div>
 </div>
 
 @if (showForm)
@@ -33,301 +59,821 @@
     <div class="modal-backdrop fade show"></div>
     <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="provisioning-rule-title" @onclick="CancelEdit">
         <div class="modal-dialog modal-xxl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
-            <div class="modal-content">
+            <div class="modal-content provisioning-builder-modal">
                 <div class="modal-header">
                     <div>
                         <h5 id="provisioning-rule-title" class="modal-title">
-                            <i class="bi bi-diagram-3-fill me-2"></i>@(isEditing ? "Edit" : "Create") Provisioning Rule
+                            <i class="bi bi-diagram-3-fill me-2"></i>@(isEditing ? "Edit" : "Create") provisioning rule
                         </h5>
-                        <div class="modal-kicker">Configure static, scale-set, or webhook-triggered runner provisioning without leaving the rule list.</div>
+                        <div class="modal-kicker">Define the CI connection, rule capacity, host routing, and the runner targets workflow authors can request.</div>
                     </div>
                     <button type="button" class="btn-close" @onclick="CancelEdit" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
+                    @if (!string.IsNullOrWhiteSpace(formError))
+                    {
+                        <div class="alert alert-danger py-2" role="alert">@formError</div>
+                    }
 
-            <div class="row">
-                <div class="col-md-4 mb-3">
-                    <label class="form-label">Name</label>
-                    <input class="form-control" @bind="editRule.Name" />
-                </div>
-                <div class="col-md-5 mb-3">
-                    <label class="form-label">Description</label>
-                    <input class="form-control" @bind="editRule.Description" />
-                </div>
-                <div class="col-md-3 mb-3">
-                    <label class="form-label">Type</label>
-                    <select class="form-select" @bind="editRule.Type" @bind:after="OnTypeChanged">
-                        @foreach (var t in SupportedProvisioningTypes)
-                        {
-                            <option value="@t">@t</option>
-                        }
-                    </select>
-                </div>
-            </div>
+                    <div class="rule-builder-grid">
+                        <div class="rule-builder-main">
+                            <section class="rr-form-section">
+                                <div class="rr-form-section-title"><i class="bi bi-sliders"></i>Rule basics</div>
+                                <div class="row g-3">
+                                    <div class="col-lg-5">
+                                        <label class="form-label" for="ruleName">Name</label>
+                                        <input id="ruleName" class="form-control" @bind="editRule.Name" />
+                                    </div>
+                                    <div class="col-lg-4">
+                                        <label class="form-label" for="ruleDescription">Description</label>
+                                        <input id="ruleDescription" class="form-control" @bind="editRule.Description" />
+                                    </div>
+                                    <div class="col-lg-3">
+                                        <label class="form-label" for="ruleType">Provisioning type</label>
+                                        <select id="ruleType" class="form-select" @bind="editRule.Type" @bind:after="OnTypeChanged">
+                                            @foreach (var type in SupportedProvisioningTypes)
+                                            {
+                                                <option value="@type">@GetTypeLabel(type)</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="col-lg-4">
+                                        <label class="form-label" for="ruleProvider">Provider</label>
+                                        <select id="ruleProvider" class="form-select" @bind="editRule.Provider" @bind:after="OnProviderChanged">
+                                            @foreach (var provider in Enum.GetValues<RunnerProvider>())
+                                            {
+                                                <option value="@provider">@GetProviderLabel(provider)</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="col-lg-5">
+                                        <label class="form-label" for="ruleCredential">Provider credential</label>
+                                        <select id="ruleCredential" class="form-select" @bind="editRule.ProviderCredentialId" @bind:after="OnProviderCredentialChanged">
+                                            <option value="">No credential selected</option>
+                                            @foreach (var credential in credentials.Where(c => c.Provider == editRule.Provider).OrderBy(c => c.Name))
+                                            {
+                                                <option value="@credential.Id">@credential.Name</option>
+                                            }
+                                        </select>
+                                        <div class="form-text">The rule credential is used for runner registration, JIT config, cleanup, and provider API calls.</div>
+                                    </div>
+                                    <div class="col-lg-3 d-flex align-items-end">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" role="switch" id="ruleEnabledCheck" @bind="editRule.Enabled" />
+                                            <label class="form-check-label" for="ruleEnabledCheck">Rule enabled</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
 
-            @if (!string.IsNullOrWhiteSpace(formError))
-            {
-                <div class="alert alert-danger py-2">@formError</div>
-            }
+                            <section class="rr-form-section">
+                                <div class="rr-form-section-title"><i class="bi bi-speedometer2"></i>Capacity and lifecycle</div>
+                                <div class="capacity-control-grid">
+                                    @if (editRule.Type == ProvisioningType.Static)
+                                    {
+                                        <div>
+                                            <label class="form-label" for="desiredCount">Desired runners</label>
+                                            <input id="desiredCount" type="number" class="form-control" @bind="editRule.DesiredCount" min="0" />
+                                            <div class="form-text">Keep this many runners alive for the rule.</div>
+                                        </div>
+                                    }
+                                    else if (editRule.Type == ProvisioningType.ScaleSet)
+                                    {
+                                        <div>
+                                            <label class="form-label" for="minReady">Warm runners</label>
+                                            <input id="minReady" type="number" class="form-control" @bind="editRule.MinReady" min="0" />
+                                        </div>
+                                        <div>
+                                            <label class="form-label" for="maxInstances">Max instances</label>
+                                            <input id="maxInstances" type="number" class="form-control" @bind="editRule.MaxInstances" min="1" />
+                                        </div>
+                                        <div>
+                                            <label class="form-label" for="scaleDownDelay">Scale-down delay</label>
+                                            <input id="scaleDownDelay" type="number" class="form-control" @bind="editRule.ScaleDownDelaySeconds" min="0" />
+                                            <div class="form-text">Seconds to wait before retiring idle capacity.</div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div>
+                                            <label class="form-label" for="maxConcurrent">Max concurrent jobs</label>
+                                            <input id="maxConcurrent" type="number" class="form-control" @bind="editRule.MaxConcurrent" min="1" />
+                                            <div class="form-text">Global concurrency for jobs accepted by this rule.</div>
+                                        </div>
+                                        <div>
+                                            <label class="form-label" for="webhookWarm">Warm runners</label>
+                                            <input id="webhookWarm" type="number" class="form-control" @bind="editRule.MinReady" min="0" />
+                                            <div class="form-text">Optional idle runners to pre-provision.</div>
+                                        </div>
+                                        <div>
+                                            <label class="form-label" for="cooldownSeconds">Cooldown seconds</label>
+                                            <input id="cooldownSeconds" type="number" class="form-control" @bind="editRule.CooldownSeconds" min="0" />
+                                        </div>
+                                    }
+                                </div>
+                            </section>
 
-            @* --- Static fields --- *@
-            @if (editRule.Type == ProvisioningType.Static)
-            {
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label">Desired Count</label>
-                        <input type="number" class="form-control" @bind="editRule.DesiredCount" min="1" />
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label">Runner Profile</label>
-                        <select class="form-select" @bind="editRule.ProfileId">
-                            <option value="">— Select —</option>
-                            @foreach (var p in profiles)
+                            @if (editRule.Type == ProvisioningType.Webhook)
                             {
-                                <option value="@p.Id">@p.Name</option>
-                            }
-                        </select>
-                    </div>
-                </div>
-            }
+                                <section class="rr-form-section">
+                                    <div class="rr-form-section-title"><i class="bi bi-broadcast-pin"></i>Webhook scope</div>
+                                    <div class="row g-3">
+                                        <div class="col-lg-7">
+                                            <label class="form-label" for="webhookSecret">@(UsesGitHubAppCredential() ? "Webhook secret override" : "Webhook secret")</label>
+                                            <div class="input-group">
+                                                <input id="webhookSecret" class="form-control" @bind="editRule.WebhookSecret" autocomplete="off" />
+                                                <button class="btn btn-outline-secondary" type="button" @onclick="GenerateSecret">Generate</button>
+                                            </div>
+                                            @if (UsesGitHubAppCredential())
+                                            {
+                                                <div class="form-text">Leave blank to use the selected GitHub App credential's webhook secret.</div>
+                                            }
+                                        </div>
+                                        <div class="col-lg-5">
+                                            <label class="form-label">Webhook endpoint</label>
+                                            <div class="webhook-url-card">
+                                                @if (TryGetWebhookEndpoint(editRule.Provider, out var endpoint))
+                                                {
+                                                    <i class="bi bi-link-45deg"></i>
+                                                    <code>@endpoint</code>
+                                                }
+                                                else
+                                                {
+                                                    <i class="bi bi-exclamation-triangle"></i>
+                                                    <span>No webhook ingress for @editRule.Provider.</span>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
 
-            @* --- ScaleSet fields --- *@
-            @if (editRule.Type == ProvisioningType.ScaleSet)
-            {
-                <div class="row">
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Min Ready</label>
-                        <input type="number" class="form-control" @bind="editRule.MinReady" min="0" />
-                        <div class="form-text">Warm pool: runners kept idle and ready</div>
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Max Instances</label>
-                        <input type="number" class="form-control" @bind="editRule.MaxInstances" min="1" />
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Scale Down Delay (seconds)</label>
-                        <input type="number" class="form-control" @bind="editRule.ScaleDownDelaySeconds" min="0" />
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Runner Profile</label>
-                        <select class="form-select" @bind="editRule.ProfileId">
-                            <option value="">— Select —</option>
-                            @foreach (var p in profiles)
-                            {
-                                <option value="@p.Id">@p.Name</option>
-                            }
-                        </select>
-                    </div>
-                </div>
-            }
+                                    @if (UsesGitHubAppCredential())
+                                    {
+                                        <div class="alert alert-info py-2 mt-3">
+                                            <i class="bi bi-github me-1"></i>
+                                            GitHub App webhooks can fan in from multiple orgs/repos. Runner API calls use the installation ID from each webhook event.
+                                        </div>
+                                    }
 
-            @* --- Webhook fields --- *@
-            @if (editRule.Type == ProvisioningType.Webhook)
-            {
-                <div class="row">
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Provider</label>
-                        <select class="form-select" @bind="editRule.Provider" @bind:after="OnProviderChanged">
-                            @foreach (var p in Enum.GetValues<RunnerProvider>())
-                            {
-                                <option value="@p">@p</option>
+                                    <div class="row g-3 mt-1">
+                                        <div class="col-lg-6">
+                                            <label class="form-label">Allowed owners / orgs</label>
+                                            <div class="runner-chip-list">
+                                                @foreach (var org in editAllowedOrgs.ToList())
+                                                {
+                                                    <span class="runner-chip">
+                                                        <i class="bi bi-buildings"></i>@org
+                                                        <button type="button" @onclick="() => editAllowedOrgs.Remove(org)" aria-label="Remove owner @org"><i class="bi bi-x"></i></button>
+                                                    </span>
+                                                }
+                                            </div>
+                                            <div class="input-group input-group-sm mt-2">
+                                                <SmartAutocomplete Value="@newOrgInput"
+                                                                   ValueChanged="value => newOrgInput = value ?? string.Empty"
+                                                                   Suggestions="@GetAllowedOrgSuggestions()"
+                                                                   Placeholder="Add owner or org..."
+                                                                   AriaLabel="Allowed owner or org" />
+                                                <button class="btn btn-outline-primary" type="button" @onclick="AddOrg"><i class="bi bi-plus-lg"></i></button>
+                                            </div>
+                                        </div>
+                                        <div class="col-lg-6">
+                                            <label class="form-label">Allowed repos</label>
+                                            <div class="runner-chip-list">
+                                                @foreach (var repo in editAllowedRepos.ToList())
+                                                {
+                                                    <span class="runner-chip">
+                                                        <i class="bi bi-git"></i>@repo
+                                                        <button type="button" @onclick="() => editAllowedRepos.Remove(repo)" aria-label="Remove repo @repo"><i class="bi bi-x"></i></button>
+                                                    </span>
+                                                }
+                                            </div>
+                                            <div class="input-group input-group-sm mt-2">
+                                                <SmartAutocomplete Value="@newRepoInput"
+                                                                   ValueChanged="value => newRepoInput = value ?? string.Empty"
+                                                                   Suggestions="@GetAllowedRepoSuggestions()"
+                                                                   Placeholder="Add org/repo..."
+                                                                   AriaLabel="Allowed repository" />
+                                                <button class="btn btn-outline-primary" type="button" @onclick="AddRepo"><i class="bi bi-plus-lg"></i></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-text mt-2">Leave both lists empty to allow any repository accepted by the webhook credential.</div>
+                                </section>
                             }
-                        </select>
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Provider Credential</label>
-                        <select class="form-select" @bind="editRule.ProviderCredentialId">
-                            <option value="">— Select credential —</option>
-                            @foreach (var cred in credentials.Where(c => c.Provider == editRule.Provider))
-                            {
-                                <option value="@cred.Id">@cred.Name</option>
-                            }
-                        </select>
-                    </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label">@(UsesGitHubAppCredential() ? "Webhook Secret Override" : "Webhook Secret")</label>
-                        <div class="input-group">
-                            <input class="form-control" @bind="editRule.WebhookSecret" />
-                            <button class="btn btn-outline-secondary" type="button" @onclick="GenerateSecret">Generate</button>
+
+                            <section class="rr-form-section">
+                                <div class="rr-form-section-title"><i class="bi bi-hdd-network"></i>Host routing</div>
+                                <p class="section-help mb-3">Host routing is RunnerRunner placement: which connected machines are allowed to run this rule. It is separate from the workflow target key and provider runner group/pool.</p>
+                                <div class="row g-3">
+                                    <div class="col-lg-5">
+                                        <label class="form-label" for="targetGroup">Host routing group</label>
+                                        <SmartAutocomplete Value="@editRule.TargetGroupId"
+                                                           ValueChanged="value => editRule.TargetGroupId = string.IsNullOrWhiteSpace(value) ? null : value"
+                                                           Suggestions="@GetHostGroupSuggestions()"
+                                                           Placeholder="Any host routing group"
+                                                           AriaLabel="Host routing group" />
+                                    </div>
+                                    <div class="col-lg-7">
+                                        <label class="form-label">Required host capability labels</label>
+                                        <div class="runner-chip-list mb-2">
+                                            @foreach (var requirement in editHostLabels.OrderBy(kvp => kvp.Key))
+                                            {
+                                                var key = requirement.Key;
+                                                <span class="runner-chip">
+                                                    <i class="bi bi-tag"></i>@key=@requirement.Value
+                                                    <button type="button" @onclick="() => editHostLabels.Remove(key)" aria-label="Remove host label @key"><i class="bi bi-x"></i></button>
+                                                </span>
+                                            }
+                                        </div>
+                                        <div class="input-group input-group-sm">
+                                            <SmartAutocomplete Value="@newHostLabelInput"
+                                                               ValueChanged="value => newHostLabelInput = value ?? string.Empty"
+                                                               Suggestions="@GetHostCapabilityLabelSuggestions()"
+                                                               Placeholder="pool=mac-builders"
+                                                               AriaLabel="Required host capability label" />
+                                            <button class="btn btn-outline-secondary" type="button" @onclick="AddHostLabel"><i class="bi bi-plus-lg me-1"></i>Add</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="host-match-preview">
+                                    <div class="host-match-preview-header">
+                                        <span><i class="bi bi-radar"></i>Matching hosts preview</span>
+                                        <small>Calculated from this host routing plus each target's platform/backend.</small>
+                                    </div>
+                                    <div class="host-match-preview-grid">
+                                        @foreach (var runner in editRule.RunnerDefinitions.Where(r => r.Enabled).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+                                        {
+                                            var matches = GetMatchingHostsForRunner(runner).ToList();
+                                            <article class="host-match-card @(matches.Count == 0 ? "empty" : "")">
+                                                <div class="host-match-card-title">
+                                                    <strong>@runner.Name</strong>
+                                                    <span>@matches.Count host(s)</span>
+                                                </div>
+                                                <small>@runner.RequiredHostPlatform · @runner.ExecutionBackend</small>
+                                                @if (matches.Count == 0)
+                                                {
+                                                    <p>No hosts match this target yet. Check platform, backend limits, routing group, and required labels.</p>
+                                                }
+                                                else
+                                                {
+                                                    <div class="host-match-list">
+                                                        @foreach (var host in matches.Take(4))
+                                                        {
+                                                            <span class="host-match-pill @(host.AgentStatus == AgentStatus.Online ? "online" : "")">
+                                                                <i class="bi @GetPlatformIcon(host.Platform)"></i>@host.Label
+                                                            </span>
+                                                        }
+                                                        @if (matches.Count > 4)
+                                                        {
+                                                            <span class="host-match-pill muted">+@(matches.Count - 4) more</span>
+                                                        }
+                                                    </div>
+                                                }
+                                            </article>
+                                        }
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="rr-form-section runner-definition-section">
+                                <div class="section-title-row">
+                                    <div>
+                                        <div class="rr-form-section-title mb-1"><i class="bi bi-cpu"></i>Runner targets</div>
+                                        <p class="section-help">Each target has one workflow selector key plus the platform/backend, labels, environment, image, lifecycle, and custom steps this rule can provision.</p>
+                                    </div>
+                                    @if (editRule.Type == ProvisioningType.Webhook)
+                                    {
+                                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="AddRunnerDefinition"><i class="bi bi-plus-lg me-1"></i>Add target</button>
+                                    }
+                                </div>
+
+                                <div class="runner-definition-stack">
+                                    @for (var runnerIndex = 0; runnerIndex < editRule.RunnerDefinitions.Count; runnerIndex++)
+                                    {
+                                        var idx = runnerIndex;
+                                        var runner = editRule.RunnerDefinitions[idx];
+                                        EnsureRunnerEditorState(runner);
+                                        <article class="runner-definition-card" @key="runner.Id">
+                                            <div class="runner-definition-header">
+                                                <div>
+                                                    <div class="runner-card-kicker">@GetRunnerCardKicker(runner)</div>
+                                                    <h3>@(string.IsNullOrWhiteSpace(runner.Name) ? "Unnamed runner" : runner.Name)</h3>
+                                                </div>
+                                                <div class="runner-definition-actions">
+                                                    <span class="badge @(runner.Enabled ? "bg-success" : "bg-secondary")">@(runner.Enabled ? "Enabled" : "Disabled")</span>
+                                                    @if (editRule.Type == ProvisioningType.Webhook && editRule.RunnerDefinitions.Count > 1)
+                                                    {
+                                                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveRunnerDefinition(idx)" aria-label="Remove runner @runner.Name"><i class="bi bi-trash3"></i></button>
+                                                    }
+                                                </div>
+                                            </div>
+
+                                            <div class="row g-3">
+                                                <div class="col-lg-3">
+                                                    <label class="form-label" for="runnerName-@runner.Id">Target name</label>
+                                                    <input id="runnerName-@runner.Id" class="form-control" @bind="runner.Name" />
+                                                </div>
+                                                <div class="col-lg-3">
+                                                    <label class="form-label" for="runnerTargetKey-@runner.Id">Workflow target key</label>
+                                                    <SmartAutocomplete Value="@runner.TargetKey"
+                                                                       ValueChanged="value => runner.TargetKey = value ?? string.Empty"
+                                                                       Suggestions="@GetTargetKeySuggestions(runner)"
+                                                                       Placeholder="rr-linux-docker"
+                                                                       AriaLabel="Workflow target key"
+                                                                       CssClass="rr-autocomplete rr-autocomplete-mono" />
+                                                </div>
+                                                <div class="col-lg-4">
+                                                    <label class="form-label" for="runnerDescription-@runner.Id">Description</label>
+                                                    <input id="runnerDescription-@runner.Id" class="form-control" @bind="runner.Description" />
+                                                </div>
+                                                <div class="col-lg-2 d-flex align-items-end">
+                                                    <div class="form-check form-switch">
+                                                        <input class="form-check-input" type="checkbox" role="switch" id="runnerEnabled-@runner.Id" @bind="runner.Enabled" />
+                                                        <label class="form-check-label" for="runnerEnabled-@runner.Id">Enabled</label>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            @if (editRule.Type == ProvisioningType.Webhook)
+                                            {
+                                                <div class="target-selector-callout">
+                                                    <span>Workflow selector</span>
+                                                    <code>@runner.TargetKey</code>
+                                                    <small>@GetInlineWorkflowHint(runner)</small>
+                                                </div>
+
+                                                <details class="advanced-compatibility">
+                                                    <summary><i class="bi bi-sliders2"></i>Advanced compatibility label matchers</summary>
+                                                    <p class="form-text mb-3">Only use these to keep older workflows working while they migrate to the target key above.</p>
+                                                    <div class="runner-subsection-heading">
+                                                        <span><i class="bi bi-funnel"></i>Legacy label matchers</span>
+                                                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => AddMatcher(runner)"><i class="bi bi-plus-lg me-1"></i>Add matcher</button>
+                                                    </div>
+                                                    <div class="matcher-grid">
+                                                        @for (var matcherIndex = 0; matcherIndex < runner.Matchers.Count; matcherIndex++)
+                                                        {
+                                                            var matcherIdx = matcherIndex;
+                                                            var matcher = runner.Matchers[matcherIdx];
+                                                            EnsureMatcherEditorState(matcher);
+                                                            <div class="matcher-card" @key="matcher.Id">
+                                                                <div class="matcher-card-header">
+                                                                    <strong>Priority @matcher.Priority</strong>
+                                                                    <div class="matcher-actions">
+                                                                        <div class="form-check form-switch">
+                                                                            <input class="form-check-input" type="checkbox" role="switch" id="matcherEnabled-@matcher.Id" @bind="matcher.Enabled" />
+                                                                            <label class="form-check-label" for="matcherEnabled-@matcher.Id">Enabled</label>
+                                                                        </div>
+                                                                        <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveMatcher(runner, matcherIdx)" aria-label="Remove matcher"><i class="bi bi-x-lg"></i></button>
+                                                                    </div>
+                                                                </div>
+                                                                <label class="form-label" for="matcherPriority-@matcher.Id">Priority</label>
+                                                                <input id="matcherPriority-@matcher.Id" type="number" class="form-control form-control-sm matcher-priority" @bind="matcher.Priority" />
+                                                                <div class="runner-chip-list mt-2">
+                                                                    @foreach (var label in matcher.RequiredLabels.ToList())
+                                                                    {
+                                                                        var labelValue = label;
+                                                                        <span class="runner-chip">
+                                                                            <i class="bi bi-tag-fill"></i>@labelValue
+                                                                            <button type="button" @onclick="() => matcher.RequiredLabels.Remove(labelValue)" aria-label="Remove matcher label @labelValue"><i class="bi bi-x"></i></button>
+                                                                        </span>
+                                                                    }
+                                                                </div>
+                                                                <div class="input-group input-group-sm mt-2">
+                                                                    <SmartAutocomplete Value="@matcherLabelInputs[matcher.Id]"
+                                                                                       ValueChanged="value => matcherLabelInputs[matcher.Id] = value ?? string.Empty"
+                                                                                       Suggestions="@GetMatcherLabelSuggestions(runner)"
+                                                                                       Placeholder="self-hosted, mac*, *"
+                                                                                       AriaLabel="Legacy matcher label" />
+                                                                    <button class="btn btn-outline-primary" type="button" @onclick="() => AddMatcherLabel(matcher)"><i class="bi bi-plus-lg"></i></button>
+                                                                </div>
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                </details>
+                                            }
+
+                                            <div class="runner-subsection">
+                                                <div class="runner-subsection-heading"><span><i class="bi bi-hdd-stack"></i>Execution shape</span></div>
+                                                <div class="row g-3">
+                                                    <div class="col-lg-3">
+                                                        <label class="form-label" for="platform-@runner.Id">Host platform</label>
+                                                        <select id="platform-@runner.Id" class="form-select" @bind="runner.RequiredHostPlatform">
+                                                            @foreach (var platform in Enum.GetValues<HostPlatform>())
+                                                            {
+                                                                <option value="@platform">@platform</option>
+                                                            }
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-lg-3">
+                                                        <label class="form-label" for="backend-@runner.Id">Backend</label>
+                                                        <select id="backend-@runner.Id" class="form-select" value="@runner.ExecutionBackend" @onchange="e => SetRunnerBackend(runner, e.Value?.ToString())">
+                                                            @foreach (var backend in Enum.GetValues<ExecutionBackend>())
+                                                            {
+                                                                <option value="@backend">@backend</option>
+                                                            }
+                                                        </select>
+                                                    </div>
+                                                    <div class="col-lg-3">
+                                                    <label class="form-label" for="runnerGroup-@runner.Id">@GetProviderGroupFieldLabel()</label>
+                                                    <SmartAutocomplete Value="@runner.RunnerGroup"
+                                                                       ValueChanged="value => runner.RunnerGroup = value ?? string.Empty"
+                                                                       Suggestions="@GetProviderGroupSuggestions()"
+                                                                       Placeholder="Default"
+                                                                       AriaLabel="@GetProviderGroupFieldLabel()" />
+                                                    <div class="form-text">@GetProviderGroupFieldHelp()</div>
+                                                    </div>
+                                                    <div class="col-lg-3">
+                                                        <label class="form-label" for="runnerAgentVersion-@runner.Id">Agent version</label>
+                                                        <input id="runnerAgentVersion-@runner.Id" class="form-control" @bind="runner.RunnerAgentVersion" placeholder="latest" />
+                                                    </div>
+                                                </div>
+
+                                                <div class="lifecycle-choice-grid mt-3" role="radiogroup" aria-label="Runner lifecycle">
+                                                    <label class="lifecycle-choice @(runner.Ephemeral ? "selected" : "")" for="oneJob-@runner.Id">
+                                                        <input id="oneJob-@runner.Id" type="radio" name="lifecycle-@runner.Id" checked="@runner.Ephemeral" @onchange="() => runner.Ephemeral = true" />
+                                                        <span>
+                                                            <strong>One-job runner</strong>
+                                                            <small>Recommended. Fresh registration/resource per job, then deregister and dispose.</small>
+                                                        </span>
+                                                    </label>
+                                                    <label class="lifecycle-choice @(!runner.Ephemeral ? "selected" : "")" for="reusable-@runner.Id">
+                                                        <input id="reusable-@runner.Id" type="radio" name="lifecycle-@runner.Id" checked="@(!runner.Ephemeral)" @onchange="() => runner.Ephemeral = false" />
+                                                        <span>
+                                                            <strong>Reusable runner</strong>
+                                                            <small>Explicit warm/static mode. Local state can persist between jobs.</small>
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            <div class="runner-subsection">
+                                                <div class="runner-subsection-heading"><span><i class="bi bi-tags"></i>Advertised labels / capabilities</span></div>
+                                                <div class="form-text mb-2">Extra provider metadata attached to created runners after the workflow target has selected this runner.</div>
+                                                <div class="runner-chip-list mb-2">
+                                                    @foreach (var label in runner.Labels.ToList())
+                                                    {
+                                                        var labelValue = label;
+                                                        <span class="runner-chip">
+                                                            <i class="bi bi-tag"></i>@labelValue
+                                                            <button type="button" @onclick="() => runner.Labels.Remove(labelValue)" aria-label="Remove runner label @labelValue"><i class="bi bi-x"></i></button>
+                                                        </span>
+                                                    }
+                                                </div>
+                                                <div class="input-group input-group-sm runner-label-input">
+                                                    <SmartAutocomplete Value="@runnerLabelInputs[runner.Id]"
+                                                                       ValueChanged="value => runnerLabelInputs[runner.Id] = value ?? string.Empty"
+                                                                       Suggestions="@GetRunnerLabelSuggestions(runner)"
+                                                                       Placeholder="linux, docker, x64"
+                                                                       AriaLabel="Advertised runner label" />
+                                                    <button class="btn btn-outline-primary" type="button" @onclick="() => AddRunnerLabel(runner)"><i class="bi bi-plus-lg me-1"></i>Add label</button>
+                                                </div>
+                                            </div>
+
+                                            @if (runner.ExecutionBackend == ExecutionBackend.Docker)
+                                            {
+                                                var docker = EnsureDockerConfig(runner);
+                                                <div class="runner-subsection">
+                                                    <div class="runner-subsection-heading">
+                                                        <span><i class="bi bi-box-seam"></i>Docker image</span>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenImagePicker(runner, RegistryType.Docker)">
+                                                            <i class="bi bi-search me-1"></i>Find image
+                                                        </button>
+                                                    </div>
+                                                    @if (runner.RequiredHostPlatform == HostPlatform.Windows)
+                                                    {
+                                                        <div class="alert alert-warning py-2">
+                                                            <i class="bi bi-windows me-1"></i>Use a Windows container image and target hosts reporting <code>docker_os=windows</code>.
+                                                        </div>
+                                                    }
+                                                    <div class="row g-3">
+                                                        <div class="col-lg-3">
+                                                            <label class="form-label" for="dockerRegistry-@runner.Id">Registry</label>
+                                                            <SmartAutocomplete Value="@docker.RegistryUrl"
+                                                                               ValueChanged="value => docker.RegistryUrl = value ?? string.Empty"
+                                                                               Suggestions="@GetRegistrySuggestions(RegistryType.Docker)"
+                                                                               Placeholder="ghcr.io"
+                                                                               AriaLabel="Docker registry" />
+                                                        </div>
+                                                        <div class="col-lg-4">
+                                                            <label class="form-label" for="dockerImage-@runner.Id">Image</label>
+                                                            <SmartAutocomplete Value="@docker.ImageName"
+                                                                               ValueChanged="value => docker.ImageName = value ?? string.Empty"
+                                                                               Suggestions="@GetImageNameSuggestions(RegistryType.Docker)"
+                                                                               Placeholder="org/runner-image"
+                                                                               AriaLabel="Docker image" />
+                                                        </div>
+                                                        <div class="col-lg-2">
+                                                            <label class="form-label" for="dockerTag-@runner.Id">Tag</label>
+                                                            <SmartAutocomplete Value="@docker.Tag"
+                                                                               ValueChanged="value => docker.Tag = value ?? string.Empty"
+                                                                               Suggestions="@GetImageTagSuggestions(RegistryType.Docker)"
+                                                                               Placeholder="latest"
+                                                                               AriaLabel="Docker image tag" />
+                                                        </div>
+                                                        <div class="col-lg-3">
+                                                            <label class="form-label" for="pullPolicy-@runner.Id">Pull policy</label>
+                                                            <select id="pullPolicy-@runner.Id" class="form-select" @bind="docker.PullPolicy">
+                                                                @foreach (var policy in Enum.GetValues<PullPolicy>())
+                                                                {
+                                                                    <option value="@policy">@policy</option>
+                                                                }
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                            else if (runner.ExecutionBackend == ExecutionBackend.Tart)
+                                            {
+                                                var tart = EnsureTartConfig(runner);
+                                                <div class="runner-subsection">
+                                                    <div class="runner-subsection-heading">
+                                                        <span><i class="bi bi-apple"></i>Tart VM image</span>
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenImagePicker(runner, RegistryType.Tart)">
+                                                            <i class="bi bi-search me-1"></i>Find image
+                                                        </button>
+                                                    </div>
+                                                    <div class="row g-3">
+                                                        <div class="col-lg-3">
+                                                            <label class="form-label" for="tartRegistry-@runner.Id">OCI registry</label>
+                                                            <SmartAutocomplete Value="@tart.RegistryUrl"
+                                                                               ValueChanged="value => tart.RegistryUrl = value ?? string.Empty"
+                                                                               Suggestions="@GetRegistrySuggestions(RegistryType.Tart)"
+                                                                               Placeholder="ghcr.io"
+                                                                               AriaLabel="Tart OCI registry" />
+                                                        </div>
+                                                        <div class="col-lg-4">
+                                                            <label class="form-label" for="tartImage-@runner.Id">Image</label>
+                                                            <SmartAutocomplete Value="@tart.ImageName"
+                                                                               ValueChanged="value => tart.ImageName = value ?? string.Empty"
+                                                                               Suggestions="@GetImageNameSuggestions(RegistryType.Tart)"
+                                                                               Placeholder="cirruslabs/macos-sequoia-base"
+                                                                               AriaLabel="Tart image" />
+                                                        </div>
+                                                        <div class="col-lg-2">
+                                                            <label class="form-label" for="tartTag-@runner.Id">Tag</label>
+                                                            <SmartAutocomplete Value="@tart.Tag"
+                                                                               ValueChanged="value => tart.Tag = value ?? string.Empty"
+                                                                               Suggestions="@GetImageTagSuggestions(RegistryType.Tart)"
+                                                                               Placeholder="latest"
+                                                                               AriaLabel="Tart image tag" />
+                                                        </div>
+                                                        <div class="col-lg-3">
+                                                            <label class="form-label" for="tartDisplay-@runner.Id">Display</label>
+                                                            <SmartAutocomplete Value="@tart.Display"
+                                                                               ValueChanged="value => tart.Display = value"
+                                                                               Suggestions="@GetTartDisplaySuggestions()"
+                                                                               Placeholder="1024x768"
+                                                                               AriaLabel="Tart display" />
+                                                        </div>
+                                                        <div class="col-lg-2">
+                                                            <label class="form-label" for="tartCpu-@runner.Id">CPU</label>
+                                                            <input id="tartCpu-@runner.Id" type="number" class="form-control" min="1" @bind="tart.CpuCount" />
+                                                        </div>
+                                                        <div class="col-lg-2">
+                                                            <label class="form-label" for="tartMemory-@runner.Id">Memory GB</label>
+                                                            <input id="tartMemory-@runner.Id" type="number" class="form-control" min="1" @bind="tart.MemorySizeGb" />
+                                                        </div>
+                                                        <div class="col-lg-2">
+                                                            <label class="form-label" for="tartDisk-@runner.Id">Disk GB</label>
+                                                            <input id="tartDisk-@runner.Id" type="number" class="form-control" min="10" @bind="tart.DiskSizeGb" />
+                                                        </div>
+                                                        <div class="col-lg-3">
+                                                            <label class="form-label" for="tartSshUser-@runner.Id">SSH user</label>
+                                                            <SmartAutocomplete Value="@tart.SshUser"
+                                                                               ValueChanged="value => tart.SshUser = value"
+                                                                               Suggestions="@GetSshUserSuggestions()"
+                                                                               Placeholder="admin"
+                                                                               AriaLabel="Tart SSH user" />
+                                                        </div>
+                                                        <div class="col-lg-3">
+                                                            <label class="form-label" for="tartSshPassword-@runner.Id">SSH password</label>
+                                                            <input id="tartSshPassword-@runner.Id" type="password" class="form-control" @bind="tart.SshPassword" />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="runner-subsection">
+                                                    <div class="runner-subsection-heading"><span><i class="bi bi-terminal"></i>Native execution</span></div>
+                                                    <div class="row g-3">
+                                                        <div class="col-lg-6">
+                                                            <label class="form-label" for="nativeBasePath-@runner.Id">Runner base path</label>
+                                                            <SmartAutocomplete Value='@GetProviderConfig(runner, "NativeBasePath")'
+                                                                               ValueChanged='value => SetProviderConfig(runner, "NativeBasePath", value)'
+                                                                               Suggestions='@GetNativePathSuggestions("NativeBasePath")'
+                                                                               Placeholder="${HOME}/.runnerrunner"
+                                                                               AriaLabel="Native runner base path" />
+                                                        </div>
+                                                        <div class="col-lg-6">
+                                                            <label class="form-label" for="nativeWorkDir-@runner.Id">Work directory</label>
+                                                            <SmartAutocomplete Value='@GetProviderConfig(runner, "NativeWorkDir")'
+                                                                               ValueChanged='value => SetProviderConfig(runner, "NativeWorkDir", value)'
+                                                                               Suggestions='@GetNativePathSuggestions("NativeWorkDir")'
+                                                                               Placeholder="${BASE_PATH}/work"
+                                                                               AriaLabel="Native work directory" />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+
+                                            <div class="runner-subsection">
+                                                <div class="runner-subsection-heading"><span><i class="bi bi-braces"></i>Environment</span></div>
+                                                @if (allEnvVarSets.Count == 0)
+                                                {
+                                                    <div class="subtle-empty">No environment variable sets configured.</div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="env-set-grid">
+                                                        @foreach (var envSet in allEnvVarSets.OrderBy(e => e.Priority).ThenBy(e => e.Name))
+                                                        {
+                                                            var selected = runner.EnvironmentVariableSetIds.Contains(envSet.Id);
+                                                            <label class="env-set-card @(selected ? "selected" : "")" for="envSet-@runner.Id-@envSet.Id">
+                                                                <input id="envSet-@runner.Id-@envSet.Id" type="checkbox" checked="@selected" @onchange="() => ToggleRunnerEnvSet(runner, envSet.Id)" />
+                                                                <span>
+                                                                    <strong>@envSet.Name</strong>
+                                                                    <small>@envSet.Variables.Count var(s) · priority @envSet.Priority</small>
+                                                                </span>
+                                                            </label>
+                                                        }
+                                                    </div>
+                                                }
+
+                                                <div class="env-override-table mt-3">
+                                                    @foreach (var kvp in runner.EnvironmentOverrides.ToList())
+                                                    {
+                                                        var key = kvp.Key;
+                                                        var isSecret = runner.EnvironmentOverrideSecretKeys.Contains(key);
+                                                        <div class="env-override-row">
+                                                            <input class="form-control form-control-sm" value="@key" @onchange="e => RenameRunnerEnvOverride(runner, key, e.Value?.ToString())" aria-label="Environment variable key" />
+                                                            <input class="form-control form-control-sm" type="@(isSecret ? "password" : "text")" value="@kvp.Value" @onchange="e => SetRunnerEnvOverrideValue(runner, key, e.Value?.ToString())" aria-label="Environment variable value" />
+                                                            <label class="form-check small">
+                                                                <input class="form-check-input" type="checkbox" checked="@isSecret" @onchange="() => ToggleRunnerEnvSecret(runner, key)" />
+                                                                Secret
+                                                            </label>
+                                                            <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveRunnerEnvOverride(runner, key)" aria-label="Remove environment override @key"><i class="bi bi-x-lg"></i></button>
+                                                        </div>
+                                                    }
+                                                    <div class="env-override-row add-row">
+                                                        <SmartAutocomplete Value="@envOverrideKeyInputs[runner.Id]"
+                                                                           ValueChanged="value => envOverrideKeyInputs[runner.Id] = value ?? string.Empty"
+                                                                           Suggestions="@GetEnvironmentKeySuggestions(runner)"
+                                                                           Placeholder="KEY"
+                                                                           AriaLabel="Environment variable key" />
+                                                        <input class="form-control form-control-sm" placeholder="Value or $RR_VARIABLE" @bind="envOverrideValueInputs[runner.Id]" />
+                                                        <label class="form-check small">
+                                                            <input class="form-check-input" type="checkbox" @bind="envOverrideSecretInputs[runner.Id]" />
+                                                            Secret
+                                                        </label>
+                                                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => AddRunnerEnvOverride(runner)"><i class="bi bi-plus-lg"></i></button>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div class="runner-subsection">
+                                                <div class="runner-subsection-heading">
+                                                    <span><i class="bi bi-code-slash"></i>Custom steps</span>
+                                                    <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => AddInitStepReference(runner)" disabled="@(initSteps.Count == 0)">
+                                                        <i class="bi bi-plus-lg me-1"></i>Reference step
+                                                    </button>
+                                                </div>
+                                                @if (initSteps.Count == 0)
+                                                {
+                                                    <div class="subtle-empty">Create reusable custom steps from the Custom Steps page, then reference them here.</div>
+                                                }
+                                                else if (runner.InitStepRefs.Count == 0)
+                                                {
+                                                    <div class="subtle-empty">No custom steps selected for this runner.</div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="init-ref-list">
+                                                        @for (var refIndex = 0; refIndex < runner.InitStepRefs.Count; refIndex++)
+                                                        {
+                                                            var index = refIndex;
+                                                            var reference = runner.InitStepRefs[index];
+                                                            <div class="init-ref-row">
+                                                                <input type="number" class="form-control form-control-sm" @bind="reference.Order" aria-label="Custom step order" />
+                                                                <select class="form-select form-select-sm" @bind="reference.InitStepId" aria-label="Custom step">
+                                                                    @foreach (var step in initSteps.OrderBy(s => s.Name))
+                                                                    {
+                                                                        <option value="@step.Id">@step.Name (@step.Phase)</option>
+                                                                    }
+                                                                </select>
+                                                                <select class="form-select form-select-sm" value="@GetEnabledOverrideValue(reference)" @onchange="e => SetEnabledOverride(reference, e.Value?.ToString())" aria-label="Enabled override">
+                                                                    <option value="">Default enabled</option>
+                                                                    <option value="true">Force enabled</option>
+                                                                    <option value="false">Force disabled</option>
+                                                                </select>
+                                                                <input type="number" class="form-control form-control-sm" @bind="reference.TimeoutSecondsOverride" placeholder="timeout" aria-label="Timeout override seconds" />
+                                                                <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveInitStepReference(runner, index)" aria-label="Remove custom step"><i class="bi bi-x-lg"></i></button>
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+
+                                            <div class="runner-subsection">
+                                                <div class="runner-subsection-heading"><span><i class="bi bi-ui-checks"></i>Runner metadata</span></div>
+                                                <div class="metadata-toggle-grid">
+                                                    <label class="metadata-toggle">
+                                                        <input type="checkbox" @bind="runner.EmitMetadataLabels" />
+                                                        <span><strong>Emit <code>rr-*</code> labels</strong><small>Show backend/image/host details in provider setup logs.</small></span>
+                                                    </label>
+                                                    <label class="metadata-toggle">
+                                                        <input type="checkbox" @bind="runner.EmitJobStartedBanner" />
+                                                        <span><strong>Job-started banner</strong><small>Add a collapsible RunnerRunner environment section to every job log.</small></span>
+                                                    </label>
+                                                    <label class="metadata-toggle">
+                                                        <input type="checkbox" @bind="runner.AllowWebhookImageTagOverride" />
+                                                        <span><strong>Allow image tag override</strong><small>Honor <code>rr-image-tag=&lt;tag&gt;</code> labels for this runner's image tag only.</small></span>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </article>
+                                    }
+                                </div>
+                            </section>
                         </div>
-                        @if (UsesGitHubAppCredential())
-                        {
-                            <div class="form-text">Leave blank to use the selected GitHub App credential's webhook secret.</div>
-                        }
-                    </div>
-                    <div class="col-md-2 mb-3">
-                        <label class="form-label">Max Concurrent</label>
-                        <input type="number" class="form-control" @bind="editRule.MaxConcurrent" min="1" />
-                    </div>
-                </div>
 
-                @if (UsesGitHubAppCredential())
-                {
-                    <div class="alert alert-info py-2">
-                        <i class="bi bi-github me-1"></i>
-                        This rule can receive GitHub App <code>workflow_job</code> webhooks through the app-level webhook. Runner API calls use the installation ID from the webhook event, falling back to the credential's default installation target.
-                    </div>
-                }
+                        <aside class="rule-builder-sidebar">
+                            <div class="rule-preview-card">
+                                <div class="preview-title">Rule preview</div>
+                                <h3>@(string.IsNullOrWhiteSpace(editRule.Name) ? "New provisioning rule" : editRule.Name)</h3>
+                                <div class="preview-chip-row">
+                                    <span class="badge @GetTypeBadgeClass(editRule.Type)">@GetTypeLabel(editRule.Type)</span>
+                                    <span class="badge @(editRule.Enabled ? "bg-success" : "bg-secondary")">@(editRule.Enabled ? "Enabled" : "Disabled")</span>
+                                </div>
+                                <div class="preview-list">
+                                    <div><span>Provider</span><strong>@GetProviderLabel(editRule.Provider)</strong></div>
+                                    <div><span>Capacity</span><strong>@GetScaleDisplay(editRule)</strong></div>
+                                    <div><span>Targets</span><strong>@editRule.RunnerDefinitions.Count(r => r.Enabled)</strong></div>
+                                    <div><span>Host route</span><strong>@GetTargetDisplay(editRule)</strong></div>
+                                </div>
+                            </div>
 
-                <div class="row">
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Min Ready / Warm Pool</label>
-                        <input type="number" class="form-control" @bind="editRule.MinReady" min="0" />
-                        <div class="form-text">Keep N runners pre-provisioned</div>
-                    </div>
-                    <div class="col-md-3 mb-3">
-                        <label class="form-label">Cooldown Seconds</label>
-                        <input type="number" class="form-control" @bind="editRule.CooldownSeconds" min="0" />
-                    </div>
-                </div>
-
-                <div class="alert alert-secondary py-2">
-                    <i class="bi bi-info-circle me-1"></i>
-                    Webhook rules now select runners <strong>only</strong> through the mappings below. Use <code>*</code> as a catch-all, or patterns like <code>mac*</code> to match labels such as <code>mac</code> and <code>macOS</code>.
-                </div>
-
-                @* Allowed owners/orgs *@
-                <div class="mb-3">
-                    <label class="form-label">Allowed Owners / Orgs</label>
-                    <div class="d-flex flex-wrap gap-1 mb-2">
-                        @foreach (var org in editAllowedOrgs)
-                        {
-                            <span class="badge bg-primary d-flex align-items-center gap-1" style="font-size: 0.85rem; padding: 0.4em 0.6em;">
-                                @org
-                                <i class="bi bi-x-lg" style="cursor:pointer; font-size:0.7rem;" @onclick="() => editAllowedOrgs.Remove(org)"></i>
-                            </span>
-                        }
-                    </div>
-                    <div class="input-group input-group-sm" style="max-width: 300px;">
-                        <input class="form-control" placeholder="Add owner or org..." @bind="newOrgInput" @onkeydown="OnOrgKeyDown" />
-                        <button class="btn btn-outline-primary" type="button" @onclick="AddOrg"><i class="bi bi-plus-lg"></i></button>
-                    </div>
-                </div>
-
-                @* Allowed Repos *@
-                <div class="mb-3">
-                    <label class="form-label">Allowed Repos</label>
-                    <div class="d-flex flex-wrap gap-1 mb-2">
-                        @foreach (var repo in editAllowedRepos)
-                        {
-                            <span class="badge bg-info d-flex align-items-center gap-1" style="font-size: 0.85rem; padding: 0.4em 0.6em;">
-                                @repo
-                                <i class="bi bi-x-lg" style="cursor:pointer; font-size:0.7rem;" @onclick="() => editAllowedRepos.Remove(repo)"></i>
-                            </span>
-                        }
-                    </div>
-                    <div class="input-group input-group-sm" style="max-width: 400px;">
-                        <input class="form-control" placeholder="Add repo (org/repo)..." @bind="newRepoInput" @onkeydown="OnRepoKeyDown" />
-                        <button class="btn btn-outline-primary" type="button" @onclick="AddRepo"><i class="bi bi-plus-lg"></i></button>
-                    </div>
-                </div>
-
-                @* Label → Profile Mappings *@
-                <h6 class="mt-3">Job Label → Profile Mappings</h6>
-                <p class="text-muted small">Priority-ordered workflow-job label patterns. First matching row wins.</p>
-                <table class="table table-sm table-bordered">
-                    <thead>
-                        <tr>
-                            <th>Required Job Labels</th>
-                            <th>Profile</th>
-                            <th style="width:100px;">Priority</th>
-                            <th class="actions-col"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @for (var i = 0; i < editMappings.Count; i++)
-                        {
-                            var idx = i;
-                            <tr>
-                                <td>
-                                    <div class="d-flex flex-wrap gap-1 mb-1">
-                                        @foreach (var label in editMappings[idx].RequiredLabels)
-                                        {
-                                            var lbl = label;
-                                            <span class="badge bg-primary d-flex align-items-center gap-1" style="font-size: 0.8rem; padding: 0.3em 0.5em;">
-                                                @lbl
-                                                <i class="bi bi-x-lg" style="cursor:pointer; font-size:0.65rem;" @onclick="() => editMappings[idx].RequiredLabels.Remove(lbl)"></i>
-                                            </span>
-                                        }
+                            @{
+                                var workflowPreviewTarget = GetWorkflowPreviewTarget();
+                            }
+                            <div class="rule-preview-card workflow-instructions-card">
+                                <div class="preview-title">Workflow instructions</div>
+                                @if (workflowPreviewTarget == null)
+                                {
+                                    <p>Create a target, copy its workflow snippet, then commit it to your workflow.</p>
+                                }
+                                else
+                                {
+                                    @if (editRule.RunnerDefinitions.Count(r => r.Enabled) > 1)
+                                    {
+                                        <label class="form-label" for="workflowPreviewTarget">Preview target</label>
+                                        <select id="workflowPreviewTarget" class="form-select form-select-sm mb-3" value="@workflowPreviewTarget.Id" @onchange="SetWorkflowPreviewTarget">
+                                            @foreach (var target in editRule.RunnerDefinitions.Where(r => r.Enabled).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+                                            {
+                                                <option value="@target.Id">@target.Name (@target.TargetKey)</option>
+                                            }
+                                        </select>
+                                    }
+                                    <p>Use this in your workflow to request <strong>@workflowPreviewTarget.Name</strong>.</p>
+                                    <div class="workflow-snippet-panel" aria-label="Workflow YAML snippet">
+                                        <div class="workflow-snippet-header">
+                                            <span><i class="bi bi-code-square"></i> Workflow snippet</span>
+                                            <span>@GetWorkflowSnippetKind()</span>
+                                        </div>
+                                        <div class="workflow-snippet-code">
+                                            @GetHighlightedWorkflowSnippet(workflowPreviewTarget)
+                                        </div>
                                     </div>
-                                    <div class="input-group input-group-sm" style="max-width: 250px;">
-                                        <input class="form-control" placeholder="Add label or pattern..." @bind="mappingLabelInputs[idx]"
-                                               @onkeydown="(e) => OnMappingLabelKeyDown(e, idx)" />
-                                        <button class="btn btn-outline-primary" type="button" @onclick="() => AddMappingLabel(idx)"><i class="bi bi-plus-lg"></i></button>
+                                    <div class="preview-list">
+                                        <div><span>Target key</span><strong>@workflowPreviewTarget.TargetKey</strong></div>
+                                        <div><span>Runner shape</span><strong>@workflowPreviewTarget.RequiredHostPlatform · @workflowPreviewTarget.ExecutionBackend</strong></div>
+                                        <div><span>@GetProviderGroupDisplayLabel()</span><strong>@GetProviderGroupDisplay(workflowPreviewTarget)</strong></div>
                                     </div>
-                                </td>
-                                <td>
-                                    <select class="form-select form-select-sm" @bind="editMappings[idx].ProfileId">
-                                        <option value="">— Select —</option>
-                                        @foreach (var p in profiles)
-                                        {
-                                            <option value="@p.Id">@p.Name</option>
-                                        }
-                                    </select>
-                                </td>
-                                <td>
-                                    <input type="number" class="form-control form-control-sm" @bind="editMappings[idx].Priority" />
-                                </td>
-                                <td class="actions-cell">
-                                    <button class="btn btn-sm btn-danger" @onclick="() => RemoveMapping(idx)"><i class="bi bi-trash3"></i></button>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-                <button class="btn btn-sm btn-outline-success mb-3" @onclick="AddMapping"><i class="bi bi-plus-lg me-1"></i> Add Mapping</button>
+                                    @if (editRule.RunnerDefinitions.Count(r => r.Enabled) > 1)
+                                    {
+                                        <div class="valid-target-list">
+                                            <span>Valid target keys</span>
+                                            <div class="runner-chip-list">
+                                                @foreach (var targetKey in editRule.GetValidRunnerTargetKeys())
+                                                {
+                                                    <span class="runner-chip"><i class="bi bi-bullseye"></i>@targetKey</span>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                            </div>
 
-                <div class="alert alert-info py-2 d-flex align-items-center gap-2" style="font-size: 0.85rem;">
-                    <i class="bi bi-link-45deg"></i>
-                    @if (TryGetWebhookEndpoint(editRule.Provider, out var endpoint))
-                    {
-                        <span><strong>Webhook URL:</strong> <code>@endpoint</code></span>
-                    }
-                    else
-                    {
-                        <span><strong>Webhook ingress:</strong> not yet available for @editRule.Provider.</span>
-                    }
-                </div>
-            }
-
-            @* --- Common fields (all types) --- *@
-            <h6 class="mt-3">Host Capabilities</h6>
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    <label class="form-label">Required Host Capabilities</label>
-                    <div class="d-flex flex-wrap gap-1 mb-2">
-                        @foreach (var kvp in editHostLabels)
-                        {
-                            var key = kvp.Key;
-                            <span class="badge bg-secondary d-flex align-items-center gap-1" style="font-size: 0.85rem; padding: 0.4em 0.6em;">
-                                @key=@kvp.Value
-                                <i class="bi bi-x-lg" style="cursor:pointer; font-size:0.7rem;" @onclick="() => editHostLabels.Remove(key)"></i>
-                            </span>
-                        }
+                            <div class="rule-preview-card">
+                                <div class="preview-title">Capacity model</div>
+                                <ol class="capacity-order">
+                                    <li>FIFO fairness</li>
+                                    <li>Rule concurrency</li>
+                                    <li>Host backend slots</li>
+                                    <li>HostWorker availability</li>
+                                </ol>
+                            </div>
+                        </aside>
                     </div>
-                    <div class="input-group input-group-sm" style="max-width: 350px;">
-                        <input class="form-control" placeholder="key=value capability" @bind="newHostLabelInput" @onkeydown="OnHostLabelKeyDown" />
-                        <button class="btn btn-outline-secondary" type="button" @onclick="AddHostLabel"><i class="bi bi-plus-lg"></i></button>
-                    </div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <label class="form-label">Target Group</label>
-                    <select class="form-select" @bind="editRule.TargetGroupId">
-                        <option value="">— Any —</option>
-                        @foreach (var g in hostGroups)
-                        {
-                            <option value="@g">@g</option>
-                        }
-                    </select>
-                </div>
-                <div class="col-md-3 mb-3 d-flex align-items-end">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" @bind="editRule.Enabled" id="ruleEnabledCheck" />
-                        <label class="form-check-label" for="ruleEnabledCheck">Enabled</label>
-                    </div>
-                </div>
-            </div>
-
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-outline-secondary" @onclick="CancelEdit">Cancel</button>
@@ -340,158 +886,118 @@
     </div>
 }
 
-<div class="table-responsive">
-    <table class="table table-striped resizable-table">
-        <thead>
-            <tr>
-                <th data-col-kind="name" data-col-min="180" data-col-preferred="280" data-col-weight="3.5">Name</th>
-                <th data-col-kind="compact" data-col-min="78" data-col-preferred="96" data-col-priority="2">Type</th>
-                <th data-col-kind="related" data-col-min="210" data-col-preferred="280" data-col-priority="3" data-col-weight="1.5">Profile(s)</th>
-                <th data-col-kind="related" data-col-min="150" data-col-preferred="190" data-col-priority="4">Scale</th>
-                <th data-col-kind="related" data-col-min="190" data-col-preferred="250" data-col-priority="4" data-col-weight="1.3">Target</th>
-                <th data-col-kind="compact" data-col-min="86" data-col-preferred="108" data-col-priority="2">Status</th>
-                <th class="actions-col" data-col-min="132" data-col-preferred="154">Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var rule in rules)
-            {
-                <tr>
-                    <td class="name-cell">
-                        <span class="primary-label">@rule.Name</span>
+@if (showImagePicker && imagePickerRunner is not null)
+{
+    <ImagePickerDialog RegistryType="@imagePickerType"
+                       CurrentRegistryUrl="@GetImagePickerRegistryUrl()"
+                       CurrentImageName="@GetImagePickerImageName()"
+                       CurrentTag="@GetImagePickerTag()"
+                       OnSelected="ApplyImagePickerSelection"
+                       OnClose="CloseImagePicker" />
+}
+
+@if (rules.Count == 0)
+{
+    <div class="empty-state-card">
+        <i class="bi bi-diagram-3-fill"></i>
+        <h2>No provisioning rules yet</h2>
+        <p>Create a rule, add a runner target, copy its workflow snippet, then choose which hosts may run it.</p>
+        <button class="btn btn-primary" @onclick="ShowCreateForm"><i class="bi bi-plus-lg me-1"></i>Create first rule</button>
+    </div>
+}
+else
+{
+    <div class="provisioning-rule-grid">
+        @foreach (var rule in rules.OrderByDescending(r => r.Enabled).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var displayRunners = GetDisplayRunnerDefinitions(rule);
+            <article class="provisioning-rule-card">
+                <div class="provisioning-rule-card-header">
+                    <div>
+                        <div class="rule-card-kicker">
+                            <span class="badge @GetTypeBadgeClass(rule.Type)">@GetTypeLabel(rule.Type)</span>
+                            <span class="badge @(rule.Enabled ? "bg-success" : "bg-secondary")">@(rule.Enabled ? "Enabled" : "Disabled")</span>
+                        </div>
+                        <h2>@rule.Name</h2>
                         @if (!string.IsNullOrWhiteSpace(rule.Description))
                         {
-                            <small class="secondary-label">@rule.Description</small>
+                            <p>@rule.Description</p>
                         }
-                    </td>
-                    <td>
-                        <span class="badge @GetTypeBadgeClass(rule.Type)">@rule.Type</span>
-                    </td>
-                    <td>
-                        @if (capacitySnapshot.Rules.TryGetValue(rule.Id, out var ruleCapacity) && ruleCapacity.MappedProfiles.Any())
+                    </div>
+                    <div class="rule-card-actions">
+                        <button class="btn btn-sm btn-outline-primary" @onclick="() => EditRule(rule)"><i class="bi bi-pencil-square me-1"></i>Edit</button>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => ConfirmAndDeleteRule(rule)"><i class="bi bi-trash3"></i></button>
+                    </div>
+                </div>
+
+                <div class="rule-card-meta-grid">
+                    <div>
+                        <span>Provider</span>
+                        <strong>@GetProviderLabel(rule.Provider)</strong>
+                    </div>
+                    <div>
+                        <span>Capacity</span>
+                        <strong>@GetScaleDisplay(rule)</strong>
+                    </div>
+                    <div>
+                        <span>Host route</span>
+                        <strong>@GetTargetDisplay(rule)</strong>
+                    </div>
+                </div>
+
+                <div class="rule-runner-summary">
+                    @if (capacitySnapshot.Rules.TryGetValue(rule.Id, out var ruleCapacity) && ruleCapacity.MappedRunners.Any())
+                    {
+                        @foreach (var mapped in ruleCapacity.MappedRunners.Take(4))
                         {
-                            <div class="rule-profile-stack">
-                                @foreach (var mapped in ruleCapacity.MappedProfiles.Take(3))
-                                {
-                                    <div class="rule-profile-card @GetProfileAvailabilityClass(mapped)"
-                                         title="@GetProfileAvailabilityTitle(mapped)">
-                                        <div class="rule-profile-main">
-                                            <span class="rule-profile-name">@mapped.ProfileName</span>
-                                            <span class="rule-profile-count">@mapped.AvailableNow/@mapped.EffectivePoolLimit</span>
-                                        </div>
-                                        <span class="rule-profile-meter" aria-hidden="true">
-                                            <span style="@GetProfileAvailabilityStyle(mapped)"></span>
-                                        </span>
-                                        <div class="rule-profile-meta">
-                                            <span><i class="bi bi-activity"></i>@mapped.ActiveNow active</span>
-                                            <span><i class="bi bi-hdd-network"></i>@mapped.MatchingHosts @(mapped.MatchingHosts == 1 ? "host" : "hosts")</span>
-                                            @if (mapped.SaturatedHosts > 0)
-                                            {
-                                                <span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i>@mapped.SaturatedHosts capped</span>
-                                            }
-                                        </div>
-                                    </div>
-                                }
-                                @if (ruleCapacity.MappedProfiles.Count > 3)
-                                {
-                                    var remainingProfiles = ruleCapacity.MappedProfiles.Count - 3;
-                                    <span class="rule-profile-more">+@remainingProfiles more @(remainingProfiles == 1 ? "profile" : "profiles")</span>
-                                }
+                            <div class="rule-profile-card @GetRunnerAvailabilityClass(mapped)" title="@GetRunnerAvailabilityTitle(mapped)">
+                                <div class="rule-profile-main">
+                                    <span class="rule-profile-name">@mapped.RunnerName</span>
+                                    <span class="rule-profile-count">@mapped.AvailableNow/@mapped.EffectivePoolLimit</span>
+                                </div>
+                                <span class="rule-profile-meter" aria-hidden="true">
+                                    <span style="@GetRunnerAvailabilityStyle(mapped)"></span>
+                                </span>
+                                <div class="rule-profile-meta">
+                                    <span><i class="bi bi-activity"></i>@mapped.ActiveNow active</span>
+                                    <span><i class="bi bi-hdd-network"></i>@mapped.MatchingHosts host(s)</span>
+                                    @if (mapped.SaturatedHosts > 0)
+                                    {
+                                        <span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i>@mapped.SaturatedHosts full</span>
+                                    }
+                                </div>
                             </div>
                         }
-                        else
+                    }
+                    else if (displayRunners.Any())
+                    {
+                        @foreach (var runner in displayRunners.Take(4))
                         {
-                            <span class="rule-profile-empty">
-                                <i class="bi bi-person-badge"></i>
-                                @GetProfileDisplay(rule)
-                            </span>
-                        }
-                    </td>
-                    <td>
-                        <div class="rule-scale-card @GetRuleScaleClass(rule)">
-                            <div class="rule-scale-heading">
-                                <i class="bi @GetProvisioningTypeIcon(rule.Type)"></i>
-                                <span>@GetScaleHeadline(rule)</span>
+                            <div class="runner-mini-card">
+                                <strong>@runner.Name</strong>
+                                <span>@runner.TargetKey · @runner.RequiredHostPlatform · @runner.ExecutionBackend · @(runner.Ephemeral ? "one-job" : "reusable")</span>
                             </div>
-                            <div class="rule-scale-metrics">
-                                @foreach (var metric in GetScaleMetrics(rule))
-                                {
-                                    <span>
-                                        <strong>@metric.Value</strong>
-                                        <small>@metric.Label</small>
-                                    </span>
-                                }
-                            </div>
-                        </div>
-                    </td>
-                    <td>
-                        <div class="rule-target-stack">
-                            @if (!string.IsNullOrWhiteSpace(rule.TargetHostId))
-                            {
-                                <span class="rule-target-chip rule-target-primary" title="Target host">
-                                    <i class="bi bi-hdd-network"></i>
-                                    <span>Host</span>
-                                    <strong>@GetTargetHostLabel(rule)</strong>
-                                </span>
-                            }
-                            @if (!string.IsNullOrWhiteSpace(rule.TargetGroupId))
-                            {
-                                <span class="rule-target-chip rule-target-primary" title="Target host group">
-                                    <i class="bi bi-diagram-3"></i>
-                                    <span>Group</span>
-                                    <strong>@rule.TargetGroupId</strong>
-                                </span>
-                            }
-                            @foreach (var requirement in rule.RequiredHostLabels.OrderBy(kvp => kvp.Key))
-                            {
-                                <span class="rule-target-chip" title="Required host label">
-                                    <i class="bi bi-tag"></i>
-                                    <span>@requirement.Key</span>
-                                    <strong>@requirement.Value</strong>
-                                </span>
-                            }
-                            @if (!HasRuleTarget(rule))
-                            {
-                                <span class="rule-target-chip rule-target-auto" title="Any eligible host can be selected">
-                                    <i class="bi bi-stars"></i>
-                                    <span>Auto</span>
-                                    <strong>Any eligible host</strong>
-                                </span>
-                            }
-                        </div>
-                    </td>
-                    <td>
-                        @if (rule.Enabled)
-                        {
-                            <span class="badge bg-success">Enabled</span>
                         }
-                        else
-                        {
-                            <span class="badge bg-danger">Disabled</span>
-                        }
-                    </td>
-                    <td class="actions-cell">
-                        <button class="btn btn-sm btn-outline-primary" @onclick="() => EditRule(rule)"><i class="bi bi-pencil-square"></i> Edit</button>
-                        <button class="btn btn-sm btn-danger" @onclick="() => ConfirmAndDeleteRule(rule)"><i class="bi bi-trash3"></i> Delete</button>
-                    </td>
-                </tr>
-            }
-        </tbody>
-</table>
-</div>
+                    }
+                    else
+                    {
+                        <span class="rule-profile-empty"><i class="bi bi-exclamation-triangle"></i>No runner targets</span>
+                    }
+                </div>
+
+                @if (rule.Type == ProvisioningType.Webhook)
+                {
+                    <div class="webhook-scope-row">
+                        <span><i class="bi bi-buildings"></i>@FormatScopeList(rule.AllowedOrgs, "Any owner")</span>
+                        <span><i class="bi bi-git"></i>@FormatScopeList(rule.AllowedRepos, "Any repo")</span>
+                    </div>
+                }
+            </article>
+        }
+    </div>
+}
 
 @code {
-    private List<ProvisioningRule> rules = [];
-    private List<RunnerProfile> profiles = [];
-    private List<Host> hosts = [];
-    private List<ProviderCredential> credentials = [];
-    private List<string> hostGroups = [];
-    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
-
-    private ProvisioningRule editRule = new() { Name = "" };
-    private bool showForm;
-    private bool isEditing;
-    private string? formError;
     private static readonly ProvisioningType[] SupportedProvisioningTypes =
     [
         ProvisioningType.Static,
@@ -499,17 +1005,36 @@
         ProvisioningType.Webhook
     ];
 
-    // Chip list state
+    private List<ProvisioningRule> rules = [];
+    private List<RunnerProfile> profiles = [];
+    private List<Host> hosts = [];
+    private List<ProviderCredential> credentials = [];
+    private List<RegistryCredential> registryCredentials = [];
+    private List<EnvironmentVariableSet> allEnvVarSets = [];
+    private List<RunnerInitStepDefinition> initSteps = [];
+    private List<string> hostGroups = [];
+    private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
+
+    private ProvisioningRule editRule = new() { Name = "" };
+    private bool showForm;
+    private bool isEditing;
+    private string? formError;
+
     private List<string> editAllowedOrgs = [];
     private List<string> editAllowedRepos = [];
     private string newOrgInput = "";
     private string newRepoInput = "";
     private Dictionary<string, string> editHostLabels = new();
     private string newHostLabelInput = "";
-
-    // Mapping editing state
-    private List<LabelProfileMapping> editMappings = [];
-    private List<string> mappingLabelInputs = [];
+    private string? selectedWorkflowTargetId;
+    private readonly Dictionary<string, string> runnerLabelInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> matcherLabelInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> envOverrideKeyInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> envOverrideValueInputs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> envOverrideSecretInputs = new(StringComparer.OrdinalIgnoreCase);
+    private bool showImagePicker;
+    private RunnerDefinition? imagePickerRunner;
+    private RegistryType imagePickerType = RegistryType.Docker;
 
     protected override async Task OnInitializedAsync()
     {
@@ -522,20 +1047,33 @@
         profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         hosts = (await Store.Query<Host>().ToList()).ToList();
         credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
+        registryCredentials = (await Store.Query<RegistryCredential>().ToList()).ToList();
+        allEnvVarSets = (await Store.Query<EnvironmentVariableSet>().ToList()).ToList();
+        initSteps = (await Store.Query<RunnerInitStepDefinition>().ToList()).ToList();
         capacitySnapshot = await CapacityService.GetSnapshotAsync();
 
         hostGroups = hosts
             .Where(h => !string.IsNullOrWhiteSpace(h.GroupId))
             .Select(h => h.GroupId!)
-            .Distinct()
-            .OrderBy(g => g)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
     private void ShowCreateForm()
     {
-        editRule = new ProvisioningRule { Name = "" };
+        editRule = new ProvisioningRule
+        {
+            Name = "",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 10,
+            CooldownSeconds = 5,
+            RunnerDefinitions = [CreateDefaultRunnerDefinition("Linux Docker", includeCatchAllMatcher: false)]
+        };
+
         ResetFormState();
+        PrepareEditorState();
         isEditing = false;
         showForm = true;
     }
@@ -543,19 +1081,17 @@
     private void EditRule(ProvisioningRule rule)
     {
         editRule = CloneRule(rule);
-        editAllowedOrgs = [.. rule.AllowedOrgs];
-        editAllowedRepos = [.. rule.AllowedRepos];
-        editHostLabels = new Dictionary<string, string>(rule.RequiredHostLabels);
-        editMappings = rule.LabelMappings.Select(m => new LabelProfileMapping
-        {
-            RequiredLabels = [.. m.RequiredLabels],
-            ProfileId = m.ProfileId,
-            Priority = m.Priority
-        }).ToList();
-        mappingLabelInputs = editMappings.Select(_ => "").ToList();
+        HydrateLegacyRunnerDefinitions(editRule);
+        EnsureRunnersForType();
+
+        editAllowedOrgs = [.. editRule.AllowedOrgs];
+        editAllowedRepos = [.. editRule.AllowedRepos];
+        editHostLabels = new Dictionary<string, string>(editRule.RequiredHostLabels);
         newOrgInput = "";
         newRepoInput = "";
         newHostLabelInput = "";
+        formError = null;
+        PrepareEditorState();
         isEditing = true;
         showForm = true;
     }
@@ -566,11 +1102,15 @@
         editAllowedOrgs = [];
         editAllowedRepos = [];
         editHostLabels = new();
-        editMappings = [];
-        mappingLabelInputs = [];
         newOrgInput = "";
         newRepoInput = "";
         newHostLabelInput = "";
+        runnerLabelInputs.Clear();
+        matcherLabelInputs.Clear();
+        envOverrideKeyInputs.Clear();
+        envOverrideValueInputs.Clear();
+        envOverrideSecretInputs.Clear();
+        selectedWorkflowTargetId = null;
     }
 
     private async Task SaveRule()
@@ -585,34 +1125,21 @@
             return;
         }
 
-        editRule.AllowedOrgs = [.. editAllowedOrgs];
-        editRule.AllowedRepos = [.. editAllowedRepos];
+        editRule.AllowedOrgs = editRule.Type == ProvisioningType.Webhook ? [.. editAllowedOrgs] : [];
+        editRule.AllowedRepos = editRule.Type == ProvisioningType.Webhook ? [.. editAllowedRepos] : [];
         editRule.RequiredHostLabels = new Dictionary<string, string>(editHostLabels);
         editRule.TargetHostId = null;
+        EnsureRunnersForType();
+
+        NormalizeRunnerDefinitions();
+        if (!ValidateRunnerDefinitions())
+            return;
 
         if (editRule.Type == ProvisioningType.Webhook)
         {
             editRule.ProfileId = "";
             editRule.DefaultProfileId = null;
-            editRule.LabelMappings = editMappings
-                .Where(m => !string.IsNullOrWhiteSpace(m.ProfileId)
-                    && m.RequiredLabels.Any(label => !string.IsNullOrWhiteSpace(label)))
-                .Select(m => new LabelProfileMapping
-                {
-                    ProfileId = m.ProfileId.Trim(),
-                    Priority = m.Priority,
-                    RequiredLabels = [.. m.RequiredLabels
-                        .Where(label => !string.IsNullOrWhiteSpace(label))
-                        .Select(label => label.Trim())]
-                })
-                .OrderByDescending(m => m.Priority)
-                .ToList();
-
-            if (editRule.LabelMappings.Count == 0)
-            {
-                formError = "Webhook rules require at least one label-to-profile mapping. Use '*' for a catch-all mapping.";
-                return;
-            }
+            editRule.LabelMappings = BuildLegacyLabelMappings(editRule.RunnerDefinitions);
 
             if (UsesGitHubAppCredential()
                 && string.IsNullOrWhiteSpace(editRule.WebhookSecret)
@@ -624,12 +1151,8 @@
         }
         else
         {
-            if (string.IsNullOrWhiteSpace(editRule.ProfileId))
-            {
-                formError = "Please select a runner profile.";
-                return;
-            }
-
+            var runner = editRule.RunnerDefinitions.First();
+            editRule.ProfileId = runner.Id;
             editRule.DefaultProfileId = null;
             editRule.LabelMappings = [];
         }
@@ -642,20 +1165,980 @@
             await Store.Insert(editRule);
 
         await RuleGrainSync.ConfigureRuleAsync(editRule);
-
         await LoadDataAsync();
         showForm = false;
+    }
+
+    private bool ValidateRunnerDefinitions()
+    {
+        var enabledRunners = editRule.RunnerDefinitions.Where(r => r.Enabled).ToList();
+        if (enabledRunners.Count == 0)
+        {
+            formError = "At least one runner definition must be enabled.";
+            return false;
+        }
+
+        var targetKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var runner in enabledRunners)
+        {
+            if (string.IsNullOrWhiteSpace(runner.Name))
+            {
+                formError = "Every enabled runner target needs a name.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(runner.TargetKey))
+            {
+                formError = $"Runner target '{runner.Name}' needs a workflow target key.";
+                return false;
+            }
+
+            if (RunnerDefinition.IsReservedTargetKey(runner.TargetKey))
+            {
+                formError = $"Runner target key '{runner.TargetKey}' is reserved for RunnerRunner magic labels.";
+                return false;
+            }
+
+            if (!targetKeys.Add(runner.TargetKey))
+            {
+                formError = $"Runner target key '{runner.TargetKey}' is already used in this rule.";
+                return false;
+            }
+
+            if (runner.ExecutionBackend == ExecutionBackend.Docker)
+            {
+                var docker = EnsureDockerConfig(runner);
+                if (string.IsNullOrWhiteSpace(docker.RegistryUrl) || string.IsNullOrWhiteSpace(docker.ImageName))
+                {
+                    formError = $"Docker runner '{runner.Name}' needs a registry and image name.";
+                    return false;
+                }
+            }
+
+            if (runner.ExecutionBackend == ExecutionBackend.Tart)
+            {
+                var tart = EnsureTartConfig(runner);
+                if (string.IsNullOrWhiteSpace(tart.RegistryUrl) || string.IsNullOrWhiteSpace(tart.ImageName))
+                {
+                    formError = $"Tart runner '{runner.Name}' needs an OCI registry and image name.";
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private void NormalizeRunnerDefinitions()
+    {
+        foreach (var runner in editRule.RunnerDefinitions)
+        {
+            runner.Name = (runner.Name ?? "").Trim();
+            runner.Description = string.IsNullOrWhiteSpace(runner.Description) ? null : runner.Description.Trim();
+            runner.TargetKey = string.IsNullOrWhiteSpace(runner.TargetKey)
+                ? RunnerDefinition.GenerateTargetKey(runner.Name)
+                : RunnerDefinition.NormalizeTargetKey(runner.TargetKey);
+            runner.RunnerGroup = string.IsNullOrWhiteSpace(runner.RunnerGroup) ? "Default" : runner.RunnerGroup.Trim();
+            runner.Labels = [.. runner.Labels.Where(label => !string.IsNullOrWhiteSpace(label)).Select(label => label.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)];
+            runner.EnvironmentOverrides = runner.EnvironmentOverrides
+                .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Key))
+                .ToDictionary(kvp => kvp.Key.Trim(), kvp => kvp.Value, StringComparer.OrdinalIgnoreCase);
+            runner.EnvironmentOverrideSecretKeys = [.. runner.EnvironmentOverrideSecretKeys.Where(runner.EnvironmentOverrides.ContainsKey)];
+            runner.InitStepRefs = [.. runner.InitStepRefs
+                .Where(reference => !string.IsNullOrWhiteSpace(reference.InitStepId))
+                .OrderBy(reference => reference.Order)];
+
+            if (runner.ExecutionBackend != ExecutionBackend.Docker)
+                runner.DockerConfig = null;
+            if (runner.ExecutionBackend != ExecutionBackend.Tart)
+                runner.TartConfig = null;
+
+            foreach (var matcher in runner.Matchers)
+                matcher.RequiredLabels = [.. matcher.RequiredLabels.Where(label => !string.IsNullOrWhiteSpace(label)).Select(label => label.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)];
+
+            runner.Matchers = [.. runner.Matchers
+                .Where(matcher => matcher.RequiredLabels.Count > 0)
+                .OrderByDescending(matcher => matcher.Priority)];
+        }
+
+        editRule.RunnerDefinitions = [.. editRule.RunnerDefinitions.Where(runner => !string.IsNullOrWhiteSpace(runner.Name))];
+    }
+
+    private List<LabelProfileMapping> BuildLegacyLabelMappings(IEnumerable<RunnerDefinition> runners)
+    {
+        return runners
+            .Where(runner => runner.Enabled)
+            .SelectMany(runner => runner.Matchers
+                .Where(matcher => matcher.Enabled && matcher.RequiredLabels.Count > 0)
+                .Select(matcher => new LabelProfileMapping
+                {
+                    ProfileId = runner.Id,
+                    Priority = matcher.Priority,
+                    RequiredLabels = [.. matcher.RequiredLabels]
+                }))
+            .OrderByDescending(mapping => mapping.Priority)
+            .ToList();
+    }
+
+    private void EnsureRunnersForType()
+    {
+        if (editRule.Type == ProvisioningType.Webhook)
+        {
+            if (editRule.RunnerDefinitions.Count == 0)
+                editRule.RunnerDefinitions.Add(CreateDefaultRunnerDefinition("Linux Docker", includeCatchAllMatcher: false));
+
+            return;
+        }
+
+        if (editRule.RunnerDefinitions.Count == 0)
+            editRule.RunnerDefinitions.Add(CreateDefaultRunnerDefinition(editRule.Name, includeCatchAllMatcher: false));
+        else if (editRule.RunnerDefinitions.Count > 1)
+            editRule.RunnerDefinitions = [editRule.RunnerDefinitions[0]];
+
+        editRule.RunnerDefinitions[0].Matchers = [];
+    }
+
+    private RunnerDefinition CreateDefaultRunnerDefinition(string? name, bool includeCatchAllMatcher)
+    {
+        var runnerName = string.IsNullOrWhiteSpace(name) ? "Linux Docker" : name;
+        var runner = new RunnerDefinition
+        {
+            Name = runnerName,
+            TargetKey = RunnerDefinition.GenerateTargetKey(runnerName),
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker,
+            DockerConfig = new DockerImageConfig
+            {
+                RegistryUrl = "ghcr.io",
+                ImageName = "",
+                Tag = "latest"
+            },
+            Labels = ["self-hosted", "linux", "docker"],
+            RunnerGroup = "Default",
+            Ephemeral = true
+        };
+
+        if (includeCatchAllMatcher)
+            runner.Matchers.Add(new RunnerLabelMatcher { RequiredLabels = ["*"], Priority = 0 });
+
+        return runner;
+    }
+
+    private void HydrateLegacyRunnerDefinitions(ProvisioningRule rule)
+    {
+        if (rule.RunnerDefinitions.Count > 0)
+            return;
+
+        if (rule.Type == ProvisioningType.Webhook)
+        {
+            foreach (var mappingGroup in rule.LabelMappings
+                .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ProfileId))
+                .GroupBy(mapping => mapping.ProfileId, StringComparer.OrdinalIgnoreCase))
+            {
+                var profile = profiles.FirstOrDefault(p => string.Equals(p.Id, mappingGroup.Key, StringComparison.OrdinalIgnoreCase));
+                if (profile == null)
+                    continue;
+
+                var runner = RunnerDefinition.FromProfile(profile, $"{rule.Id}-{profile.Id}");
+                runner.Ephemeral = true;
+                runner.Matchers = [.. mappingGroup.Select(mapping => new RunnerLabelMatcher
+                {
+                    RequiredLabels = [.. mapping.RequiredLabels],
+                    Priority = mapping.Priority
+                })];
+                rule.RunnerDefinitions.Add(runner);
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(rule.ProfileId))
+        {
+            var profile = profiles.FirstOrDefault(p => string.Equals(p.Id, rule.ProfileId, StringComparison.OrdinalIgnoreCase));
+            if (profile != null)
+            {
+                var runner = RunnerDefinition.FromProfile(profile, $"{rule.Id}-{profile.Id}");
+                runner.Name = string.IsNullOrWhiteSpace(rule.Name) ? runner.Name : rule.Name;
+                rule.RunnerDefinitions.Add(runner);
+            }
+        }
+    }
+
+    private void PrepareEditorState()
+    {
+        foreach (var runner in editRule.RunnerDefinitions)
+        {
+            EnsureRunnerEditorState(runner);
+            foreach (var matcher in runner.Matchers)
+                EnsureMatcherEditorState(matcher);
+        }
+
+        EnsureWorkflowPreviewTarget();
+    }
+
+    private void EnsureRunnerEditorState(RunnerDefinition runner)
+    {
+        runnerLabelInputs.TryAdd(runner.Id, "");
+        envOverrideKeyInputs.TryAdd(runner.Id, "");
+        envOverrideValueInputs.TryAdd(runner.Id, "");
+        envOverrideSecretInputs.TryAdd(runner.Id, false);
+    }
+
+    private void EnsureMatcherEditorState(RunnerLabelMatcher matcher)
+    {
+        matcherLabelInputs.TryAdd(matcher.Id, "");
+    }
+
+    private void EnsureWorkflowPreviewTarget()
+    {
+        var enabledTargets = editRule.RunnerDefinitions.Where(r => r.Enabled).ToList();
+        if (enabledTargets.Count == 0)
+        {
+            selectedWorkflowTargetId = null;
+            return;
+        }
+
+        if (enabledTargets.Any(r => string.Equals(r.Id, selectedWorkflowTargetId, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        selectedWorkflowTargetId = enabledTargets
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .First()
+            .Id;
+    }
+
+    private RunnerDefinition? GetWorkflowPreviewTarget()
+    {
+        EnsureWorkflowPreviewTarget();
+        return editRule.RunnerDefinitions.FirstOrDefault(r =>
+                r.Enabled && string.Equals(r.Id, selectedWorkflowTargetId, StringComparison.OrdinalIgnoreCase))
+            ?? editRule.RunnerDefinitions.FirstOrDefault(r => r.Enabled);
+    }
+
+    private void SetWorkflowPreviewTarget(ChangeEventArgs e)
+    {
+        selectedWorkflowTargetId = e.Value?.ToString();
+    }
+
+    private string GetInlineWorkflowHint(RunnerDefinition runner) =>
+        editRule.Provider switch
+        {
+            RunnerProvider.GitHubActions or RunnerProvider.GiteaActions => $"Use runs-on: [self-hosted, {runner.TargetKey}]",
+            RunnerProvider.AzureDevOps => $"Use Azure pool '{GetProviderPoolName(runner)}' with demand rr.target = {runner.TargetKey}",
+            _ => $"Request {runner.TargetKey} from your workflow provider."
+        };
+
+    private string GetWorkflowSnippet(RunnerDefinition runner)
+    {
+        var targetKey = runner.TargetKey;
+        return editRule.Provider switch
+        {
+            RunnerProvider.GitHubActions or RunnerProvider.GiteaActions =>
+                $"runs-on: [self-hosted, {targetKey}]",
+            RunnerProvider.AzureDevOps =>
+                $"pool:{Environment.NewLine}  name: {GetProviderPoolName(runner)}{Environment.NewLine}  demands:{Environment.NewLine}    - rr.target -equals {targetKey}",
+            _ => targetKey
+        };
+    }
+
+    private string GetWorkflowSnippetKind() =>
+        editRule.Provider switch
+        {
+            RunnerProvider.GitHubActions => "GitHub Actions",
+            RunnerProvider.GiteaActions => "Gitea Actions",
+            RunnerProvider.AzureDevOps => "Azure Pipelines",
+            _ => "Workflow"
+        };
+
+    private MarkupString GetHighlightedWorkflowSnippet(RunnerDefinition runner)
+    {
+        var lines = GetWorkflowSnippet(runner).Split(Environment.NewLine);
+        var html = string.Join("", lines.Select((line, index) =>
+            $"<div class=\"workflow-snippet-line\"><span class=\"workflow-snippet-line-code\">{HighlightWorkflowLine(line, runner)}</span></div>"));
+
+        return new MarkupString(html);
+    }
+
+    private string HighlightWorkflowLine(string line, RunnerDefinition runner)
+    {
+        var indentLength = line.Length - line.TrimStart().Length;
+        var indent = line[..indentLength];
+        var trimmed = line[indentLength..];
+
+        if (trimmed.StartsWith("- ", StringComparison.Ordinal))
+        {
+            return Encode(indent)
+                + "<span class=\"yaml-punctuation\">-</span> "
+                + HighlightWorkflowValue(trimmed[2..], runner);
+        }
+
+        var separatorIndex = trimmed.IndexOf(':');
+        if (separatorIndex >= 0)
+        {
+            var key = trimmed[..separatorIndex];
+            var value = trimmed[(separatorIndex + 1)..];
+            return Encode(indent)
+                + $"<span class=\"yaml-key\">{Encode(key)}</span><span class=\"yaml-punctuation\">:</span>"
+                + HighlightWorkflowValue(value, runner);
+        }
+
+        return HighlightWorkflowValue(line, runner);
+    }
+
+    private string HighlightWorkflowValue(string value, RunnerDefinition runner)
+    {
+        var highlighted = Encode(value)
+            .Replace("[", "<span class=\"yaml-punctuation\">[</span>", StringComparison.Ordinal)
+            .Replace("]", "<span class=\"yaml-punctuation\">]</span>", StringComparison.Ordinal)
+            .Replace(",", "<span class=\"yaml-punctuation\">,</span>", StringComparison.Ordinal);
+
+        highlighted = HighlightToken(highlighted, runner.TargetKey, "yaml-target");
+        highlighted = HighlightToken(highlighted, "self-hosted", "yaml-string");
+        highlighted = HighlightToken(highlighted, "rr.target", "yaml-string");
+        highlighted = HighlightToken(highlighted, "-equals", "yaml-operator");
+
+        if (editRule.Provider == RunnerProvider.AzureDevOps)
+            highlighted = HighlightToken(highlighted, GetProviderPoolName(runner), "yaml-string");
+
+        return highlighted;
+    }
+
+    private static string HighlightToken(string html, string? token, string cssClass)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return html;
+
+        var encodedToken = Encode(token);
+        return html.Replace(encodedToken, $"<span class=\"{cssClass}\">{encodedToken}</span>", StringComparison.Ordinal);
+    }
+
+    private static string Encode(string value) =>
+        System.Net.WebUtility.HtmlEncode(value);
+
+    private string GetProviderGroupFieldLabel() =>
+        editRule.Provider switch
+        {
+            RunnerProvider.AzureDevOps => "Azure agent pool",
+            RunnerProvider.GitHubActions => "GitHub runner group",
+            RunnerProvider.GiteaActions => "Provider group",
+            _ => "Provider group/pool"
+        };
+
+    private string GetProviderGroupDisplayLabel() =>
+        editRule.Provider switch
+        {
+            RunnerProvider.AzureDevOps => "Agent pool",
+            RunnerProvider.GitHubActions => "GitHub runner group",
+            RunnerProvider.GiteaActions => "Provider group",
+            _ => "Provider group"
+        };
+
+    private string GetProviderGroupFieldHelp() =>
+        editRule.Provider switch
+        {
+            RunnerProvider.AzureDevOps => "Provider-side pool where the agent registers; this is not a host routing group.",
+            RunnerProvider.GitHubActions => "Provider-side visibility group for the registered runner; this is not host placement.",
+            RunnerProvider.GiteaActions => "Provider-side grouping/visibility, separate from host routing.",
+            _ => "Provider-side grouping, separate from host routing."
+        };
+
+    private string GetProviderGroupDisplay(RunnerDefinition runner) =>
+        editRule.Provider == RunnerProvider.AzureDevOps
+            ? GetProviderPoolName(runner)
+            : (string.IsNullOrWhiteSpace(runner.RunnerGroup) ? "Default" : runner.RunnerGroup);
+
+    private string GetProviderPoolName(RunnerDefinition runner)
+    {
+        if (!string.IsNullOrWhiteSpace(runner.RunnerGroup) && !string.Equals(runner.RunnerGroup, "Default", StringComparison.OrdinalIgnoreCase))
+            return runner.RunnerGroup;
+
+        return string.IsNullOrWhiteSpace(SelectedCredential()?.AzDoPoolName)
+            ? "Default"
+            : SelectedCredential()!.AzDoPoolName!;
+    }
+
+    private void AddRunnerDefinition()
+    {
+        var runner = CreateDefaultRunnerDefinition($"Runner {editRule.RunnerDefinitions.Count + 1}", includeCatchAllMatcher: false);
+        editRule.RunnerDefinitions.Add(runner);
+        ApplyProviderDefaultsToRunnerGroups();
+        EnsureRunnerEditorState(runner);
+        selectedWorkflowTargetId = runner.Id;
+        foreach (var matcher in runner.Matchers)
+            EnsureMatcherEditorState(matcher);
+    }
+
+    private void OpenImagePicker(RunnerDefinition runner, RegistryType registryType)
+    {
+        imagePickerRunner = runner;
+        imagePickerType = registryType;
+        showImagePicker = true;
+    }
+
+    private void CloseImagePicker()
+    {
+        showImagePicker = false;
+        imagePickerRunner = null;
+    }
+
+    private Task ApplyImagePickerSelection(ImagePickerSelection selection)
+    {
+        if (imagePickerRunner is null)
+            return Task.CompletedTask;
+
+        if (selection.RegistryType == RegistryType.Docker)
+        {
+            var docker = EnsureDockerConfig(imagePickerRunner);
+            docker.RegistryUrl = selection.RegistryUrl;
+            docker.ImageName = selection.ImageName;
+            docker.Tag = selection.Tag;
+        }
+        else
+        {
+            var tart = EnsureTartConfig(imagePickerRunner);
+            tart.RegistryUrl = selection.RegistryUrl;
+            tart.ImageName = selection.ImageName;
+            tart.Tag = selection.Tag;
+        }
+
+        CloseImagePicker();
+        return Task.CompletedTask;
+    }
+
+    private string? GetImagePickerRegistryUrl() =>
+        imagePickerType == RegistryType.Docker
+            ? imagePickerRunner?.DockerConfig?.RegistryUrl
+            : imagePickerRunner?.TartConfig?.RegistryUrl;
+
+    private string? GetImagePickerImageName() =>
+        imagePickerType == RegistryType.Docker
+            ? imagePickerRunner?.DockerConfig?.ImageName
+            : imagePickerRunner?.TartConfig?.ImageName;
+
+    private string? GetImagePickerTag() =>
+        imagePickerType == RegistryType.Docker
+            ? imagePickerRunner?.DockerConfig?.Tag
+            : imagePickerRunner?.TartConfig?.Tag;
+
+    private IEnumerable<Host> GetMatchingHostsForRunner(RunnerDefinition runner)
+    {
+        return hosts
+            .Where(host => HostMatchesRulePreview(host))
+            .Where(host => host.Platform == runner.RequiredHostPlatform)
+            .Where(host => CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
+            .Where(host => HostMatchesDockerOs(host, runner))
+            .OrderByDescending(host => host.AgentStatus == AgentStatus.Online)
+            .ThenBy(host => host.Label, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private bool HostMatchesRulePreview(Host host)
+    {
+        if (!string.IsNullOrWhiteSpace(editRule.TargetHostId)
+            && !string.Equals(host.Id, editRule.TargetHostId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(editRule.TargetGroupId)
+            && !string.Equals(host.GroupId, editRule.TargetGroupId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        foreach (var required in editHostLabels)
+        {
+            if (!host.Labels.TryGetValue(required.Key, out var actualValue)
+                || !string.Equals(actualValue, required.Value, StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HostMatchesDockerOs(Host host, RunnerDefinition runner)
+    {
+        if (runner.ExecutionBackend != ExecutionBackend.Docker)
+            return true;
+
+        if (!host.Labels.TryGetValue("docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
+            return true;
+
+        var expectedDockerOs = runner.RequiredHostPlatform switch
+        {
+            HostPlatform.Windows => "windows",
+            HostPlatform.Linux => "linux",
+            _ => null
+        };
+
+        return expectedDockerOs == null
+            || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetPlatformIcon(HostPlatform platform) => platform switch
+    {
+        HostPlatform.Linux => "bi-ubuntu",
+        HostPlatform.MacOS => "bi-apple",
+        HostPlatform.Windows => "bi-windows",
+        _ => "bi-hdd-network"
+    };
+
+    private void RemoveRunnerDefinition(int index)
+    {
+        if (index < 0 || index >= editRule.RunnerDefinitions.Count || editRule.RunnerDefinitions.Count <= 1)
+            return;
+
+        editRule.RunnerDefinitions.RemoveAt(index);
+        if (!editRule.RunnerDefinitions.Any(r => string.Equals(r.Id, selectedWorkflowTargetId, StringComparison.OrdinalIgnoreCase)))
+            selectedWorkflowTargetId = editRule.RunnerDefinitions.FirstOrDefault(r => r.Enabled)?.Id;
+    }
+
+    private void AddMatcher(RunnerDefinition runner)
+    {
+        var matcher = new RunnerLabelMatcher { Priority = runner.Matchers.Count };
+        runner.Matchers.Add(matcher);
+        EnsureMatcherEditorState(matcher);
+    }
+
+    private static void RemoveMatcher(RunnerDefinition runner, int index)
+    {
+        if (index >= 0 && index < runner.Matchers.Count)
+            runner.Matchers.RemoveAt(index);
+    }
+
+    private void AddMatcherLabel(RunnerLabelMatcher matcher)
+    {
+        var value = matcherLabelInputs.GetValueOrDefault(matcher.Id, "").Trim();
+        if (!string.IsNullOrWhiteSpace(value) && !matcher.RequiredLabels.Contains(value, StringComparer.OrdinalIgnoreCase))
+            matcher.RequiredLabels.Add(value);
+
+        matcherLabelInputs[matcher.Id] = "";
+    }
+
+    private void OnMatcherLabelKeyDown(KeyboardEventArgs e, RunnerLabelMatcher matcher)
+    {
+        if (e.Key is "Enter" or "," or "Tab")
+            AddMatcherLabel(matcher);
+    }
+
+    private void AddRunnerLabel(RunnerDefinition runner)
+    {
+        var value = runnerLabelInputs.GetValueOrDefault(runner.Id, "").Trim();
+        if (!string.IsNullOrWhiteSpace(value) && !runner.Labels.Contains(value, StringComparer.OrdinalIgnoreCase))
+            runner.Labels.Add(value);
+
+        runnerLabelInputs[runner.Id] = "";
+    }
+
+    private void OnRunnerLabelKeyDown(KeyboardEventArgs e, RunnerDefinition runner)
+    {
+        if (e.Key is "Enter" or "," or "Tab")
+            AddRunnerLabel(runner);
+    }
+
+    private void ToggleRunnerEnvSet(RunnerDefinition runner, string envSetId)
+    {
+        if (!runner.EnvironmentVariableSetIds.Remove(envSetId))
+            runner.EnvironmentVariableSetIds.Add(envSetId);
+    }
+
+    private void AddRunnerEnvOverride(RunnerDefinition runner)
+    {
+        var key = envOverrideKeyInputs.GetValueOrDefault(runner.Id, "").Trim();
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        runner.EnvironmentOverrides[key] = envOverrideValueInputs.GetValueOrDefault(runner.Id, "");
+        if (envOverrideSecretInputs.GetValueOrDefault(runner.Id))
+            runner.EnvironmentOverrideSecretKeys.Add(key);
+        else
+            runner.EnvironmentOverrideSecretKeys.Remove(key);
+
+        envOverrideKeyInputs[runner.Id] = "";
+        envOverrideValueInputs[runner.Id] = "";
+        envOverrideSecretInputs[runner.Id] = false;
+    }
+
+    private static void RemoveRunnerEnvOverride(RunnerDefinition runner, string key)
+    {
+        runner.EnvironmentOverrides.Remove(key);
+        runner.EnvironmentOverrideSecretKeys.Remove(key);
+    }
+
+    private static void SetRunnerEnvOverrideValue(RunnerDefinition runner, string key, string? value)
+    {
+        if (runner.EnvironmentOverrides.ContainsKey(key))
+            runner.EnvironmentOverrides[key] = value ?? "";
+    }
+
+    private static void RenameRunnerEnvOverride(RunnerDefinition runner, string oldKey, string? newKeyValue)
+    {
+        var newKey = (newKeyValue ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(newKey)
+            || string.Equals(oldKey, newKey, StringComparison.OrdinalIgnoreCase)
+            || !runner.EnvironmentOverrides.TryGetValue(oldKey, out var value))
+        {
+            return;
+        }
+
+        var wasSecret = runner.EnvironmentOverrideSecretKeys.Remove(oldKey);
+        runner.EnvironmentOverrides.Remove(oldKey);
+        runner.EnvironmentOverrides[newKey] = value;
+        if (wasSecret)
+            runner.EnvironmentOverrideSecretKeys.Add(newKey);
+    }
+
+    private static void ToggleRunnerEnvSecret(RunnerDefinition runner, string key)
+    {
+        if (!runner.EnvironmentOverrideSecretKeys.Remove(key))
+            runner.EnvironmentOverrideSecretKeys.Add(key);
+    }
+
+    private void AddInitStepReference(RunnerDefinition runner)
+    {
+        var step = initSteps.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+        if (step == null)
+            return;
+
+        runner.InitStepRefs.Add(new RunnerInitStepRef
+        {
+            InitStepId = step.Id,
+            Order = runner.InitStepRefs.Count == 0 ? 0 : runner.InitStepRefs.Max(r => r.Order) + 10
+        });
+    }
+
+    private static void RemoveInitStepReference(RunnerDefinition runner, int index)
+    {
+        if (index >= 0 && index < runner.InitStepRefs.Count)
+            runner.InitStepRefs.RemoveAt(index);
+    }
+
+    private static string GetEnabledOverrideValue(RunnerInitStepRef reference) =>
+        reference.EnabledOverride?.ToString().ToLowerInvariant() ?? "";
+
+    private static void SetEnabledOverride(RunnerInitStepRef reference, string? value)
+    {
+        reference.EnabledOverride = value switch
+        {
+            "true" => true,
+            "false" => false,
+            _ => null
+        };
+    }
+
+    private void SetRunnerBackend(RunnerDefinition runner, string? value)
+    {
+        if (!Enum.TryParse<ExecutionBackend>(value, out var backend))
+            return;
+
+        runner.ExecutionBackend = backend;
+        if (backend == ExecutionBackend.Docker)
+        {
+            EnsureDockerConfig(runner);
+            runner.TartConfig = null;
+        }
+        else if (backend == ExecutionBackend.Tart)
+        {
+            EnsureTartConfig(runner);
+            runner.DockerConfig = null;
+        }
+        else
+        {
+            runner.DockerConfig = null;
+            runner.TartConfig = null;
+        }
+    }
+
+    private static DockerImageConfig EnsureDockerConfig(RunnerDefinition runner)
+    {
+        runner.DockerConfig ??= new DockerImageConfig
+        {
+            RegistryUrl = "ghcr.io",
+            ImageName = "",
+            Tag = "latest"
+        };
+        return runner.DockerConfig;
+    }
+
+    private static TartImageConfig EnsureTartConfig(RunnerDefinition runner)
+    {
+        runner.TartConfig ??= new TartImageConfig
+        {
+            RegistryUrl = "ghcr.io",
+            ImageName = "",
+            Tag = "latest"
+        };
+        return runner.TartConfig;
+    }
+
+    private static string GetProviderConfig(RunnerDefinition runner, string key) =>
+        runner.ProviderConfig.TryGetValue(key, out var value) ? value : "";
+
+    private static void SetProviderConfig(RunnerDefinition runner, string key, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            runner.ProviderConfig.Remove(key);
+        else
+            runner.ProviderConfig[key] = value.Trim();
+    }
+
+    private void AddOrg()
+    {
+        var value = newOrgInput.Trim();
+        if (!string.IsNullOrWhiteSpace(value) && !editAllowedOrgs.Contains(value, StringComparer.OrdinalIgnoreCase))
+            editAllowedOrgs.Add(value);
+
+        newOrgInput = "";
+    }
+
+    private void AddRepo()
+    {
+        var value = newRepoInput.Trim();
+        if (!string.IsNullOrWhiteSpace(value) && !editAllowedRepos.Contains(value, StringComparer.OrdinalIgnoreCase))
+            editAllowedRepos.Add(value);
+
+        newRepoInput = "";
+    }
+
+    private void OnOrgKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or "," or "Tab")
+            AddOrg();
+    }
+
+    private void OnRepoKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or "," or "Tab")
+            AddRepo();
+    }
+
+    private void AddHostLabel()
+    {
+        var value = newHostLabelInput.Trim();
+        if (!value.Contains('='))
+            return;
+
+        var parts = value.Split('=', 2);
+        var key = parts[0].Trim();
+        var labelValue = parts[1].Trim();
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        editHostLabels[key] = labelValue;
+        newHostLabelInput = "";
+    }
+
+    private void OnHostLabelKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter")
+            AddHostLabel();
+    }
+
+    private void OnTypeChanged()
+    {
+        formError = null;
+        EnsureRunnersForType();
+        PrepareEditorState();
+    }
+
+    private void OnProviderChanged()
+    {
+        editRule.ProviderCredentialId = null;
+        ApplyProviderDefaultsToRunnerGroups();
+        StateHasChanged();
+    }
+
+    private void OnProviderCredentialChanged()
+    {
+        ApplyProviderDefaultsToRunnerGroups();
+        StateHasChanged();
+    }
+
+    private void ApplyProviderDefaultsToRunnerGroups()
+    {
+        if (editRule.Provider != RunnerProvider.AzureDevOps)
+            return;
+
+        var poolName = SelectedCredential()?.AzDoPoolName;
+        if (string.IsNullOrWhiteSpace(poolName))
+            return;
+
+        foreach (var runner in editRule.RunnerDefinitions)
+        {
+            if (string.IsNullOrWhiteSpace(runner.RunnerGroup) || string.Equals(runner.RunnerGroup, "Default", StringComparison.OrdinalIgnoreCase))
+                runner.RunnerGroup = poolName;
+        }
+    }
+
+    private ProviderCredential? SelectedCredential() =>
+        string.IsNullOrWhiteSpace(editRule.ProviderCredentialId)
+            ? null
+            : credentials.FirstOrDefault(c => c.Id == editRule.ProviderCredentialId);
+
+    private IReadOnlyList<string> GetHostCapabilityLabelSuggestions() =>
+        OrderedDistinct(
+            hosts.SelectMany(host => host.Labels.Select(label => $"{label.Key}={label.Value}"))
+                .Concat(rules.SelectMany(rule => rule.RequiredHostLabels.Select(label => $"{label.Key}={label.Value}")))
+                .Concat(editHostLabels.Select(label => $"{label.Key}={label.Value}")));
+
+    private IReadOnlyList<string> GetHostGroupSuggestions() =>
+        OrderedDistinct(
+            hostGroups
+                .Concat(hosts.Select(host => host.GroupId))
+                .Concat(rules.Select(rule => rule.TargetGroupId))
+                .Concat(new[] { editRule.TargetGroupId }));
+
+    private IReadOnlyList<string> GetAllowedOrgSuggestions()
+    {
+        var installationOwners = credentials
+            .Where(credential => credential.Provider == editRule.Provider)
+            .SelectMany(credential => credential.GitHubAppInstallations.Select(installation => installation.Owner));
+
+        return OrderedDistinct(
+            rules.Where(rule => rule.Provider == editRule.Provider)
+                .SelectMany(rule => rule.AllowedOrgs)
+                .Concat(credentials.Where(credential => credential.Provider == editRule.Provider).Select(credential => credential.GitHubOrg))
+                .Concat(installationOwners)
+                .Concat(editAllowedOrgs));
+    }
+
+    private IReadOnlyList<string> GetAllowedRepoSuggestions()
+    {
+        var installationRepos = credentials
+            .Where(credential => credential.Provider == editRule.Provider)
+            .SelectMany(credential => credential.GitHubAppInstallations
+                .Where(installation => !string.IsNullOrWhiteSpace(installation.Repository))
+                .Select(installation => $"{installation.Owner}/{installation.Repository}"));
+
+        return OrderedDistinct(
+            rules.Where(rule => rule.Provider == editRule.Provider)
+                .SelectMany(rule => rule.AllowedRepos)
+                .Concat(credentials.Where(credential => credential.Provider == editRule.Provider).Select(credential => credential.GitHubRepo))
+                .Concat(installationRepos)
+                .Concat(editAllowedRepos));
+    }
+
+    private IReadOnlyList<string> GetTargetKeySuggestions(RunnerDefinition currentRunner) =>
+        OrderedDistinct(
+            SavedRunnerDefinitions()
+                .Where(runner => !string.Equals(runner.Id, currentRunner.Id, StringComparison.OrdinalIgnoreCase))
+                .Select(runner => runner.TargetKey)
+                .Concat(new[] { RunnerDefinition.GenerateTargetKey(currentRunner.Name), currentRunner.TargetKey }));
+
+    private IReadOnlyList<string> GetProviderGroupSuggestions() =>
+        OrderedDistinct(
+            new[] { "Default" }
+                .Concat(credentials.Where(credential => credential.Provider == editRule.Provider).Select(credential => credential.AzDoPoolName))
+                .Concat(profiles.Where(profile => profile.Provider == editRule.Provider).Select(profile => profile.RunnerGroup))
+                .Concat(SavedRunnerDefinitions().Select(runner => runner.RunnerGroup))
+                .Concat(editRule.RunnerDefinitions.Select(runner => runner.RunnerGroup)));
+
+    private IReadOnlyList<string> GetRunnerLabelSuggestions(RunnerDefinition runner) =>
+        OrderedDistinct(
+            new[]
+            {
+                "self-hosted",
+                runner.TargetKey,
+                runner.RequiredHostPlatform.ToString().ToLowerInvariant(),
+                runner.ExecutionBackend.ToString().ToLowerInvariant()
+            }
+            .Concat(profiles.SelectMany(profile => profile.Labels))
+            .Concat(SavedRunnerDefinitions().SelectMany(savedRunner => savedRunner.Labels))
+            .Concat(SavedRunnerDefinitions().SelectMany(savedRunner => savedRunner.Matchers.SelectMany(matcher => matcher.RequiredLabels)))
+            .Concat(hosts.SelectMany(host => host.Capabilities))
+            .Concat(runner.Labels));
+
+    private IReadOnlyList<string> GetMatcherLabelSuggestions(RunnerDefinition runner) =>
+        OrderedDistinct(
+            GetRunnerLabelSuggestions(runner)
+                .Concat(editRule.GetValidRunnerTargetKeys())
+                .Concat(new[] { "*" }));
+
+    private IReadOnlyList<string> GetEnvironmentKeySuggestions(RunnerDefinition runner) =>
+        OrderedDistinct(
+            allEnvVarSets.SelectMany(set => set.Variables.Keys)
+                .Concat(hosts.SelectMany(host => host.ReportedEnvironment.Keys))
+                .Concat(profiles.SelectMany(profile => profile.EnvironmentOverrides.Keys))
+                .Concat(SavedRunnerDefinitions().SelectMany(savedRunner => savedRunner.EnvironmentOverrides.Keys))
+                .Concat(runner.EnvironmentOverrides.Keys));
+
+    private IReadOnlyList<string> GetRegistrySuggestions(RegistryType registryType) =>
+        OrderedDistinct(
+            registryCredentials
+                .Where(credential => credential.RegistryType == registryType)
+                .Select(credential => credential.RegistryUrl)
+                .Concat(GetImageConfigs(registryType).Select(config => config.RegistryUrl))
+                .Concat(registryType == RegistryType.Docker ? new[] { "ghcr.io", "docker.io" } : new[] { "ghcr.io" }));
+
+    private IReadOnlyList<string> GetImageNameSuggestions(RegistryType registryType) =>
+        OrderedDistinct(GetImageConfigs(registryType).Select(config => config.ImageName));
+
+    private IReadOnlyList<string> GetImageTagSuggestions(RegistryType registryType) =>
+        OrderedDistinct(GetImageConfigs(registryType).Select(config => config.Tag).Concat(new[] { "latest" }));
+
+    private IReadOnlyList<string> GetTartDisplaySuggestions() =>
+        OrderedDistinct(
+            GetImageConfigs(RegistryType.Tart)
+                .Select(config => config.Display)
+                .Concat(new[] { "1024x768", "1280x800", "1440x900" }));
+
+    private IReadOnlyList<string> GetSshUserSuggestions() =>
+        OrderedDistinct(
+            GetImageConfigs(RegistryType.Tart)
+                .Select(config => config.SshUser)
+                .Concat(new[] { "admin", "runner" }));
+
+    private IReadOnlyList<string> GetNativePathSuggestions(string key) =>
+        OrderedDistinct(
+            hosts.Select(host => key == "NativeBasePath" ? host.RunnerBasePath : host.WorkDirectory)
+                .Concat(profiles.Select(profile => profile.ProviderConfig.GetValueOrDefault(key)))
+                .Concat(SavedRunnerDefinitions().Select(runner => runner.ProviderConfig.GetValueOrDefault(key)))
+                .Concat(key == "NativeBasePath" ? new[] { "${HOME}/.runnerrunner" } : new[] { "${BASE_PATH}/work" }));
+
+    private IEnumerable<RunnerDefinition> SavedRunnerDefinitions() =>
+        rules.SelectMany(rule => rule.RunnerDefinitions);
+
+    private IEnumerable<ImageAutocompleteSource> GetImageConfigs(RegistryType registryType)
+    {
+        foreach (var profile in profiles)
+        {
+            if (registryType == RegistryType.Docker && profile.DockerConfig is { } docker)
+                yield return new ImageAutocompleteSource(docker.RegistryUrl, docker.ImageName, docker.Tag, null, null);
+            else if (registryType == RegistryType.Tart && profile.TartConfig is { } tart)
+                yield return new ImageAutocompleteSource(tart.RegistryUrl, tart.ImageName, tart.Tag, tart.Display, tart.SshUser);
+        }
+
+        foreach (var runner in SavedRunnerDefinitions().Concat(editRule.RunnerDefinitions))
+        {
+            if (registryType == RegistryType.Docker && runner.DockerConfig is { } docker)
+                yield return new ImageAutocompleteSource(docker.RegistryUrl, docker.ImageName, docker.Tag, null, null);
+            else if (registryType == RegistryType.Tart && runner.TartConfig is { } tart)
+                yield return new ImageAutocompleteSource(tart.RegistryUrl, tart.ImageName, tart.Tag, tart.Display, tart.SshUser);
+        }
+    }
+
+    private static IReadOnlyList<string> OrderedDistinct(IEnumerable<string?> values) =>
+        values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private sealed record ImageAutocompleteSource(string? RegistryUrl, string? ImageName, string? Tag, string? Display, string? SshUser);
+
+    private bool UsesGitHubAppCredential() =>
+        editRule.Provider == RunnerProvider.GitHubActions
+        && SelectedCredential()?.GitHubAuthType == GitHubAuthType.GitHubApp;
+
+    private void GenerateSecret()
+    {
+        var bytes = new byte[16];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        editRule.WebhookSecret = Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     private async Task ConfirmAndDeleteRule(ProvisioningRule rule)
     {
         var confirmed = await JS.InvokeAsync<bool>("confirm", $"Delete provisioning rule '{rule.Name}'?");
-        if (confirmed)
-        {
-            await RuleGrainSync.DisableRuleAsync(rule.Id);
-            await Store.Remove<ProvisioningRule>(rule.Id);
-            await LoadDataAsync();
-        }
+        if (!confirmed)
+            return;
+
+        await RuleGrainSync.DisableRuleAsync(rule.Id);
+        await Store.Remove<ProvisioningRule>(rule.Id);
+        await LoadDataAsync();
     }
 
     private void CancelEdit()
@@ -664,114 +2147,67 @@
         formError = null;
     }
 
-    private void OnTypeChanged()
+    private List<RunnerDefinition> GetDisplayRunnerDefinitions(ProvisioningRule rule)
     {
-        formError = null;
-        StateHasChanged();
-    }
-    private void OnProviderChanged() => StateHasChanged();
+        if (rule.RunnerDefinitions.Count > 0)
+            return rule.RunnerDefinitions.Where(r => r.Enabled).ToList();
 
-    private ProviderCredential? SelectedCredential() =>
-        string.IsNullOrWhiteSpace(editRule.ProviderCredentialId)
-            ? null
-            : credentials.FirstOrDefault(c => c.Id == editRule.ProviderCredentialId);
-
-    private bool UsesGitHubAppCredential() =>
-        editRule.Provider == RunnerProvider.GitHubActions
-        && SelectedCredential()?.GitHubAuthType == GitHubAuthType.GitHubApp;
-
-    // --- Org chip helpers ---
-    private void AddOrg()
-    {
-        var val = newOrgInput?.Trim() ?? "";
-        if (!string.IsNullOrWhiteSpace(val) && !editAllowedOrgs.Contains(val))
+        if (rule.Type == ProvisioningType.Webhook)
         {
-            editAllowedOrgs.Add(val);
-            newOrgInput = "";
+            return rule.LabelMappings
+                .Select(mapping => profiles.FirstOrDefault(profile => string.Equals(profile.Id, mapping.ProfileId, StringComparison.OrdinalIgnoreCase)))
+                .Where(profile => profile != null)
+                .DistinctBy(profile => profile!.Id)
+                .Select(profile => RunnerDefinition.FromProfile(profile!))
+                .ToList();
         }
+
+        var sourceProfile = profiles.FirstOrDefault(profile => string.Equals(profile.Id, rule.ProfileId, StringComparison.OrdinalIgnoreCase));
+        return sourceProfile == null ? [] : [RunnerDefinition.FromProfile(sourceProfile)];
     }
 
-    private void OnOrgKeyDown(KeyboardEventArgs e)
+    private string GetTargetDisplay(ProvisioningRule rule)
     {
-        if (e.Key is "Enter" or "," or "Tab") AddOrg();
-    }
-
-    // --- Repo chip helpers ---
-    private void AddRepo()
-    {
-        var val = newRepoInput?.Trim() ?? "";
-        if (!string.IsNullOrWhiteSpace(val) && !editAllowedRepos.Contains(val))
+        var targetParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(rule.TargetHostId))
         {
-            editAllowedRepos.Add(val);
-            newRepoInput = "";
+            var host = hosts.FirstOrDefault(h => h.Id == rule.TargetHostId);
+            targetParts.Add(host?.Label ?? rule.TargetHostId);
         }
+
+        if (!string.IsNullOrWhiteSpace(rule.TargetGroupId))
+            targetParts.Add(rule.TargetGroupId);
+
+        if (rule.RequiredHostLabels.Count > 0)
+            targetParts.Add($"{rule.RequiredHostLabels.Count} host label(s)");
+
+        return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Any eligible host";
     }
 
-    private void OnRepoKeyDown(KeyboardEventArgs e)
+    private static string GetScaleDisplay(ProvisioningRule rule) => rule.Type switch
     {
-        if (e.Key is "Enter" or "," or "Tab") AddRepo();
-    }
+        ProvisioningType.Static => $"{rule.DesiredCount} desired",
+        ProvisioningType.ScaleSet => $"{rule.MinReady} warm / {rule.MaxInstances} max",
+        ProvisioningType.Webhook => $"{rule.MaxConcurrent} max · {rule.MinReady} warm",
+        ProvisioningType.Scheduled => $"{rule.DesiredCount} desired",
+        _ => "Configured"
+    };
 
-    // --- Host label chip helpers ---
-    private void AddHostLabel()
+    private static string GetTypeLabel(ProvisioningType type) => type switch
     {
-        var val = newHostLabelInput?.Trim() ?? "";
-        if (val.Contains('='))
-        {
-            var parts = val.Split('=', 2);
-            var key = parts[0].Trim();
-            var value = parts[1].Trim();
-            if (!string.IsNullOrWhiteSpace(key))
-            {
-                editHostLabels[key] = value;
-                newHostLabelInput = "";
-            }
-        }
-    }
+        ProvisioningType.ScaleSet => "Scale set",
+        _ => type.ToString()
+    };
 
-    private void OnHostLabelKeyDown(KeyboardEventArgs e)
+    private static string GetProviderLabel(RunnerProvider provider) => provider switch
     {
-        if (e.Key is "Enter") AddHostLabel();
-    }
+        RunnerProvider.GitHubActions => "GitHub Actions",
+        RunnerProvider.GiteaActions => "Gitea Actions",
+        RunnerProvider.AzureDevOps => "Azure DevOps",
+        _ => provider.ToString()
+    };
 
-    // --- Webhook secret ---
-    private void GenerateSecret()
-    {
-        var bytes = new byte[16];
-        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
-        editRule.WebhookSecret = Convert.ToHexString(bytes).ToLowerInvariant();
-    }
-
-    // --- Mapping helpers ---
-    private void AddMapping()
-    {
-        editMappings.Add(new LabelProfileMapping());
-        mappingLabelInputs.Add("");
-    }
-
-    private void RemoveMapping(int index)
-    {
-        editMappings.RemoveAt(index);
-        mappingLabelInputs.RemoveAt(index);
-    }
-
-    private void AddMappingLabel(int index)
-    {
-        var val = mappingLabelInputs[index]?.Trim() ?? "";
-        if (!string.IsNullOrWhiteSpace(val) && !editMappings[index].RequiredLabels.Contains(val))
-        {
-            editMappings[index].RequiredLabels.Add(val);
-            mappingLabelInputs[index] = "";
-        }
-    }
-
-    private void OnMappingLabelKeyDown(KeyboardEventArgs e, int index)
-    {
-        if (e.Key is "Enter" or "," or "Tab") AddMappingLabel(index);
-    }
-
-    // --- Display helpers ---
-    private string GetTypeBadgeClass(ProvisioningType type) => type switch
+    private static string GetTypeBadgeClass(ProvisioningType type) => type switch
     {
         ProvisioningType.Static => "bg-secondary",
         ProvisioningType.ScaleSet => "bg-primary",
@@ -780,110 +2216,21 @@
         _ => "bg-secondary"
     };
 
-    private string GetProfileName(string? profileId) =>
-        profiles.FirstOrDefault(p => p.Id == profileId)?.Name ?? "—";
-
-    private string GetProfileDisplay(ProvisioningRule rule)
-    {
-        if (rule.Type != ProvisioningType.Webhook)
-            return GetProfileName(rule.ProfileId);
-
-        var mappedNames = rule.LabelMappings
-            .Select(m => GetProfileName(m.ProfileId))
-            .Where(name => name != "—")
-            .Distinct()
-            .ToList();
-
-        return mappedNames.Count switch
-        {
-            0 => "Mappings required",
-            <= 2 => string.Join(", ", mappedNames),
-            _ => $"{mappedNames.Count} mapped profiles"
-        };
-    }
-
-    private string GetScaleDisplay(ProvisioningRule rule) => rule.Type switch
-    {
-        ProvisioningType.Static => $"×{rule.DesiredCount}",
-        ProvisioningType.ScaleSet => $"Min {rule.MinReady} / Max {rule.MaxInstances}",
-        ProvisioningType.Webhook => rule.MinReady > 0
-            ? $"Max {rule.MaxConcurrent} (warm: {rule.MinReady})"
-            : $"Max {rule.MaxConcurrent}",
-        ProvisioningType.Scheduled => $"×{rule.DesiredCount}",
-        _ => "—"
-    };
-
-    private static string GetProvisioningTypeIcon(ProvisioningType type) => type switch
-    {
-        ProvisioningType.Static => "bi-pin-angle-fill",
-        ProvisioningType.ScaleSet => "bi-layers-fill",
-        ProvisioningType.Webhook => "bi-lightning-charge-fill",
-        ProvisioningType.Scheduled => "bi-calendar2-week-fill",
-        _ => "bi-diagram-3-fill"
-    };
-
-    private static string GetRuleScaleClass(ProvisioningRule rule) => rule.Type switch
-    {
-        ProvisioningType.Static => "rule-scale-static",
-        ProvisioningType.ScaleSet => "rule-scale-scale-set",
-        ProvisioningType.Webhook => "rule-scale-webhook",
-        ProvisioningType.Scheduled => "rule-scale-scheduled",
-        _ => ""
-    };
-
-    private static string GetScaleHeadline(ProvisioningRule rule) => rule.Type switch
-    {
-        ProvisioningType.Static => "Fixed pool",
-        ProvisioningType.ScaleSet => "Elastic pool",
-        ProvisioningType.Webhook => "Event driven",
-        ProvisioningType.Scheduled => "Scheduled pool",
-        _ => "Provisioning"
-    };
-
-    private static IEnumerable<(string Label, string Value)> GetScaleMetrics(ProvisioningRule rule)
-    {
-        return rule.Type switch
-        {
-            ProvisioningType.Static =>
-            [
-                ("desired", $"x{rule.DesiredCount}")
-            ],
-            ProvisioningType.ScaleSet =>
-            [
-                ("warm", rule.MinReady.ToString()),
-                ("max", rule.MaxInstances.ToString())
-            ],
-            ProvisioningType.Webhook =>
-            [
-                ("cap", rule.MaxConcurrent.ToString()),
-                ("warm", rule.MinReady.ToString())
-            ],
-            ProvisioningType.Scheduled =>
-            [
-                ("desired", $"x{rule.DesiredCount}")
-            ],
-            _ => []
-        };
-    }
-
-    private static string GetProfileAvailabilityClass(RuleProfileCapacityView mapped)
+    private static string GetRunnerAvailabilityClass(RuleRunnerCapacityView mapped)
     {
         if (mapped.EffectivePoolLimit <= 0)
             return "availability-empty";
-
         if (mapped.AvailableNow <= 0)
             return "availability-full";
-
         if (mapped.SaturatedHosts > 0 || mapped.AvailableNow <= Math.Max(1, mapped.EffectivePoolLimit / 4))
             return "availability-warn";
-
         return "availability-good";
     }
 
-    private static string GetProfileAvailabilityTitle(RuleProfileCapacityView mapped) =>
-        $"{mapped.ProfileName}: {mapped.ActiveNow} active, {mapped.AvailableNow} of {mapped.EffectivePoolLimit} available across {mapped.MatchingHosts} matching host(s).";
+    private static string GetRunnerAvailabilityTitle(RuleRunnerCapacityView mapped) =>
+        $"{mapped.RunnerName}: {mapped.ActiveNow} active, {mapped.AvailableNow} of {mapped.EffectivePoolLimit} host backend slot(s) available across {mapped.MatchingHosts} matching host(s).";
 
-    private static string GetProfileAvailabilityStyle(RuleProfileCapacityView mapped)
+    private static string GetRunnerAvailabilityStyle(RuleRunnerCapacityView mapped)
     {
         var pct = mapped.EffectivePoolLimit <= 0
             ? 0
@@ -891,37 +2238,29 @@
         return $"width: {pct:0.#}%";
     }
 
-    private string GetTargetDisplay(ProvisioningRule rule)
+    private static string GetRunnerCardKicker(RunnerDefinition runner) =>
+        $"{runner.RequiredHostPlatform} · {runner.ExecutionBackend} · {(runner.Ephemeral ? "One-job" : "Reusable")}";
+
+    private static string FormatScopeList(List<string> values, string empty)
     {
-        var targetParts = new List<string>();
-
-        if (!string.IsNullOrWhiteSpace(rule.TargetHostId))
-        {
-            var host = hosts.FirstOrDefault(h => h.Id == rule.TargetHostId);
-            targetParts.Add($"Host: {host?.Label ?? rule.TargetHostId}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(rule.TargetGroupId))
-            targetParts.Add($"Group: {rule.TargetGroupId}");
-
-        if (rule.RequiredHostLabels.Count > 0)
-            targetParts.Add(string.Join(", ", rule.RequiredHostLabels.Select(kvp => $"{kvp.Key}={kvp.Value}")));
-
-        return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Auto";
+        if (values.Count == 0)
+            return empty;
+        if (values.Count <= 2)
+            return string.Join(", ", values);
+        return $"{values.Count} configured";
     }
 
-    private bool HasRuleTarget(ProvisioningRule rule) =>
-        !string.IsNullOrWhiteSpace(rule.TargetHostId)
-        || !string.IsNullOrWhiteSpace(rule.TargetGroupId)
-        || rule.RequiredHostLabels.Count > 0;
-
-    private string GetTargetHostLabel(ProvisioningRule rule)
+    private bool TryGetWebhookEndpoint(RunnerProvider provider, out string endpoint)
     {
-        if (string.IsNullOrWhiteSpace(rule.TargetHostId))
-            return "Any host";
+        var baseUri = Navigation.BaseUri.TrimEnd('/');
+        endpoint = provider switch
+        {
+            RunnerProvider.GitHubActions => $"{baseUri}/api/webhooks/github",
+            RunnerProvider.GiteaActions => $"{baseUri}/api/webhooks/gitea",
+            _ => ""
+        };
 
-        var host = hosts.FirstOrDefault(h => h.Id == rule.TargetHostId);
-        return host?.Label ?? rule.TargetHostId;
+        return !string.IsNullOrWhiteSpace(endpoint);
     }
 
     private static ProvisioningRule CloneRule(ProvisioningRule rule) => new()
@@ -954,20 +2293,52 @@
         RequiredHostLabels = new Dictionary<string, string>(rule.RequiredHostLabels),
         TargetGroupId = rule.TargetGroupId,
         CronExpression = rule.CronExpression,
+        RunnerDefinitions = [.. rule.RunnerDefinitions.Select(CloneRunnerDefinition)],
         CreatedAt = rule.CreatedAt,
         UpdatedAt = rule.UpdatedAt
     };
 
-    private bool TryGetWebhookEndpoint(RunnerProvider provider, out string endpoint)
+    private static RunnerDefinition CloneRunnerDefinition(RunnerDefinition runner) => new()
     {
-        var baseUri = Navigation.BaseUri.TrimEnd('/');
-        endpoint = provider switch
+        Id = runner.Id,
+        Name = runner.Name,
+        TargetKey = runner.TargetKey,
+        Description = runner.Description,
+        Enabled = runner.Enabled,
+        RequiredHostPlatform = runner.RequiredHostPlatform,
+        ExecutionBackend = runner.ExecutionBackend,
+        RunnerAgentVersion = runner.RunnerAgentVersion,
+        EnvironmentVariableSetIds = [.. runner.EnvironmentVariableSetIds],
+        EnvironmentOverrides = new Dictionary<string, string>(runner.EnvironmentOverrides),
+        EnvironmentOverrideSecretKeys = [.. runner.EnvironmentOverrideSecretKeys],
+        DockerConfig = runner.DockerConfig,
+        TartConfig = runner.TartConfig,
+        Labels = [.. runner.Labels],
+        RunnerGroup = runner.RunnerGroup,
+        Ephemeral = runner.Ephemeral,
+        ProviderConfig = new Dictionary<string, string>(runner.ProviderConfig),
+        EmitMetadataLabels = runner.EmitMetadataLabels,
+        EmitJobStartedBanner = runner.EmitJobStartedBanner,
+        AllowWebhookImageTagOverride = runner.AllowWebhookImageTagOverride,
+        Matchers = [.. runner.Matchers.Select(m => new RunnerLabelMatcher
         {
-            RunnerProvider.GitHubActions => $"{baseUri}/api/webhooks/github",
-            RunnerProvider.GiteaActions => $"{baseUri}/api/webhooks/gitea",
-            _ => ""
-        };
+            Id = m.Id,
+            RequiredLabels = [.. m.RequiredLabels],
+            Priority = m.Priority,
+            Enabled = m.Enabled
+        })],
+        InitStepRefs = [.. runner.InitStepRefs.Select(r => new RunnerInitStepRef
+        {
+            InitStepId = r.InitStepId,
+            Order = r.Order,
+            EnabledOverride = r.EnabledOverride,
+            TimeoutSecondsOverride = r.TimeoutSecondsOverride,
+            EnvironmentOverrides = new Dictionary<string, string>(r.EnvironmentOverrides),
+            EnvironmentOverrideSecretKeys = [.. r.EnvironmentOverrideSecretKeys]
+        })],
+        InlineInitSteps = [.. runner.InlineInitSteps.Select(RunnerDefinition.CloneInitStep)],
+        CreatedAt = runner.CreatedAt,
+        UpdatedAt = runner.UpdatedAt
+    };
 
-        return !string.IsNullOrWhiteSpace(endpoint);
-    }
 }

@@ -1,0 +1,365 @@
+@using Shiny.DocumentDb
+@using RunnerRunner.Core.Models
+@using RunnerRunner.Server.Services
+@inject IDocumentStore Store
+@inject IRegistryCatalogService RegistryCatalog
+
+<div class="modal-backdrop fade show image-picker-backdrop"></div>
+<div class="modal fade show d-block rr-modal image-picker-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="image-picker-title" @onclick="CloseAsync">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h5 id="image-picker-title" class="modal-title">
+                        <i class="bi bi-search me-2"></i>Find image and tag
+                    </h5>
+                    <div class="modal-kicker">Search configured registries, choose a repository, then insert the selected tag.</div>
+                </div>
+                <button type="button" class="btn-close" @onclick="CloseAsync" aria-label="Close"></button>
+            </div>
+            <div class="modal-body image-picker-body">
+                <section class="image-picker-search-card">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-lg-4">
+                            <label class="form-label" for="imagePickerRegistry">Registry</label>
+                            <select id="imagePickerRegistry" class="form-select" @bind="selectedRegistryId" @bind:after="OnRegistryChanged">
+                                @foreach (var registry in registries)
+                                {
+                                    <option value="@registry.Id">@registry.Name (@registry.RegistryUrl)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-lg-6">
+                            <label class="form-label" for="imagePickerSearch">Repository search</label>
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input id="imagePickerSearch" class="form-control" placeholder="@GetSearchPlaceholder()" @bind="searchText" @bind:event="oninput" @onkeydown="OnSearchKeyDown" />
+                            </div>
+                        </div>
+                        <div class="col-lg-2 d-grid">
+                            <button type="button" class="btn btn-primary" @onclick="SearchAsync" disabled="@searchInProgress">
+                                @if (searchInProgress)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                                }
+                                Search
+                            </button>
+                        </div>
+                    </div>
+                    <div class="image-picker-current">
+                        <span>Current</span>
+                        <code>@FormatImage(CurrentRegistryUrl, CurrentImageName, CurrentTag)</code>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(statusText))
+                    {
+                        <div class="small @(statusIsError ? "text-danger" : "text-muted")">@statusText</div>
+                    }
+                </section>
+
+                <div class="image-picker-grid">
+                    <section class="image-picker-panel">
+                        <div class="image-picker-panel-header">
+                            <div>
+                                <h6>Repositories</h6>
+                                <p>Pick the image path to inspect tags.</p>
+                            </div>
+                            @if (searchResults.FromCache)
+                            {
+                                <span class="badge bg-secondary">Cached</span>
+                            }
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(searchResults.Warning))
+                        {
+                            <div class="alert alert-warning py-2 mx-3">@searchResults.Warning</div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(searchResults.InfoMessage))
+                        {
+                            <div class="alert alert-secondary py-2 mx-3">@searchResults.InfoMessage</div>
+                        }
+
+                        @if (!searchResults.Results.Any())
+                        {
+                            <div class="image-picker-empty">
+                                <i class="bi bi-box-seam"></i>
+                                <strong>No repositories yet</strong>
+                                <span>Search a configured registry to browse image paths.</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="image-picker-list" role="listbox" aria-label="Repository results">
+                                @foreach (var result in searchResults.Results)
+                                {
+                                    <button type="button"
+                                            class="image-picker-row @(selectedRepository == result.Name ? "active" : "")"
+                                            @onclick="() => SelectRepositoryAsync(result.Name)">
+                                        <span>
+                                            <code>@result.Name</code>
+                                            <small>@(string.IsNullOrWhiteSpace(result.Description) ? "No description" : result.Description)</small>
+                                        </span>
+                                        @if (result.StarCount is not null)
+                                        {
+                                            <span class="image-picker-stars"><i class="bi bi-star-fill"></i>@result.StarCount</span>
+                                        }
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </section>
+
+                    <section class="image-picker-panel">
+                        <div class="image-picker-panel-header">
+                            <div>
+                                <h6>Tags</h6>
+                                <p>@(string.IsNullOrWhiteSpace(selectedRepository) ? "Select a repository first." : $"Choose a version for {selectedRepository}.")</p>
+                            </div>
+                            @if (tagResults.FromCache)
+                            {
+                                <span class="badge bg-secondary">Cached</span>
+                            }
+                        </div>
+
+                        @if (tagsInProgress)
+                        {
+                            <div class="image-picker-empty">
+                                <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                                <strong>Loading tags</strong>
+                                <span>Checking the registry for available tags.</span>
+                            </div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(tagResults.Warning))
+                        {
+                            <div class="alert alert-warning py-2 mx-3">@tagResults.Warning</div>
+                        }
+                        else if (string.IsNullOrWhiteSpace(selectedRepository))
+                        {
+                            <div class="image-picker-empty">
+                                <i class="bi bi-tags"></i>
+                                <strong>No repository selected</strong>
+                                <span>Choose an image path from the left.</span>
+                            </div>
+                        }
+                        else if (!tagResults.Tags.Any())
+                        {
+                            <div class="image-picker-empty">
+                                <i class="bi bi-tags"></i>
+                                <strong>No tags found</strong>
+                                <span>This registry did not return tags for the selected repository.</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="image-picker-list" role="listbox" aria-label="Tag results">
+                                @foreach (var tag in tagResults.Tags)
+                                {
+                                    <button type="button"
+                                            class="image-picker-row image-picker-tag-row @(selectedTag == tag.Name ? "active" : "")"
+                                            @onclick="() => SelectTag(tag.Name)">
+                                        <span>
+                                            <code>@tag.Name</code>
+                                            <small>@FormatTagMeta(tag)</small>
+                                        </span>
+                                        <i class="bi bi-chevron-right"></i>
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </section>
+                </div>
+            </div>
+            <div class="modal-footer image-picker-footer">
+                <div class="image-picker-selection">
+                    <span>Selection</span>
+                    <code>@FormatImage(SelectedRegistry?.RegistryUrl, selectedRepository, selectedTag)</code>
+                </div>
+                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Cancel</button>
+                <button type="button" class="btn btn-primary" @onclick="ApplyAsync" disabled="@(!CanApply)">
+                    <i class="bi bi-check2 me-1"></i>Use selected image
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public RegistryType RegistryType { get; set; } = RegistryType.Docker;
+    [Parameter] public string? CurrentRegistryUrl { get; set; }
+    [Parameter] public string? CurrentImageName { get; set; }
+    [Parameter] public string? CurrentTag { get; set; }
+    [Parameter] public EventCallback<ImagePickerSelection> OnSelected { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private List<RegistryCredential> registries = [];
+    private string selectedRegistryId = "";
+    private string searchText = "";
+    private string selectedRepository = "";
+    private string selectedTag = "";
+    private string statusText = "";
+    private bool statusIsError;
+    private bool searchInProgress;
+    private bool tagsInProgress;
+    private RegistrySearchResponse searchResults = new();
+    private RegistryTagResponse tagResults = new();
+
+    private RegistryCredential? SelectedRegistry =>
+        registries.FirstOrDefault(r => r.Id == selectedRegistryId);
+
+    private bool CanApply =>
+        SelectedRegistry is not null
+        && !string.IsNullOrWhiteSpace(selectedRepository)
+        && !string.IsNullOrWhiteSpace(selectedTag);
+
+    protected override async Task OnInitializedAsync()
+    {
+        registries = (await Store.Query<RegistryCredential>().ToList())
+            .Where(r => r.RegistryType == RegistryType)
+            .OrderByDescending(r => IsCurrentRegistry(r.RegistryUrl))
+            .ThenByDescending(r => r.IsDefault)
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        AddCurrentRegistryIfNeeded();
+
+        selectedRegistryId = registries.FirstOrDefault()?.Id ?? "";
+        searchText = CurrentImageName ?? "";
+
+        if (!registries.Any())
+        {
+            statusIsError = true;
+            statusText = $"Add a {RegistryType.ToString().ToLowerInvariant()} registry first, or enter a registry URL on this profile.";
+        }
+        else if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            await SearchAsync();
+        }
+    }
+
+    private void AddCurrentRegistryIfNeeded()
+    {
+        if (string.IsNullOrWhiteSpace(CurrentRegistryUrl))
+            return;
+
+        if (registries.Any(r => IsCurrentRegistry(r.RegistryUrl)))
+            return;
+
+        registries.Insert(0, new RegistryCredential
+        {
+            Id = $"current-{Guid.NewGuid():N}",
+            Name = "Current registry",
+            RegistryUrl = CurrentRegistryUrl.Trim(),
+            RegistryType = RegistryType
+        });
+    }
+
+    private bool IsCurrentRegistry(string registryUrl) =>
+        string.Equals(NormalizeRegistryUrl(registryUrl), NormalizeRegistryUrl(CurrentRegistryUrl), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeRegistryUrl(string? value) =>
+        (value ?? "").Trim().TrimEnd('/');
+
+    private void OnRegistryChanged()
+    {
+        selectedRepository = "";
+        selectedTag = "";
+        searchResults = new();
+        tagResults = new();
+        statusText = "";
+    }
+
+    private async Task OnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SearchAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        var registry = SelectedRegistry;
+        if (registry is null)
+            return;
+
+        searchInProgress = true;
+        statusIsError = false;
+        statusText = "Searching registry...";
+        selectedRepository = "";
+        selectedTag = "";
+        tagResults = new();
+
+        searchResults = await RegistryCatalog.SearchRepositoriesAsync(registry, searchText);
+
+        searchInProgress = false;
+        statusIsError = !string.IsNullOrWhiteSpace(searchResults.Warning);
+        statusText = searchResults.FromCache ? "Showing cached repository results." : "";
+    }
+
+    private async Task SelectRepositoryAsync(string repository)
+    {
+        var registry = SelectedRegistry;
+        if (registry is null)
+            return;
+
+        selectedRepository = repository;
+        selectedTag = "";
+        tagsInProgress = true;
+        tagResults = await RegistryCatalog.GetTagsAsync(registry, repository);
+        tagsInProgress = false;
+        selectedTag = tagResults.Tags.FirstOrDefault()?.Name ?? "";
+    }
+
+    private void SelectTag(string tag)
+    {
+        selectedTag = tag;
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (!CanApply || SelectedRegistry is null)
+            return;
+
+        await OnSelected.InvokeAsync(new ImagePickerSelection(
+            SelectedRegistry.RegistryUrl.Trim(),
+            selectedRepository.Trim(),
+            selectedTag.Trim(),
+            RegistryType));
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private string GetSearchPlaceholder() =>
+        RegistryType == RegistryType.Tart
+            ? "cirruslabs/macos-sequoia-base"
+            : "org/runner-image";
+
+    private static string FormatImage(string? registryUrl, string? imageName, string? tag)
+    {
+        var registry = string.IsNullOrWhiteSpace(registryUrl) ? "registry" : registryUrl.Trim().TrimEnd('/');
+        var image = string.IsNullOrWhiteSpace(imageName) ? "image" : imageName.Trim().Trim('/');
+        var imageTag = string.IsNullOrWhiteSpace(tag) ? "tag" : tag.Trim();
+        return $"{registry}/{image}:{imageTag}";
+    }
+
+    private static string FormatTagMeta(RegistryTagResult tag)
+    {
+        var parts = new List<string>();
+        if (tag.SizeBytes is > 0)
+            parts.Add(FormatSize(tag.SizeBytes.Value));
+        if (tag.UpdatedAt is not null)
+            parts.Add(tag.UpdatedAt.Value.LocalDateTime.ToString("MMM d, yyyy"));
+        return parts.Count == 0 ? "No metadata" : string.Join(" · ", parts);
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var size = (double)bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+
+        return $"{size:0.#} {units[unit]}";
+    }
+}

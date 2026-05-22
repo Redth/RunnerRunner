@@ -207,30 +207,7 @@ else
                         <tr>
                             <td class="name-cell"><span class="primary-label">@inst.RunnerName</span></td>
                             <td>
-                                @if (TryGetProfileUsage(inst, out var usage))
-                                {
-                                    <div class="rule-profile-card @GetProfileUsageClass(usage)"
-                                         title="@GetProfileUsageTitle(inst, usage)">
-                                        <div class="rule-profile-main">
-                                            <span class="rule-profile-name">@GetProfileName(inst)</span>
-                                            <span class="rule-profile-count">@usage.Summary</span>
-                                        </div>
-                                        <span class="rule-profile-meter" aria-hidden="true">
-                                            <span style="@GetProfileUsageStyle(usage)"></span>
-                                        </span>
-                                        <div class="rule-profile-meta">
-                                            <span><i class="bi bi-hdd-network"></i>@usage.HostLabel</span>
-                                            <span><i class="bi bi-lightning-charge"></i>@usage.Remaining open</span>
-                                        </div>
-                                    </div>
-                                }
-                                else
-                                {
-                                    <span class="rule-profile-empty">
-                                        <i class="bi bi-person-badge"></i>
-                                        @GetProfileName(inst)
-                                    </span>
-                                }
+                                <span class="primary-label">@GetProfileName(inst)</span>
                             </td>
                             <td>
                                 <div class="event-status-card @GetRunnerStatusToneClass(inst)">
@@ -551,48 +528,8 @@ else
             : $"{label}: {counter.Used} of {counter.Limit} used, {counter.Remaining} available";
     }
 
-    private bool TryGetProfileUsage(RunnerInstance instance, out ProfileHostUsage usage)
-    {
-        usage = default!;
-
-        if (!capacitySnapshot.Profiles.TryGetValue(instance.ProfileId, out var profileCapacity))
-            return false;
-
-        var match = profileCapacity.HostUsage.FirstOrDefault(h => h.HostId == instance.HostId);
-        if (match == null)
-            return false;
-
-        usage = match;
-        return true;
-    }
-
     private string GetProfileName(RunnerInstance instance) =>
         profileNames.GetValueOrDefault(instance.ProfileId, instance.ProfileId);
-
-    private static string GetProfileUsageClass(ProfileHostUsage usage)
-    {
-        if (usage.Limit <= 0)
-            return "availability-empty";
-
-        var ratio = (double)usage.Used / usage.Limit;
-        return ratio switch
-        {
-            >= 1 => "availability-full",
-            >= 0.75 => "availability-warn",
-            _ => "availability-good"
-        };
-    }
-
-    private static string GetProfileUsageStyle(ProfileHostUsage usage)
-    {
-        var percent = usage.Limit <= 0
-            ? 0
-            : Math.Clamp(usage.Used / (double)usage.Limit * 100, 0, 100);
-        return $"width: {percent:0.#}%";
-    }
-
-    private string GetProfileUsageTitle(RunnerInstance instance, ProfileHostUsage usage) =>
-        $"{GetProfileName(instance)} on {usage.HostLabel}: {usage.Used} of {usage.Limit} active, {usage.Remaining} open";
 
     private void ToggleHost(string hostId)
     {

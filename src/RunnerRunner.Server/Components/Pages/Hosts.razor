@@ -153,8 +153,9 @@
                                     <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxNativeProcesses" min="0" />
                                 </div>
                                 <div>
-                                    <label class="form-label form-label-sm mb-1">Group ID</label>
+                                    <label class="form-label form-label-sm mb-1">Host routing group</label>
                                     <input type="text" class="form-control form-control-sm" @bind="configureHost.GroupId" placeholder="e.g., build-farm-1" />
+                                    <div class="form-text">Use this to route provisioning rules to this set of machines. It is separate from provider runner groups and Azure pools.</div>
                                 </div>
                             </section>
                         </div>
@@ -407,14 +408,6 @@
                                         <span class="backend-capacity-count">@counter.Summary</span>
                                     </span>
                                 }
-                            </div>
-                        }
-                        @if (capacity.ProfileUsage.Any(p => p.IsSaturated))
-                        {
-                            <div class="d-flex flex-wrap gap-1 mt-2">
-                                <span class="host-chip saturated-chip" title="@FormatSaturatedProfiles(capacity)">
-                                    <i class="bi bi-exclamation-triangle-fill me-1"></i>Saturated
-                                </span>
                             </div>
                         }
                     }
@@ -1099,13 +1092,6 @@
             ? $"{label}: disabled"
             : $"{label}: {counter.Used} of {counter.Limit} used, {counter.Remaining} available";
     }
-
-    private static string FormatSaturatedProfiles(HostCapacityView capacity)
-        => "Saturated profiles: " + string.Join(
-            ", ",
-            capacity.ProfileUsage
-                .Where(p => p.IsSaturated)
-                .Select(p => $"{p.ProfileName} {p.Summary}"));
 
     private static string FormatHeartbeat(DateTime? heartbeat)
     {
