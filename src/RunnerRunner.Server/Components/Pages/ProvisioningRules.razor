@@ -262,77 +262,44 @@
                             }
 
                             <section class="rr-form-section">
-                                <div class="rr-form-section-title"><i class="bi bi-hdd-network"></i>Global host routing</div>
-                                <p class="section-help mb-3">Optional rule-wide placement filters. They are applied before each runner target's own host routing, so put target-specific capabilities like <code>windows-ui</code> on the target below.</p>
-                                <div class="row g-3">
-                                    <div class="col-lg-5">
-                                        <label class="form-label" for="targetGroup">Host routing group</label>
-                                        <SmartAutocomplete Value="@editRule.TargetGroupId"
-                                                           ValueChanged="value => editRule.TargetGroupId = string.IsNullOrWhiteSpace(value) ? null : value"
-                                                           Suggestions="@GetHostGroupSuggestions()"
-                                                           Placeholder="Any host routing group"
-                                                           AriaLabel="Host routing group" />
-                                    </div>
-                                    <div class="col-lg-7">
-                                        <label class="form-label">Global host labels</label>
-                                        <div class="runner-chip-list mb-2">
-                                            @foreach (var requirement in editHostLabels.OrderBy(kvp => kvp.Key))
-                                            {
-                                                var key = requirement.Key;
-                                                <span class="runner-chip">
-                                                    <i class="bi bi-tag"></i>@key=@requirement.Value
-                                                    <button type="button" @onclick="() => editHostLabels.Remove(key)" aria-label="Remove host label @key"><i class="bi bi-x"></i></button>
-                                                </span>
-                                            }
+                                <details class="global-host-routing-panel">
+                                    <summary>
+                                        <span><i class="bi bi-hdd-network"></i>Global host routing</span>
+                                        <small>@GetEditTargetDisplay()</small>
+                                    </summary>
+                                    <p class="section-help mb-3">Optional rule-wide placement filters. They are applied before each runner target's own host routing, so put target-specific capabilities like <code>windows-ui</code> on the target below.</p>
+                                    <div class="row g-3">
+                                        <div class="col-lg-5">
+                                            <label class="form-label" for="targetGroup">Host routing group</label>
+                                            <SmartAutocomplete Value="@editRule.TargetGroupId"
+                                                               ValueChanged="value => editRule.TargetGroupId = string.IsNullOrWhiteSpace(value) ? null : value"
+                                                               Suggestions="@GetHostGroupSuggestions()"
+                                                               Placeholder="Any host routing group"
+                                                               AriaLabel="Host routing group" />
                                         </div>
-                                        <div class="input-group input-group-sm">
-                                            <SmartAutocomplete Value="@newHostLabelInput"
-                                                               ValueChanged="value => newHostLabelInput = value ?? string.Empty"
-                                                               Suggestions="@GetHostCapabilityLabelSuggestions()"
-                                                               Placeholder="pool=mac-builders"
-                                                               AriaLabel="Global required host label" />
-                                            <button class="btn btn-outline-secondary" type="button" @onclick="AddHostLabel"><i class="bi bi-plus-lg me-1"></i>Add</button>
+                                        <div class="col-lg-7">
+                                            <label class="form-label">Global host labels</label>
+                                            <div class="runner-chip-list mb-2">
+                                                @foreach (var requirement in editHostLabels.OrderBy(kvp => kvp.Key))
+                                                {
+                                                    var key = requirement.Key;
+                                                    <span class="runner-chip">
+                                                        <i class="bi bi-tag"></i>@key=@requirement.Value
+                                                        <button type="button" @onclick="() => editHostLabels.Remove(key)" aria-label="Remove host label @key"><i class="bi bi-x"></i></button>
+                                                    </span>
+                                                }
+                                            </div>
+                                            <div class="input-group input-group-sm">
+                                                <SmartAutocomplete Value="@newHostLabelInput"
+                                                                   ValueChanged="value => newHostLabelInput = value ?? string.Empty"
+                                                                   Suggestions="@GetHostCapabilityLabelSuggestions()"
+                                                                   Placeholder="pool=mac-builders"
+                                                                   AriaLabel="Global required host label" />
+                                                <button class="btn btn-outline-secondary" type="button" @onclick="AddHostLabel"><i class="bi bi-plus-lg me-1"></i>Add</button>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                                <div class="host-match-preview">
-                                    <div class="host-match-preview-header">
-                                        <span><i class="bi bi-radar"></i>Matching hosts preview</span>
-                                        <small>Calculated from global routing, target routing, platform, and backend.</small>
-                                    </div>
-                                    <div class="host-match-preview-grid">
-                                        @foreach (var runner in editRule.RunnerDefinitions.Where(r => r.Enabled).OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
-                                        {
-                                            var matches = GetMatchingHostsForRunner(runner).ToList();
-                                            <article class="host-match-card @(matches.Count == 0 ? "empty" : "")">
-                                                <div class="host-match-card-title">
-                                                    <strong>@runner.Name</strong>
-                                                    <span>@matches.Count host(s)</span>
-                                                </div>
-                                                <small>@runner.RequiredHostPlatform · @runner.ExecutionBackend</small>
-                                                @if (matches.Count == 0)
-                                                {
-                                                    <p>No hosts match this target yet. Check platform, backend limits, global routing, target routing, and required capabilities.</p>
-                                                }
-                                                else
-                                                {
-                                                    <div class="host-match-list">
-                                                        @foreach (var host in matches.Take(4))
-                                                        {
-                                                            <span class="host-match-pill @(host.AgentStatus == AgentStatus.Online ? "online" : "")">
-                                                                <i class="bi @GetPlatformIcon(host.Platform)"></i>@host.Label
-                                                            </span>
-                                                        }
-                                                        @if (matches.Count > 4)
-                                                        {
-                                                            <span class="host-match-pill muted">+@(matches.Count - 4) more</span>
-                                                        }
-                                                    </div>
-                                                }
-                                            </article>
-                                        }
-                                    </div>
-                                </div>
+                                </details>
                             </section>
 
                             <section class="rr-form-section runner-definition-section">
@@ -548,6 +515,41 @@
                                                             <button class="btn btn-outline-primary" type="button" @onclick="() => AddRunnerHostCapability(runner)"><i class="bi bi-plus-lg me-1"></i>Add capability</button>
                                                         </div>
                                                     </div>
+                                                </div>
+                                                @{
+                                                    var hostPreview = GetHostMatchPreviewForRunner(runner);
+                                                }
+                                                <div class="host-match-preview host-match-preview-inline">
+                                                    <div class="host-match-preview-header">
+                                                        <span><i class="bi bi-radar"></i>Calculated host set</span>
+                                                        <small>Global routing + platform/backend compatibility + target routing.</small>
+                                                    </div>
+                                                    <article class="host-match-card @(hostPreview.Hosts.Count == 0 ? "empty" : "")">
+                                                        <div class="host-match-card-title">
+                                                            <strong>@runner.Name</strong>
+                                                            <span>@hostPreview.Hosts.Count host(s)</span>
+                                                        </div>
+                                                        <small>@runner.RequiredHostPlatform · @runner.ExecutionBackend · @GetRunnerHostRoutingDisplay(runner)</small>
+                                                        @if (hostPreview.Hosts.Count == 0)
+                                                        {
+                                                            <p><strong>No possible hosts.</strong> @hostPreview.EmptyReason</p>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="host-match-list">
+                                                                @foreach (var host in hostPreview.Hosts.Take(6))
+                                                                {
+                                                                    <span class="host-match-pill @(host.AgentStatus == AgentStatus.Online ? "online" : "")">
+                                                                        <i class="bi @GetPlatformIcon(host.Platform)"></i>@host.Label
+                                                                    </span>
+                                                                }
+                                                                @if (hostPreview.Hosts.Count > 6)
+                                                                {
+                                                                    <span class="host-match-pill muted">+@(hostPreview.Hosts.Count - 6) more</span>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </article>
                                                 </div>
                                             </div>
 
@@ -854,7 +856,7 @@
                                     <div><span>Provider</span><strong>@GetProviderLabel(editRule.Provider)</strong></div>
                                     <div><span>Capacity</span><strong>@GetScaleDisplay(editRule)</strong></div>
                                     <div><span>Targets</span><strong>@editRule.RunnerDefinitions.Count(r => r.Enabled)</strong></div>
-                                    <div><span>Global host route</span><strong>@GetTargetDisplay(editRule)</strong></div>
+                                    <div><span>Global host route</span><strong>@GetEditTargetDisplay()</strong></div>
                                 </div>
                             </div>
 
@@ -1085,6 +1087,8 @@ else
     private bool showImagePicker;
     private RunnerDefinition? imagePickerRunner;
     private RegistryType imagePickerType = RegistryType.Docker;
+
+    private sealed record HostMatchPreview(IReadOnlyList<Host> Hosts, string EmptyReason);
 
     protected override async Task OnInitializedAsync()
     {
@@ -1677,16 +1681,50 @@ else
             ? imagePickerRunner?.DockerConfig?.Tag
             : imagePickerRunner?.TartConfig?.Tag;
 
-    private IEnumerable<Host> GetMatchingHostsForRunner(RunnerDefinition runner)
+    private HostMatchPreview GetHostMatchPreviewForRunner(RunnerDefinition runner)
     {
-        return hosts
-            .Where(host => HostMatchesRulePreview(host))
-            .Where(host => HostMatchesRunnerRouting(host, runner))
+        if (hosts.Count == 0)
+            return new HostMatchPreview(Array.Empty<Host>(), "No HostWorkers are registered yet.");
+
+        var globalMatches = hosts
+            .Where(HostMatchesRulePreview)
+            .ToList();
+        if (globalMatches.Count == 0)
+            return new HostMatchPreview(Array.Empty<Host>(), $"Global host routing excludes every registered host ({GetEditTargetDisplay()}).");
+
+        var platformMatches = globalMatches
             .Where(host => host.Platform == runner.RequiredHostPlatform)
+            .ToList();
+        if (platformMatches.Count == 0)
+            return new HostMatchPreview(Array.Empty<Host>(), $"No {runner.RequiredHostPlatform} hosts remain after global host routing.");
+
+        var backendMatches = platformMatches
             .Where(host => CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
+            .ToList();
+        if (backendMatches.Count == 0)
+            return new HostMatchPreview(Array.Empty<Host>(), $"No {runner.RequiredHostPlatform} hosts have {runner.ExecutionBackend.ToString().ToLowerInvariant()} capacity enabled.");
+
+        var dockerOsMatches = backendMatches
             .Where(host => HostMatchesDockerOs(host, runner))
+            .ToList();
+        if (dockerOsMatches.Count == 0)
+        {
+            var expectedDockerOs = GetExpectedDockerOs(runner);
+            var reason = string.IsNullOrWhiteSpace(expectedDockerOs)
+                ? "Docker OS compatibility excludes every otherwise matching host."
+                : $"Docker OS compatibility excludes every otherwise matching host. Expected host label docker_os={expectedDockerOs}.";
+            return new HostMatchPreview(Array.Empty<Host>(), reason);
+        }
+
+        var matches = dockerOsMatches
+            .Where(host => HostMatchesRunnerRouting(host, runner))
             .OrderByDescending(host => host.AgentStatus == AgentStatus.Online)
-            .ThenBy(host => host.Label, StringComparer.OrdinalIgnoreCase);
+            .ThenBy(host => host.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (matches.Count == 0)
+            return new HostMatchPreview(Array.Empty<Host>(), $"Target host routing excludes every otherwise compatible host ({GetRunnerHostRoutingDisplay(runner)}).");
+
+        return new HostMatchPreview(matches, "");
     }
 
     private bool HostMatchesRulePreview(Host host)
@@ -1733,16 +1771,21 @@ else
         if (!host.Labels.TryGetValue("docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
             return true;
 
-        var expectedDockerOs = runner.RequiredHostPlatform switch
-        {
-            HostPlatform.Windows => "windows",
-            HostPlatform.Linux => "linux",
-            _ => null
-        };
+        var expectedDockerOs = GetExpectedDockerOs(runner);
 
         return expectedDockerOs == null
             || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string? GetExpectedDockerOs(RunnerDefinition runner) =>
+        runner.ExecutionBackend != ExecutionBackend.Docker
+            ? null
+            : runner.RequiredHostPlatform switch
+            {
+                HostPlatform.Windows => "windows",
+                HostPlatform.Linux => "linux",
+                _ => null
+            };
 
     private static string GetPlatformIcon(HostPlatform platform) => platform switch
     {
@@ -2462,6 +2505,24 @@ else
 
         if (rule.RequiredHostLabels.Count > 0)
             targetParts.Add($"{rule.RequiredHostLabels.Count} host label(s)");
+
+        return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Any eligible host";
+    }
+
+    private string GetEditTargetDisplay()
+    {
+        var targetParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(editRule.TargetHostId))
+        {
+            var host = hosts.FirstOrDefault(h => h.Id == editRule.TargetHostId);
+            targetParts.Add(host?.Label ?? editRule.TargetHostId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(editRule.TargetGroupId))
+            targetParts.Add(editRule.TargetGroupId);
+
+        if (editHostLabels.Count > 0)
+            targetParts.Add($"{editHostLabels.Count} host label(s)");
 
         return targetParts.Count > 0 ? string.Join(" · ", targetParts) : "Any eligible host";
     }
