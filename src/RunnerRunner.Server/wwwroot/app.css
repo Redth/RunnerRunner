@@ -275,6 +275,11 @@ code, kbd, samp, pre {
     display: block !important;
     width: 100%;
     min-width: 0;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
 }
 
 .input-group > .rr-autocomplete {
@@ -297,6 +302,10 @@ code, kbd, samp, pre {
     transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
+.rr-autocomplete .rz-autocomplete-input:hover {
+    border-color: var(--border-color);
+}
+
 .input-group-sm .rr-autocomplete .rz-autocomplete-input,
 .env-override-row .rr-autocomplete .rz-autocomplete-input {
     min-height: calc(1.5em + 0.5rem + 2px);
@@ -313,8 +322,20 @@ code, kbd, samp, pre {
     border-bottom-right-radius: 0;
 }
 
-.input-group > .rr-autocomplete + .btn {
+.input-group > .rr-autocomplete:not(:first-child) .rz-autocomplete-input {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.input-group > .rr-autocomplete + .btn,
+.input-group > .rr-autocomplete + .form-control,
+.input-group > .rr-autocomplete + .form-select,
+.input-group > .rr-autocomplete + .input-group-text {
     margin-left: -1px;
+}
+
+.input-group > .rr-autocomplete:focus-within {
+    z-index: 5;
 }
 
 .rr-autocomplete .rz-autocomplete-input:focus {
@@ -657,6 +678,58 @@ code, kbd, samp, pre {
     padding-top: 0.35rem;
     padding-bottom: 0.35rem;
 }
+
+.input-group {
+    --rr-input-group-radius: var(--radius-md);
+}
+
+.input-group > .form-control,
+.input-group > .form-select,
+.input-group > .input-group-text,
+.input-group > .btn {
+    border-radius: 0;
+}
+
+.input-group > .input-group-text {
+    background: var(--bg-input);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+}
+
+.input-group > .form-control:first-child,
+.input-group > .form-select:first-child,
+.input-group > .input-group-text:first-child,
+.input-group > .btn:first-child,
+.input-group > .rr-autocomplete:first-child .rz-autocomplete-input {
+    border-top-left-radius: var(--rr-input-group-radius);
+    border-bottom-left-radius: var(--rr-input-group-radius);
+}
+
+.input-group > .form-control:last-child,
+.input-group > .form-select:last-child,
+.input-group > .input-group-text:last-child,
+.input-group > .btn:last-child,
+.input-group > .rr-autocomplete:last-child .rz-autocomplete-input {
+    border-top-right-radius: var(--rr-input-group-radius);
+    border-bottom-right-radius: var(--rr-input-group-radius);
+}
+
+.input-group > .rr-autocomplete:not(:first-child),
+.input-group > .form-control:not(:first-child),
+.input-group > .form-select:not(:first-child),
+.input-group > .input-group-text:not(:first-child),
+.input-group > .btn:not(:first-child) {
+    margin-left: -1px;
+}
+
+.input-group > .form-control:focus,
+.input-group > .form-select:focus,
+.input-group > .input-group-text:focus,
+.input-group > .btn:focus,
+.input-group > .btn:focus-visible {
+    z-index: 5;
+}
+
 .form-label { font-weight: 600; font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 0.3rem; }
 .form-check-input { border-color: var(--border-color); background-color: var(--bg-input); }
 .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
@@ -776,6 +849,7 @@ small, .small { color: var(--text-tertiary); }
 h1 .bi, h3 .bi { opacity: 0.7; }
 .card-title .bi { opacity: 0.8; }
 .btn .bi { margin-right: 0.25rem; }
+.btn .bi:only-child { margin-right: 0; }
 .alert .bi { margin-right: 0.35rem; }
 
 /* --- Host Platform Chips --- */
@@ -4508,6 +4582,18 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     font-size: 0.8rem;
 }
 
+.image-picker-panel-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.image-picker-tag-filter {
+    width: min(13rem, 32vw);
+}
+
 .image-picker-list {
     overflow-y: auto;
     min-height: 0;
@@ -4534,9 +4620,29 @@ h1 .bi, h3 .bi { opacity: 0.7; }
     background: var(--accent-soft);
 }
 
-.image-picker-row span:first-child {
+.image-picker-row-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border-color));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+}
+
+.image-picker-tag-row .image-picker-row-icon {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 20%, var(--border-color));
+    background: color-mix(in srgb, var(--success) 8%, var(--bg-card));
+}
+
+.image-picker-row-main {
     display: grid;
     gap: 0.16rem;
+    flex: 1 1 auto;
     min-width: 0;
 }
 
@@ -4604,6 +4710,15 @@ h1 .bi, h3 .bi { opacity: 0.7; }
 
     .image-picker-selection {
         flex-basis: 100%;
+    }
+
+    .image-picker-panel-header {
+        flex-wrap: wrap;
+    }
+
+    .image-picker-panel-actions,
+    .image-picker-tag-filter {
+        width: 100%;
     }
 }
 
