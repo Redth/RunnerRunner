@@ -514,13 +514,14 @@
                                                  <div class="runner-subsection-heading"><span><i class="bi bi-hdd-stack"></i>Execution shape</span></div>
                                                  <div class="row g-3">
                                                     <div class="col-lg-3">
-                                                        <label class="form-label" for="platform-@runner.Id">Host platform</label>
+                                                        <label class="form-label" for="platform-@runner.Id">Target platform</label>
                                                         <select id="platform-@runner.Id" class="form-select" @bind="runner.RequiredHostPlatform">
                                                             @foreach (var platform in Enum.GetValues<HostPlatform>())
                                                             {
                                                                 <option value="@platform">@platform</option>
                                                             }
                                                         </select>
+                                                        <div class="form-text">Runner environment OS. Docker targets match compatible Docker engine OS.</div>
                                                     </div>
                                                     <div class="col-lg-3">
                                                         <label class="form-label" for="backend-@runner.Id">Backend</label>
@@ -1846,30 +1847,20 @@ else
             return new HostMatchPreview(Array.Empty<Host>(), $"Global host routing excludes every registered host ({GetEditTargetDisplay()}).");
 
         var platformMatches = globalMatches
-            .Where(host => host.Platform == runner.RequiredHostPlatform)
+            .Where(host => HostCanProvideRunnerPlatform(host, runner))
             .ToList();
         if (platformMatches.Count == 0)
-            return new HostMatchPreview(Array.Empty<Host>(), $"No {runner.RequiredHostPlatform} hosts remain after global host routing.");
+            return new HostMatchPreview(Array.Empty<Host>(), $"No hosts can provide target platform {runner.RequiredHostPlatform} for {runner.ExecutionBackend} after global host routing.");
 
         var backendMatches = platformMatches
-            .Where(host => CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
+            .Where(host =>
+                CapacityPlanningService.HasBackendCapability(host, runner.ExecutionBackend)
+                && CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
             .ToList();
         if (backendMatches.Count == 0)
-            return new HostMatchPreview(Array.Empty<Host>(), $"No {runner.RequiredHostPlatform} hosts have {runner.ExecutionBackend.ToString().ToLowerInvariant()} capacity enabled.");
+            return new HostMatchPreview(Array.Empty<Host>(), $"No compatible hosts advertise {runner.ExecutionBackend.ToString().ToLowerInvariant()} support with capacity enabled.");
 
-        var dockerOsMatches = backendMatches
-            .Where(host => HostMatchesDockerOs(host, runner))
-            .ToList();
-        if (dockerOsMatches.Count == 0)
-        {
-            var expectedDockerOs = GetExpectedDockerOs(runner);
-            var reason = string.IsNullOrWhiteSpace(expectedDockerOs)
-                ? "Docker OS compatibility excludes every otherwise matching host."
-                : $"Docker OS compatibility excludes every otherwise matching host. Expected host label docker_os={expectedDockerOs}.";
-            return new HostMatchPreview(Array.Empty<Host>(), reason);
-        }
-
-        var matches = dockerOsMatches
+        var matches = backendMatches
             .Where(host => HostMatchesRunnerRouting(host, runner))
             .OrderByDescending(host => host.AgentStatus == AgentStatus.Online)
             .ThenBy(host => host.Label, StringComparer.OrdinalIgnoreCase)
@@ -1900,6 +1891,24 @@ else
         return true;
     }
 
+    private static bool HostCanProvideRunnerPlatform(Host host, RunnerDefinition runner)
+    {
+        if (runner.ExecutionBackend != ExecutionBackend.Docker)
+            return host.Platform == runner.RequiredHostPlatform;
+
+        var expectedDockerOs = GetExpectedDockerOs(runner);
+        if (expectedDockerOs == null)
+            return host.Platform == runner.RequiredHostPlatform;
+
+        if (host.Labels.TryGetValue("docker_os", out var dockerOs) && !string.IsNullOrWhiteSpace(dockerOs))
+            return string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+
+        if (expectedDockerOs == "linux")
+            return host.Platform is HostPlatform.Linux or HostPlatform.MacOS;
+
+        return host.Platform == runner.RequiredHostPlatform;
+    }
+
     private static bool HostMatchesRunnerRouting(Host host, RunnerDefinition runner)
     {
         if (!string.IsNullOrWhiteSpace(runner.TargetGroupId)
@@ -1909,25 +1918,25 @@ else
         if (runner.RequiredHostCapabilities.Count == 0)
             return true;
 
-        var hostCapabilities = host.Capabilities.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hostCapabilities = GetEffectiveHostCapabilities(host);
         return runner.RequiredHostCapabilities
             .Where(capability => !string.IsNullOrWhiteSpace(capability))
             .Select(capability => capability.Trim())
             .All(hostCapabilities.Contains);
     }
 
-    private static bool HostMatchesDockerOs(Host host, RunnerDefinition runner)
+    private static HashSet<string> GetEffectiveHostCapabilities(Host host)
     {
-        if (runner.ExecutionBackend != ExecutionBackend.Docker)
-            return true;
+        var capabilities = host.Capabilities
+            .Where(capability => !string.IsNullOrWhiteSpace(capability))
+            .Select(capability => capability.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (!host.Labels.TryGetValue("docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
-            return true;
-
-        var expectedDockerOs = GetExpectedDockerOs(runner);
-
-        return expectedDockerOs == null
-            || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+        capabilities.Add("native");
+        capabilities.Add(host.Platform.ToString().ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(host.Architecture))
+            capabilities.Add(host.Architecture.Trim().ToLowerInvariant());
+        return capabilities;
     }
 
     private static string? GetExpectedDockerOs(RunnerDefinition runner) =>

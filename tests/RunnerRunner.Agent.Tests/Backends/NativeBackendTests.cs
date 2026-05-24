@@ -51,4 +51,45 @@ public class NativeBackendTests
 
         Assert.Equal("/runner-root/instances/runner-1/${UNKNOWN}", expanded);
     }
+
+    [Theory]
+    [InlineData("MAUI macOS Native-jit-be3d6782", "12345678-90ab-cdef-1234-567890abcdef")]
+    [InlineData("macOS/arm64 (Xcode 16.4)", "")]
+    [InlineData("../../..", "ABCDEF12")]
+    [InlineData("profile-abcdef12", "abcdef12-3456-7890-abcd-ef1234567890")]
+    public void CreateSafeRunnerDirectoryName_UsesShortHashToken(
+        string runnerName,
+        string instanceId)
+    {
+        var directoryName = NativeBackend.CreateSafeRunnerDirectoryName(runnerName, instanceId);
+
+        Assert.Matches("^rr-[0-9a-f]{16}$", directoryName);
+        Assert.DoesNotContain(' ', directoryName);
+        Assert.DoesNotContain('/', directoryName);
+        Assert.DoesNotContain('\\', directoryName);
+        Assert.DoesNotContain('$', directoryName);
+        Assert.DoesNotContain('\'', directoryName);
+        Assert.DoesNotContain('"', directoryName);
+        Assert.DoesNotContain("maui", directoryName);
+    }
+
+    [Fact]
+    public void CreateSafeRunnerDirectoryName_IsStableAndIncludesInstanceId()
+    {
+        var first = NativeBackend.CreateSafeRunnerDirectoryName("same-runner", "instance-1");
+        var second = NativeBackend.CreateSafeRunnerDirectoryName("same-runner", "instance-1");
+        var differentInstance = NativeBackend.CreateSafeRunnerDirectoryName("same-runner", "instance-2");
+
+        Assert.Equal(first, second);
+        Assert.NotEqual(first, differentInstance);
+    }
+
+    [Fact]
+    public void GetDefaultRunnerBasePath_UsesShortWindowsRoot()
+    {
+        Assert.Equal(@"C:\rr", NativeBackend.GetDefaultRunnerBasePath(isWindows: true, homePath: @"C:\Users\runner"));
+        Assert.Equal(
+            Path.Combine("/Users/runner", ".runnerrunner"),
+            NativeBackend.GetDefaultRunnerBasePath(isWindows: false, homePath: "/Users/runner"));
+    }
 }

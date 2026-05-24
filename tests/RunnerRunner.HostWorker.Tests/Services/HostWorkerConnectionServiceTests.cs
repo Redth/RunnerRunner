@@ -20,7 +20,7 @@ public class HostWorkerConnectionServiceTests
             {
                 ["HostWorker:DataRoot"] = directory.Path,
                 ["HostWorker:EnrollmentToken"] = "enroll-token",
-                ["DOCKER_HOST"] = ""
+                ["DOCKER_HOST"] = "unix:///var/run/docker.sock"
             })
             .Build();
         var identity = new HostWorkerIdentity("host-hello", "Hello Host", HostPlatform.Linux, "arm64");
@@ -71,7 +71,10 @@ public class HostWorkerConnectionServiceTests
         Assert.Equal("enroll-token", hello.EnrollmentToken);
         Assert.Equal("linux", hello.Labels["os"]);
         Assert.Equal("arm64", hello.Labels["arch"]);
+        Assert.Equal("true", hello.Labels["docker"]);
+        Assert.Equal("linux", hello.Labels["docker_os"]);
         Assert.Contains("native", hello.Agent.Capabilities);
+        Assert.Contains("docker", hello.Agent.Capabilities);
         Assert.NotNull(hello.Agent.Runtime);
     }
 
@@ -124,5 +127,18 @@ public class HostWorkerConnectionServiceTests
 
         Assert.Contains("tart", macCapabilities);
         Assert.DoesNotContain("tart", linuxCapabilities);
+    }
+
+    [Theory]
+    [InlineData(HostPlatform.Linux, null, "linux")]
+    [InlineData(HostPlatform.MacOS, null, "linux")]
+    [InlineData(HostPlatform.Windows, null, "linux")]
+    [InlineData(HostPlatform.Windows, "windows", "windows")]
+    public void ResolveDockerOs_DefaultsToLinuxUnlessConfigured(
+        HostPlatform platform,
+        string? configured,
+        string expected)
+    {
+        Assert.Equal(expected, HostWorkerConnectionService.ResolveDockerOs(platform, configured));
     }
 }
