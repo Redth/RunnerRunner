@@ -85,6 +85,31 @@ public sealed class WebhookProcessorGrainTests
     }
 
     [Fact]
+    public void ResolveWebhookSecrets_IncludesRuleAndGitHubAppCredentialSecrets()
+    {
+        var rule = new ProvisioningRule
+        {
+            Name = "webhook",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            WebhookSecret = " rule-secret "
+        };
+        var credential = new ProviderCredential
+        {
+            Name = "github-app",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubAuthType = GitHubAuthType.GitHubApp,
+            GitHubAppId = "123",
+            GitHubAppPrivateKey = "private-key",
+            GitHubAppWebhookSecret = " credential-secret "
+        };
+
+        var secrets = WebhookProcessorGrain.ResolveWebhookSecrets(rule, credential, RunnerProvider.GitHubActions);
+
+        Assert.Equal(["rule-secret", "credential-secret"], secrets);
+    }
+
+    [Fact]
     public void ResolveWebhookSecret_FallsBackToGitHubAppWebhookSecret()
     {
         var rule = new ProvisioningRule
@@ -194,7 +219,7 @@ public sealed class WebhookProcessorGrainTests
             labels: ["self-hosted", "linux", "rr-image-tag=2024.10", "extra"],
             installationId: "98765");
 
-        var result = await Processor().ProcessWebhook("github", body, SignGitHub(body, secret));
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, secret));
 
         Assert.True(result.Success);
         Assert.Equal("provisioned", result.Status);
@@ -209,6 +234,71 @@ public sealed class WebhookProcessorGrainTests
         Assert.Equal(["self-hosted", "linux", "extra"], webhookEvent.Labels);
         Assert.Equal("2024.10", webhookEvent.ImageTagOverride);
         Assert.Null(webhookEvent.ImageTagOverrideRejectedReason);
+    }
+
+    [Fact]
+    public async Task ProcessWebhook_GitHubQueued_AcceptsCredentialSecretWhenRuleOverrideDiffers()
+    {
+        var id = OrleansTestIds.Create("github-app-secret");
+        var credentialSecret = $"{id}-credential-secret";
+        var profileId = $"{id}-profile";
+        var credential = new ProviderCredential
+        {
+            Id = $"{id}-credential",
+            Name = "github app",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubAuthType = GitHubAuthType.GitHubApp,
+            GitHubAppId = "123",
+            GitHubAppPrivateKey = "private-key",
+            GitHubAppWebhookSecret = credentialSecret
+        };
+        var rule = new ProvisioningRule
+        {
+            Id = $"{id}-rule",
+            Name = "github app rule",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            ProviderCredentialId = credential.Id,
+            WebhookSecret = $"{id}-stale-rule-secret",
+            AllowedRepos = ["octo-org/octo-repo"],
+            LabelMappings =
+            [
+                new LabelProfileMapping
+                {
+                    RequiredLabels = ["self-hosted", "linux"],
+                    ProfileId = profileId
+                }
+            ]
+        };
+
+        await _store.Insert(credential);
+        await _store.Insert(rule);
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(new RunnerProfile
+        {
+            Id = profileId,
+            Name = "linux app profile",
+            Provider = RunnerProvider.GitHubActions,
+            ExecutionBackend = ExecutionBackend.Docker
+        });
+
+        var jobId = NextJobId();
+        var body = BuildWorkflowJobPayload(
+            action: "queued",
+            jobId: jobId,
+            runId: jobId + 1,
+            repository: "octo-org/octo-repo",
+            labels: ["self-hosted", "linux"],
+            installationId: "98765");
+
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, credentialSecret));
+
+        Assert.True(result.Success);
+        Assert.Equal("provisioned", result.Status);
+        Assert.Equal(profileId, result.ProfileId);
+
+        var webhookEvent = await _store.Get<WebhookEvent>(result.EventId!);
+        Assert.NotNull(webhookEvent);
+        Assert.Equal(rule.Id, webhookEvent.BindingId);
     }
 
     [Fact]
@@ -241,7 +331,7 @@ public sealed class WebhookProcessorGrainTests
             repository: "team/other",
             labels: ["self-hosted", "linux"]);
 
-        var result = await Processor().ProcessWebhook("gitea", body, ComputeSignature(body, secret));
+        var result = await Processor().ProcessWebhook("gitea", body, BodyBytes(body), ComputeSignature(body, secret));
 
         Assert.False(result.Success);
         Assert.Equal("rejected", result.Status);
@@ -276,7 +366,7 @@ public sealed class WebhookProcessorGrainTests
             repository: "octo-org/another-repo",
             labels: ["self-hosted", "linux"]);
 
-        var result = await Processor().ProcessWebhook("github", body, SignGitHub(body, secret));
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, secret));
 
         Assert.True(result.Success);
         Assert.Equal("completed", result.Status);
@@ -334,7 +424,7 @@ public sealed class WebhookProcessorGrainTests
             repository: "octo-org/octo-repo",
             labels: ["self-hosted", "linux"]);
 
-        var result = await Processor().ProcessWebhook("github", body, SignGitHub(body, secret));
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, secret));
 
         Assert.True(result.Success);
         Assert.Equal("in_progress", result.Status);
@@ -356,6 +446,8 @@ public sealed class WebhookProcessorGrainTests
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
         return Convert.ToHexStringLower(hmac.ComputeHash(Encoding.UTF8.GetBytes(body)));
     }
+
+    private static byte[] BodyBytes(string body) => Encoding.UTF8.GetBytes(body);
 
     private IWebhookProcessorGrain Processor() =>
         _grainFactory.GetGrain<IWebhookProcessorGrain>(Random.Shared.NextInt64());

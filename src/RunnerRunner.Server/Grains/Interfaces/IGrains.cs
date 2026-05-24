@@ -99,7 +99,7 @@ public interface ISchedulerGrain : IGrainWithIntegerKey
 /// </summary>
 public interface IWebhookProcessorGrain : IGrainWithIntegerKey
 {
-    Task<WebhookProcessResult> ProcessWebhook(string provider, string body, string? signatureHeader);
+    Task<WebhookProcessResult> ProcessWebhook(string provider, string body, byte[] bodyBytes, string? signatureHeader);
 }
 
 [GenerateSerializer]
