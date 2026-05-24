@@ -52,7 +52,7 @@
             <div>
                 <span class="dashboard-stat-label">Queue pressure</span>
                 <strong>@queuedJobCount</strong>
-                <small>@stuckJobCount likely blocked · @recentWebhookEventCount events in 1h</small>
+                <small>@stuckJobCount likely blocked · @recentWebhookIssueCount issue@(recentWebhookIssueCount == 1 ? "" : "s") in @WebhookIssueWindowLabel · @recentWebhookEventCount event@(recentWebhookEventCount == 1 ? "" : "s") in 1h</small>
             </div>
         </article>
 
@@ -104,6 +104,55 @@
                             <small>@item.Detail</small>
                         </span>
                     </a>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="dashboard-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-shield-exclamation"></i> Webhook intake</h2>
+                <p>Recent rejected webhooks, excluding expected out-of-scope deliveries from attention.</p>
+            </div>
+            <a class="btn btn-outline-secondary btn-sm dashboard-header-action" href="/webhook-events">
+                <i class="bi bi-arrow-right-circle"></i>
+                <span>View events</span>
+            </a>
+        </div>
+
+        @if (!recentWebhookIssues.Any())
+        {
+            <div class="dashboard-empty-state">
+                <i class="bi bi-shield-check"></i>
+                <strong>No actionable webhook rejections</strong>
+                <span>@GetWebhookIntakeEmptySummary()</span>
+            </div>
+        }
+        else
+        {
+            <div class="dashboard-mini-list">
+                @foreach (var issue in recentWebhookIssues.Take(6))
+                {
+                    <div class="dashboard-mini-row danger">
+                        <span class="dashboard-mini-icon"><i class="bi bi-shield-exclamation"></i></span>
+                        <span>
+                            <strong>@GetWebhookIssueTitle(issue.Reason)</strong>
+                            <small>@GetWebhookIssueDetail(issue)</small>
+                        </span>
+                        <span class="badge bg-danger">@issue.Count</span>
+                    </div>
+                }
+                @if (ignoredWebhookRejectionCount > 0)
+                {
+                    <div class="dashboard-mini-row info">
+                        <span class="dashboard-mini-icon"><i class="bi bi-info-circle"></i></span>
+                        <span>
+                            <strong>Out-of-scope deliveries ignored</strong>
+                            <small>@GetIgnoredWebhookRejectionSummary()</small>
+                        </span>
+                        <span class="badge bg-info">Info</span>
+                    </div>
                 }
             </div>
         }
@@ -253,6 +302,9 @@
 </div>
 
 @code {
+    private static readonly TimeSpan WebhookIssueWindow = TimeSpan.FromHours(24);
+    private static readonly string WebhookIssueWindowLabel = $"{(int)WebhookIssueWindow.TotalHours}h";
+
     private int totalHostCount;
     private int onlineHostCount;
     private int disconnectedExpectedCount;
@@ -264,6 +316,8 @@
     private int envVarSetCount;
     private int dynamicRunnerCount;
     private int recentWebhookEventCount;
+    private int recentWebhookIssueCount;
+    private int ignoredWebhookRejectionCount;
     private int queuedJobCount;
     private int stuckJobCount;
     private int runningTaskCount;
@@ -274,6 +328,7 @@
     private IReadOnlyList<LongRunningTaskInfo> taskSnapshot = [];
     private List<LongRunningTaskInfo> runningTasks = [];
     private List<WebhookEvent> queuedEvents = [];
+    private List<WebhookIssueGroup> recentWebhookIssues = [];
     private List<RunnerHost> hostsWithUpdates = [];
     private List<DashboardAttentionItem> attentionItems = [];
 
@@ -334,6 +389,17 @@
 
         var oneHourAgo = now.AddHours(-1);
         recentWebhookEventCount = webhookEvents.Count(e => e.ReceivedAt > oneHourAgo);
+        var webhookIssueWindowStart = now.Subtract(WebhookIssueWindow);
+        var recentRejectedWebhookEvents = webhookEvents
+            .Where(e => e.ReceivedAt > webhookIssueWindowStart
+                && string.Equals(e.Status, "rejected", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        ignoredWebhookRejectionCount = recentRejectedWebhookEvents.Count(IsIgnoredWebhookRejection);
+        var actionableWebhookIssues = recentRejectedWebhookEvents
+            .Where(IsActionableWebhookIssue)
+            .ToList();
+        recentWebhookIssueCount = actionableWebhookIssues.Count;
+        recentWebhookIssues = BuildWebhookIssueGroups(actionableWebhookIssues);
         queuedEvents = webhookEvents
             .Where(IsOpenQueuedEvent)
             .OrderByDescending(IsQueueRisk)
@@ -395,6 +461,15 @@
                 GetQueueSummary(e),
                 GetQueueIcon(e),
                 "warn",
+                "/webhook-events")));
+
+        items.AddRange(recentWebhookIssues
+            .Take(4)
+            .Select(issue => new DashboardAttentionItem(
+                GetWebhookIssueTitle(issue.Reason),
+                GetWebhookIssueDetail(issue),
+                "bi-shield-exclamation",
+                "danger",
                 "/webhook-events")));
 
         items.AddRange(runnerInstances
@@ -473,6 +548,65 @@
 
     private static string GetQueueTone(WebhookEvent evt) => IsQueueRisk(evt) ? "warn" : "info";
 
+    private static bool IsActionableWebhookIssue(WebhookEvent evt) =>
+        string.Equals(evt.Status, "rejected", StringComparison.OrdinalIgnoreCase)
+        && !IsIgnoredWebhookRejection(evt);
+
+    private static bool IsIgnoredWebhookRejection(WebhookEvent evt) =>
+        string.Equals(evt.Error, "Repository not in scope", StringComparison.OrdinalIgnoreCase);
+
+    private static DateTime GetActivityTime(WebhookEvent evt) =>
+        evt.UpdatedAt > evt.ReceivedAt ? evt.UpdatedAt : evt.ReceivedAt;
+
+    private static List<WebhookIssueGroup> BuildWebhookIssueGroups(IEnumerable<WebhookEvent> events) =>
+        [.. events
+            .GroupBy(e => $"{NormalizeWebhookRepository(e)}\u001f{GetWebhookIssueReason(e)}", StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var latest = group.OrderByDescending(GetActivityTime).First();
+                return new WebhookIssueGroup(
+                    NormalizeWebhookRepository(latest),
+                    GetWebhookIssueReason(latest),
+                    group.Count(),
+                    group.Max(GetActivityTime));
+            })
+            .OrderByDescending(issue => issue.Count)
+            .ThenByDescending(issue => issue.LatestAt)];
+
+    private static string NormalizeWebhookRepository(WebhookEvent evt) =>
+        string.IsNullOrWhiteSpace(evt.Repository) ? "Unknown repository" : evt.Repository;
+
+    private static string GetWebhookIssueReason(WebhookEvent evt) =>
+        FirstNonEmpty(evt.Error, evt.Status);
+
+    private static string GetWebhookIssueTitle(string reason)
+    {
+        if (reason.Contains("signing secret", StringComparison.OrdinalIgnoreCase))
+            return "Webhook signing secret missing";
+
+        if (reason.Contains("signature", StringComparison.OrdinalIgnoreCase))
+            return "Webhook signature rejected";
+
+        return "Webhook rejected";
+    }
+
+    private string GetWebhookIssueDetail(WebhookIssueGroup issue)
+    {
+        var eventLabel = issue.Count == 1 ? "event" : "events";
+        return $"{issue.Repository} · {issue.Count} {eventLabel} in {WebhookIssueWindowLabel} · latest {FormatRelative(issue.LatestAt)} · {issue.Reason}";
+    }
+
+    private string GetWebhookIntakeEmptySummary() =>
+        ignoredWebhookRejectionCount > 0
+            ? GetIgnoredWebhookRejectionSummary()
+            : "Signature and secret checks have no recent actionable failures.";
+
+    private string GetIgnoredWebhookRejectionSummary()
+    {
+        var eventLabel = ignoredWebhookRejectionCount == 1 ? "event" : "events";
+        return $"{ignoredWebhookRejectionCount} out-of-scope rejection {eventLabel} in {WebhookIssueWindowLabel} stayed informational.";
+    }
+
     private static string GetQueueSummary(WebhookEvent evt)
     {
         var labels = evt.Labels.Count == 0 ? "no labels" : string.Join(", ", evt.Labels.Take(4));
@@ -550,4 +684,10 @@
         string Icon,
         string Tone,
         string Href);
+
+    private sealed record WebhookIssueGroup(
+        string Repository,
+        string Reason,
+        int Count,
+        DateTime LatestAt);
 }

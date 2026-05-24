@@ -353,7 +353,7 @@ public sealed class GrainStateTests
         var signature = "sha256=" + ComputeSignature(body, secret);
         var processor = _grainFactory.GetGrain<IWebhookProcessorGrain>(CreatePositiveLong());
 
-        var result = await processor.ProcessWebhook("github", body, signature);
+        var result = await processor.ProcessWebhook("github", body, Encoding.UTF8.GetBytes(body), signature);
 
         Assert.True(result.Success);
         Assert.Equal("in_progress", result.Status);

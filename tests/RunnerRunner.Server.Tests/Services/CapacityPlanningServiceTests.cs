@@ -317,6 +317,74 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void AnalyzeHostSelection_MatchesHostLabelKeysCaseInsensitively()
+    {
+        var host = new Host
+        {
+            Name = "mac-mini",
+            Platform = HostPlatform.MacOS,
+            MaxNativeProcesses = 2,
+            Labels = { ["Pool"] = "Mac-Native" }
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "macos-native",
+            RequiredHostPlatform = HostPlatform.MacOS,
+            ExecutionBackend = ExecutionBackend.Native
+        };
+        var rule = new ProvisioningRule
+        {
+            Name = "targeted",
+            Type = ProvisioningType.Webhook,
+            RequiredHostLabels = new Dictionary<string, string>
+            {
+                ["pool"] = "mac-native"
+            }
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            rule,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            []);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(host.Id, analysis.SelectedHost!.Id);
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_TreatsPlatformAndArchitectureAsHostCapabilities()
+    {
+        var host = new Host
+        {
+            Name = "mac-mini",
+            Platform = HostPlatform.MacOS,
+            Architecture = "ARM64",
+            MaxNativeProcesses = 2
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "macos-native",
+            RequiredHostPlatform = HostPlatform.MacOS,
+            ExecutionBackend = ExecutionBackend.Native,
+            RequiredHostCapabilities = ["macos", "native", "arm64"]
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            []);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(host.Id, analysis.SelectedHost!.Id);
+    }
+
+    [Fact]
     public void BuildSnapshot_UsesRunnerDefinitionHostRoutingForCapacity()
     {
         var defaultHost = new Host

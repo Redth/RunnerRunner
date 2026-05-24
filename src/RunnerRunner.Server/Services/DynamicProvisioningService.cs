@@ -1322,7 +1322,7 @@ public class DynamicProvisioningService : BackgroundService
             if (host.AgentStatus != AgentStatus.Online)
                 continue;
 
-            if (!host.Capabilities.Any(c => c.Equals(backendName, StringComparison.OrdinalIgnoreCase)))
+            if (!CapacityPlanningService.HasBackendCapability(host, profile.ExecutionBackend))
                 continue;
 
             return new HostSelectionResult(host, null, false);

@@ -24,7 +24,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         _serviceProvider = serviceProvider;
     }
 
-    public async Task<WebhookProcessResult> ProcessWebhook(string provider, string body, string? signatureHeader)
+    public async Task<WebhookProcessResult> ProcessWebhook(string provider, string body, byte[] bodyBytes, string? signatureHeader)
     {
         // Map HMAC provider key to RunnerProvider enum name for storage
         var providerName = provider switch
@@ -108,15 +108,17 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         ProvisioningRule? orgMatchRule = null;
         ProvisioningRule? openScopeRule = null;
         var hmacMatchCount = 0;
+        var signingSecretCount = 0;
         foreach (var rule in candidateRules)
         {
             credentialsById.TryGetValue(rule.ProviderCredentialId ?? "", out var credential);
-            var webhookSecret = ResolveWebhookSecret(rule, credential, runnerProvider);
+            var webhookSecrets = ResolveWebhookSecrets(rule, credential, runnerProvider);
+            signingSecretCount += webhookSecrets.Count;
 
-            if (string.IsNullOrEmpty(webhookSecret))
+            if (webhookSecrets.Count == 0)
                 continue;
 
-            if (!ValidateHmac(body, webhookSecret, signatureHeader, provider))
+            if (!webhookSecrets.Any(secret => ValidateHmac(bodyBytes, secret, signatureHeader, provider)))
                 continue;
 
             hmacMatchCount++;
@@ -146,15 +148,25 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         if (matchedRule == null)
         {
             var status = hmacMatchCount > 0 ? "rejected" : (candidateRules.Count > 0 ? "rejected" : "no_match");
+            var signatureFailure = string.IsNullOrWhiteSpace(signatureHeader)
+                ? "Missing signature header"
+                : signingSecretCount == 0
+                    ? "No webhook signing secret configured"
+                    : "Signature validation failed";
             var error = hmacMatchCount > 0
                 ? "Repository not in scope"
-                : (candidateRules.Count > 0 ? "Signature validation failed" : null);
+                : (candidateRules.Count > 0 ? signatureFailure : null);
             var message = hmacMatchCount > 0
                 ? $"Repository not in scope (checked {hmacMatchCount} HMAC-matched rules)"
-                : (candidateRules.Count > 0 ? "Signature validation failed" : "No matching rule");
+                : (candidateRules.Count > 0 ? signatureFailure : "No matching rule");
 
-            _logger.LogWarning("Webhook from {Repo}: {Message} (checked {Count} rules)",
-                repo, message, candidateRules.Count);
+            _logger.LogWarning(
+                "Webhook from {Repo}: {Message} (checked {Count} rules, {SigningSecretCount} configured signing secrets, signature header present: {HasSignature})",
+                repo,
+                message,
+                candidateRules.Count,
+                signingSecretCount,
+                !string.IsNullOrWhiteSpace(signatureHeader));
 
             await store.Insert(new WebhookEvent
             {
@@ -376,41 +388,80 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         };
     }
 
-    internal static bool ValidateHmac(string body, string secret, string? signatureHeader, string provider)
+    internal static bool ValidateHmac(string body, string secret, string? signatureHeader, string provider) =>
+        ValidateHmac(Encoding.UTF8.GetBytes(body), secret, signatureHeader, provider);
+
+    internal static bool ValidateHmac(byte[] bodyBytes, string secret, string? signatureHeader, string provider)
     {
-        if (string.IsNullOrEmpty(signatureHeader))
+        var expectedHex = ExtractSignatureHash(signatureHeader, provider);
+        if (expectedHex is null || !TryParseSha256Hex(expectedHex, out var expectedHash))
             return false;
 
-        var keyBytes = Encoding.UTF8.GetBytes(secret);
-        var bodyBytes = Encoding.UTF8.GetBytes(body);
+        var normalizedSecret = secret.Trim();
+        if (normalizedSecret.Length == 0)
+            return false;
 
+        var keyBytes = Encoding.UTF8.GetBytes(normalizedSecret);
         using var hmac = new HMACSHA256(keyBytes);
-        var computed = Convert.ToHexStringLower(hmac.ComputeHash(bodyBytes));
+        var computed = hmac.ComputeHash(bodyBytes);
 
-        var expected = provider == "github" && signatureHeader.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase)
-            ? signatureHeader["sha256=".Length..]
-            : signatureHeader;
-
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(computed),
-            Encoding.UTF8.GetBytes(expected.ToLowerInvariant()));
+        return CryptographicOperations.FixedTimeEquals(computed, expectedHash);
     }
 
     internal static string? ResolveWebhookSecret(
         ProvisioningRule rule,
         ProviderCredential? credential,
+        RunnerProvider? provider) =>
+        ResolveWebhookSecrets(rule, credential, provider).FirstOrDefault();
+
+    internal static IReadOnlyList<string> ResolveWebhookSecrets(
+        ProvisioningRule rule,
+        ProviderCredential? credential,
         RunnerProvider? provider)
     {
-        if (!string.IsNullOrWhiteSpace(rule.WebhookSecret))
-            return rule.WebhookSecret;
+        var secrets = new List<string>(capacity: 2);
+        AddWebhookSecret(secrets, rule.WebhookSecret);
 
         if (provider == RunnerProvider.GitHubActions
             && GitHubAuthenticationService.IsGitHubAppCredential(credential))
         {
-            return credential?.GitHubAppWebhookSecret;
+            AddWebhookSecret(secrets, credential?.GitHubAppWebhookSecret);
         }
 
-        return null;
+        return secrets;
+    }
+
+    private static string? ExtractSignatureHash(string? signatureHeader, string provider)
+    {
+        if (string.IsNullOrWhiteSpace(signatureHeader))
+            return null;
+
+        var expected = signatureHeader.Trim();
+        if (provider == "github" && expected.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase))
+            expected = expected["sha256=".Length..].Trim();
+
+        return expected;
+    }
+
+    private static bool TryParseSha256Hex(string value, out byte[] hash)
+    {
+        hash = [];
+
+        if (value.Length != 64 || value.Any(c => !Uri.IsHexDigit(c)))
+            return false;
+
+        hash = Convert.FromHexString(value);
+        return true;
+    }
+
+    private static void AddWebhookSecret(List<string> secrets, string? secret)
+    {
+        var normalized = secret?.Trim();
+        if (string.IsNullOrEmpty(normalized))
+            return;
+
+        if (!secrets.Any(existing => string.Equals(existing, normalized, StringComparison.Ordinal)))
+            secrets.Add(normalized);
     }
 
     private static string? ExtractGitHubInstallationId(string provider, JsonElement json)

@@ -648,6 +648,9 @@ public sealed class CapacityPlanningService
             _ => host.MaxNativeProcesses
         };
 
+    public static bool HasBackendCapability(Host host, ExecutionBackend backend) =>
+        GetEffectiveHostCapabilities(host).Contains(backend.ToString().ToLowerInvariant());
+
     private static bool InstanceMatchesRunner(RunnerInstance instance, string runnerId) =>
         string.Equals(instance.RunnerDefinitionId, runnerId, StringComparison.OrdinalIgnoreCase)
         || string.Equals(instance.ProfileId, runnerId, StringComparison.OrdinalIgnoreCase);
@@ -665,7 +668,7 @@ public sealed class CapacityPlanningService
         if (profile.ExecutionBackend != ExecutionBackend.Docker)
             return true;
 
-        if (!host.Labels.TryGetValue("docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
+        if (!TryGetHostLabelValue(host, "docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
             return true;
 
         var expectedDockerOs = profile.RequiredHostPlatform switch
@@ -702,7 +705,7 @@ public sealed class CapacityPlanningService
         {
             foreach (var required in requiredHostLabels)
             {
-                if (!host.Labels.TryGetValue(required.Key, out var actualValue)
+                if (!TryGetHostLabelValue(host, required.Key, out var actualValue)
                     || !string.Equals(actualValue, required.Value, StringComparison.OrdinalIgnoreCase))
                 {
                     return false;
@@ -713,11 +716,36 @@ public sealed class CapacityPlanningService
         if (requiredHostCapabilities.Count == 0)
             return true;
 
-        var hostCapabilities = host.Capabilities.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hostCapabilities = GetEffectiveHostCapabilities(host);
         return requiredHostCapabilities
             .Where(capability => !string.IsNullOrWhiteSpace(capability))
             .Select(capability => capability.Trim())
             .All(hostCapabilities.Contains);
+    }
+
+    private static bool TryGetHostLabelValue(Host host, string key, out string value)
+    {
+        if (host.Labels.TryGetValue(key, out value!))
+            return true;
+
+        var match = host.Labels.FirstOrDefault(kvp => string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase));
+        value = match.Value;
+        return !string.IsNullOrEmpty(match.Key);
+    }
+
+    private static HashSet<string> GetEffectiveHostCapabilities(Host host)
+    {
+        var capabilities = host.Capabilities
+            .Where(capability => !string.IsNullOrWhiteSpace(capability))
+            .Select(capability => capability.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        capabilities.Add("native");
+        capabilities.Add(host.Platform.ToString().ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(host.Architecture))
+            capabilities.Add(host.Architecture.Trim().ToLowerInvariant());
+
+        return capabilities;
     }
 
     private static (ProvisioningRule? Rule, RunnerProfile? Profile, string Reason) ResolveProvisioningMatch(

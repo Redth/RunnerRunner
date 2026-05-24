@@ -17,6 +17,8 @@
 @inject IAuthorizationService AuthorizationService
 @inject IHttpClientFactory HttpClientFactory
 @inject NavigationManager Navigation
+@inject SettingsBackupService BackupService
+@inject IJSRuntime JS
 
 <PageTitle>Settings - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -74,6 +76,68 @@
             </div>
         </div>
     </div>
+    <AuthorizeView Roles="@RunnerRunnerRoles.Administrator">
+        <Authorized>
+            <div class="col-md-12 col-xl-8">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h5 class="card-title"><i class="bi bi-archive-fill me-2"></i>Settings Backup & Restore</h5>
+                        <p class="card-text">
+                            Export provisioning rules as JSON, or back up configuration documents including provider credentials,
+                            registry authentication, env var sets, custom steps, runner profiles, and OIDC settings. Logs, jobs,
+                            runner instances, and host runtime state are not included.
+                        </p>
+                        <div class="alert alert-warning py-2 small">
+                            Backups contain secrets. Use a password for files that leave this server.
+                        </div>
+
+                        @if (!string.IsNullOrWhiteSpace(backupMessage))
+                        {
+                            <div class="alert @(backupMessageIsError ? "alert-danger" : "alert-success") py-2">@backupMessage</div>
+                        }
+
+                        <div class="row g-3">
+                            <div class="col-lg-6">
+                                <section class="rr-form-section mb-0 h-100">
+                                    <div class="rr-form-section-title"><i class="bi bi-box-arrow-up"></i>Export</div>
+                                    <div class="mb-2">
+                                        <label class="form-label">Optional backup password</label>
+                                        <input class="form-control" type="password" @bind="backupPassword" autocomplete="new-password" />
+                                        <div class="form-text">When set, the generated ZIP bundle is encrypted into a <code>.rrbackup</code> file.</div>
+                                    </div>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        <button class="btn btn-outline-primary" @onclick="ExportProvisioningRulesJsonAsync" disabled="@exportingBackup">
+                                            <i class="bi bi-filetype-json me-1"></i>Provisioning rules JSON
+                                        </button>
+                                        <button class="btn btn-primary" @onclick="ExportSettingsBackupAsync" disabled="@exportingBackup">
+                                            <i class="bi bi-download me-1"></i>@(exportingBackup ? "Exporting..." : "Full backup")
+                                        </button>
+                                    </div>
+                                </section>
+                            </div>
+                            <div class="col-lg-6">
+                                <section class="rr-form-section mb-0 h-100">
+                                    <div class="rr-form-section-title"><i class="bi bi-box-arrow-in-down"></i>Import</div>
+                                    <div class="mb-2">
+                                        <label class="form-label">Backup file</label>
+                                        <InputFile class="form-control" OnChange="OnBackupFileSelected" accept=".zip,.rrbackup,application/zip,application/octet-stream" />
+                                        <div class="form-text">Import upserts matching configuration records by ID and leaves unrelated records intact.</div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label class="form-label">Password for encrypted backup</label>
+                                        <input class="form-control" type="password" @bind="importPassword" autocomplete="current-password" />
+                                    </div>
+                                    <button class="btn btn-outline-primary" @onclick="ImportSettingsBackupAsync" disabled="@(importingBackup || importBackupFile == null)">
+                                        <i class="bi bi-upload me-1"></i>@(importingBackup ? "Importing..." : "Import backup")
+                                    </button>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Authorized>
+    </AuthorizeView>
 </div>
 
 <AuthorizeView Roles="@RunnerRunnerRoles.Administrator">
@@ -293,6 +357,8 @@
 </AuthorizeView>
 
 @code {
+    private const long MaxBackupUploadBytes = 100 * 1024 * 1024;
+
     private readonly RunnerRunnerBuildInfo serverBuildInfo = RunnerRunnerBuildInfo.FromEntryAssembly();
     private string serverUpdateRef = "latest";
     private bool checkingServerUpdate;
@@ -317,6 +383,14 @@
     private bool testingOidc;
     private string? oidcMessage;
     private bool oidcMessageIsError;
+
+    private string backupPassword = "";
+    private string importPassword = "";
+    private IBrowserFile? importBackupFile;
+    private bool exportingBackup;
+    private bool importingBackup;
+    private string? backupMessage;
+    private bool backupMessageIsError;
 
     private string ServerUpdateCommand
         => $"sudo runnerrunner-server update {QuoteShellArgument(string.IsNullOrWhiteSpace(serverUpdateRef) ? "latest" : serverUpdateRef.Trim())}";
@@ -401,6 +475,108 @@
         authSettings = await AuthSettingsService.GetAsync();
         oidcScopes = string.Join(" ", authSettings.Oidc.Scopes);
         oidcClientSecret = "";
+    }
+
+    private async Task ExportProvisioningRulesJsonAsync()
+    {
+        if (!await EnsureBackupAdministratorAsync())
+            return;
+
+        exportingBackup = true;
+        backupMessage = null;
+        try
+        {
+            var export = await BackupService.ExportProvisioningRulesJsonAsync();
+            await DownloadBackupFileAsync(export);
+            SetBackupMessage("Provisioning rules JSON export started.", isError: false);
+        }
+        catch (Exception ex)
+        {
+            SetBackupMessage($"Unable to export provisioning rules: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            exportingBackup = false;
+        }
+    }
+
+    private async Task ExportSettingsBackupAsync()
+    {
+        if (!await EnsureBackupAdministratorAsync())
+            return;
+
+        exportingBackup = true;
+        backupMessage = null;
+        try
+        {
+            var export = await BackupService.ExportBackupAsync(backupPassword);
+            await DownloadBackupFileAsync(export);
+            SetBackupMessage(string.IsNullOrWhiteSpace(backupPassword)
+                ? "Full backup ZIP export started."
+                : "Encrypted full backup export started.", isError: false);
+        }
+        catch (Exception ex)
+        {
+            SetBackupMessage($"Unable to export backup: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            exportingBackup = false;
+        }
+    }
+
+    private void OnBackupFileSelected(InputFileChangeEventArgs args)
+    {
+        importBackupFile = args.File;
+        backupMessage = importBackupFile == null ? null : $"Selected {importBackupFile.Name}.";
+        backupMessageIsError = false;
+    }
+
+    private async Task ImportSettingsBackupAsync()
+    {
+        if (!await EnsureBackupAdministratorAsync())
+            return;
+
+        if (importBackupFile == null)
+        {
+            SetBackupMessage("Choose a backup file to import.", isError: true);
+            return;
+        }
+
+        importingBackup = true;
+        backupMessage = null;
+        try
+        {
+            await using var stream = importBackupFile.OpenReadStream(MaxBackupUploadBytes);
+            var result = await BackupService.ImportBackupAsync(stream, importPassword);
+            importBackupFile = null;
+            importPassword = "";
+
+            var warningSuffix = result.Warnings.Count == 0
+                ? ""
+                : $" {result.Warnings.Count} warning(s): {string.Join(" ", result.Warnings.Take(2))}";
+            SetBackupMessage(
+                $"Imported {result.TotalImported} settings item(s): {result.ProvisioningRules} rule(s), {result.ProviderCredentials} provider credential(s), {result.RegistryCredentials} registries, {result.EnvironmentVariableSets} env var set(s), {result.CustomSteps} custom step(s), {result.RunnerProfiles} profile(s).{warningSuffix}",
+                isError: false);
+            await LoadAuthSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            SetBackupMessage($"Unable to import backup: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            importingBackup = false;
+        }
+    }
+
+    private async Task DownloadBackupFileAsync(SettingsBackupFile export)
+    {
+        await JS.InvokeVoidAsync(
+            "rrDownloads.downloadBase64",
+            export.FileName,
+            export.ContentType,
+            Convert.ToBase64String(export.Bytes));
     }
 
     private async Task CreateLocalUserAsync()
@@ -590,6 +766,17 @@
         return false;
     }
 
+    private async Task<bool> EnsureBackupAdministratorAsync()
+    {
+        var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var result = await AuthorizationService.AuthorizeAsync(state.User, RunnerRunnerPolicies.ManageUsers);
+        if (result.Succeeded)
+            return true;
+
+        SetBackupMessage("Only administrators can export or import backups because they contain secrets.", isError: true);
+        return false;
+    }
+
     private async Task<bool> IsLastEnabledAdministratorAsync(RunnerRunnerUser user)
     {
         if (!user.Enabled || !await UserManager.IsInRoleAsync(user, RunnerRunnerRoles.Administrator))
@@ -615,6 +802,12 @@
     {
         oidcMessage = message;
         oidcMessageIsError = isError;
+    }
+
+    private void SetBackupMessage(string message, bool isError)
+    {
+        backupMessage = message;
+        backupMessageIsError = isError;
     }
 
     private static List<string> SplitScopes(string value)

@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using RunnerRunner.Core.Models;
@@ -34,9 +33,12 @@ public static class WebhookEndpoints
         var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
             .CreateLogger("RunnerRunner.Webhooks");
 
-        // Read raw body for signature validation
+        // Read raw bytes for exact HMAC validation before decoding JSON.
         ctx.Request.EnableBuffering();
-        var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
+        using var bodyBuffer = new MemoryStream();
+        await ctx.Request.Body.CopyToAsync(bodyBuffer);
+        var bodyBytes = bodyBuffer.ToArray();
+        var body = Encoding.UTF8.GetString(bodyBytes);
         ctx.Request.Body.Position = 0;
 
         // Parse event type header
@@ -56,7 +58,7 @@ public static class WebhookEndpoints
         var providerString = provider == RunnerProvider.GitHubActions ? "github" : "gitea";
         var grainFactory = ctx.RequestServices.GetRequiredService<IGrainFactory>();
         var processorGrain = grainFactory.GetGrain<IWebhookProcessorGrain>(0);
-        var result = await processorGrain.ProcessWebhook(providerString, body, signature);
+        var result = await processorGrain.ProcessWebhook(providerString, body, bodyBytes, signature);
 
         logger.LogInformation("Webhook processed: {Status} - {Message}", result.Status, result.Message);
 

@@ -305,7 +305,7 @@ public sealed class FakeFleetEndToEndTests
         var body = BuildWorkflowJobPayload(action, jobId, jobId + 10, repo, labels);
         var result = await _grainFactory
             .GetGrain<IWebhookProcessorGrain>(NextJobId())
-            .ProcessWebhook(providerKey, body, Sign(body, secret, providerKey));
+            .ProcessWebhook(providerKey, body, Encoding.UTF8.GetBytes(body), Sign(body, secret, providerKey));
 
         Assert.True(result.Success);
         Assert.Equal(action == "queued" ? "provisioned" : action, result.Status);
