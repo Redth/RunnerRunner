@@ -1,6 +1,7 @@
 using Shiny.DocumentDb;
 using Shiny.DocumentDb.Sqlite;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Models;
 using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Tests;
@@ -25,6 +26,9 @@ public static class TestDocumentStore
         .MapTypeToTable<EnvironmentVariableSet>("env_var_sets")
         .MapTypeToTable<RunnerAgentVersion>("runner_agent_versions")
         .MapTypeToTable<ProviderCredential>("provider_credentials")
+        .MapTypeToTable<RegistryCredential>("registry_credentials")
+        .MapTypeToTable<RunnerInitStepDefinition>("runner_init_steps")
+        .MapTypeToTable<RunnerRunnerAuthSettings>("auth_settings")
         .MapTypeToTable<AuditLogEntry>("audit_log")
         .MapTypeToTable<WebhookEvent>("webhook_events"));
 
