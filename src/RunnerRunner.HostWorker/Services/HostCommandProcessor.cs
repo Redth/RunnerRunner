@@ -738,8 +738,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         if (logFile != null && File.Exists(logFile))
             return await ReadTailLinesAsync(logFile, tailCount, ct);
 
-        var basePath = _configuration["Runner:BasePath"]
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
+        var basePath = _configuration["Runner:BasePath"] ?? NativeBackend.GetDefaultRunnerBasePath();
         var instancesDir = Path.Combine(basePath, "instances");
         if (!Directory.Exists(instancesDir))
             return "";

@@ -23,6 +23,11 @@ public class Host
     public bool IsContainerized { get; set; }
     public string? ContainerId { get; set; }
     public string? ContainerImage { get; set; }
+    /// <summary>
+    /// HostWorker-advertised backend and feature support, e.g. docker, tart,
+    /// native, gpu, xcode16. Backend scheduling requires this plus a positive
+    /// backend resource limit.
+    /// </summary>
     public List<string> Capabilities { get; set; } = [];
     public Dictionary<string, string> EnvironmentOverrides { get; set; } = new();
     public string? EnrollmentToken { get; set; }
@@ -41,7 +46,7 @@ public class Host
 
     /// <summary>
     /// Base directory for runner agent binaries, instance dirs, and work.
-    /// Default: ~/.runnerrunner/
+    /// Default: C:\rr on Windows, ~/.runnerrunner elsewhere.
     /// </summary>
     public string? RunnerBasePath { get; set; }
 
@@ -58,12 +63,15 @@ public class Host
     public Dictionary<string, string> ReportedEnvironment { get; set; } = new();
 
     /// <summary>
-    /// Capability labels for matching (key=value pairs).
-    /// e.g., os=linux, arch=x64, docker=true, pool=build-farm
+    /// Host routing labels for matching key/value constraints.
+    /// e.g., os=linux, arch=x64, docker_os=linux, pool=build-farm
     /// </summary>
     public Dictionary<string, string> Labels { get; set; } = new();
 
-    /// <summary>Resource limits per execution backend.</summary>
+    /// <summary>
+    /// Resource limits per execution backend. A backend must also be advertised
+    /// in Capabilities; set its limit to 0 to disable scheduling for it.
+    /// </summary>
     public int MaxDockerContainers { get; set; } = 10;
     public int MaxTartVMs { get; set; } = 3;
     public int MaxNativeProcesses { get; set; } = 5;

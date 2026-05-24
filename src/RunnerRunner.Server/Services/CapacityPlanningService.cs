@@ -288,11 +288,13 @@ public sealed class CapacityPlanningService
         ProvisioningRule? rule,
         IReadOnlyCollection<Host> hosts,
         IReadOnlyDictionary<string, RunnerProfile> profilesById,
-        IReadOnlyCollection<RunnerInstance> instances)
+        IReadOnlyCollection<RunnerInstance> instances,
+        bool requireDispatchReadiness = false)
     {
+        var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
         var matchingHosts = hosts
             .Where(host =>
-                host.Platform == profile.RequiredHostPlatform
+                HostCanProvideRunnerPlatform(host, profile)
                 && MatchesRuleHostRequirements(host, rule)
                 && MatchesProfileHostRequirements(host, profile))
             .ToList();
@@ -303,7 +305,7 @@ public sealed class CapacityPlanningService
             {
                 CapacityBlocked = false,
                 BlockedBy = CapacityBlockerKind.Matching,
-                Reason = $"No host matches platform '{profile.RequiredHostPlatform}' and the rule target filters"
+                Reason = $"No host can provide target platform '{profile.RequiredHostPlatform}' for backend '{backendName}' and the rule target filters"
             };
         }
 
@@ -315,12 +317,28 @@ public sealed class CapacityPlanningService
                     .ToList();
 
                 var backendUsage = GetBackendUsage(host, profile.ExecutionBackend, hostInstances, profilesById);
-                var canRunNow = !backendUsage.IsSaturated;
-                var blockedBy = canRunNow ? CapacityBlockerKind.None : CapacityBlockerKind.Host;
+                var canRunNow = true;
+                var blockedBy = CapacityBlockerKind.None;
+                var detail = $"Ready now: {backendName} {backendUsage.Summary}";
 
-                var detail = canRunNow
-                    ? $"Ready now: {profile.ExecutionBackend.ToString().ToLowerInvariant()} {backendUsage.Summary}"
-                    : $"Host {profile.ExecutionBackend.ToString().ToLowerInvariant()} slots full: {backendUsage.Summary}";
+                if (requireDispatchReadiness && host.AgentStatus != AgentStatus.Online)
+                {
+                    canRunNow = false;
+                    blockedBy = CapacityBlockerKind.Matching;
+                    detail = $"HostWorker is {host.AgentStatus.ToString().ToLowerInvariant()}";
+                }
+                else if (!HasBackendCapability(host, profile.ExecutionBackend))
+                {
+                    canRunNow = false;
+                    blockedBy = CapacityBlockerKind.Matching;
+                    detail = $"Missing '{backendName}' capability (reports: {FormatCapabilities(host)})";
+                }
+                else if (backendUsage.IsSaturated)
+                {
+                    canRunNow = false;
+                    blockedBy = CapacityBlockerKind.Host;
+                    detail = $"Host {backendName} slots full: {backendUsage.Summary}";
+                }
 
                 return new HostCandidateView
                 {
@@ -353,9 +371,11 @@ public sealed class CapacityPlanningService
 
         return new HostSelectionAnalysis
         {
-            CapacityBlocked = true,
-            BlockedBy = CapacityBlockerKind.Host,
-            Reason = $"All matching hosts are currently out of {profile.ExecutionBackend.ToString().ToLowerInvariant()} capacity",
+            CapacityBlocked = candidates.All(candidate => candidate.BlockedBy == CapacityBlockerKind.Host),
+            BlockedBy = candidates.All(candidate => candidate.BlockedBy == CapacityBlockerKind.Host)
+                ? CapacityBlockerKind.Host
+                : CapacityBlockerKind.Matching,
+            Reason = BuildHostSelectionFailureReason(backendName, candidates),
             Candidates = candidates
         };
     }
@@ -588,9 +608,10 @@ public sealed class CapacityPlanningService
     {
         var matchingHosts = hosts
             .Where(host =>
-                host.Platform == profile.RequiredHostPlatform
+                HostCanProvideRunnerPlatform(host, profile)
                 && MatchesRuleHostRequirements(host, rule)
-                && MatchesProfileHostRequirements(host, profile))
+                && MatchesProfileHostRequirements(host, profile)
+                && HasBackendCapability(host, profile.ExecutionBackend))
             .ToList();
 
         var matchingHostUsages = matchingHosts
@@ -651,6 +672,50 @@ public sealed class CapacityPlanningService
     public static bool HasBackendCapability(Host host, ExecutionBackend backend) =>
         GetEffectiveHostCapabilities(host).Contains(backend.ToString().ToLowerInvariant());
 
+    private static bool HostCanProvideRunnerPlatform(Host host, RunnerProfile profile)
+    {
+        if (profile.ExecutionBackend != ExecutionBackend.Docker)
+            return host.Platform == profile.RequiredHostPlatform;
+
+        var expectedDockerOs = GetExpectedDockerOs(profile.RequiredHostPlatform);
+        if (expectedDockerOs == null)
+            return host.Platform == profile.RequiredHostPlatform;
+
+        if (TryGetHostLabelValue(host, "docker_os", out var dockerOs) && !string.IsNullOrWhiteSpace(dockerOs))
+            return string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+
+        if (expectedDockerOs == "linux")
+            return host.Platform is HostPlatform.Linux or HostPlatform.MacOS;
+
+        return host.Platform == profile.RequiredHostPlatform;
+    }
+
+    private static string BuildHostSelectionFailureReason(string backendName, IReadOnlyCollection<HostCandidateView> candidates)
+    {
+        var details = candidates
+            .Take(3)
+            .Select(candidate => $"{candidate.HostLabel}: {candidate.Detail}")
+            .ToList();
+
+        if (candidates.All(candidate => candidate.BlockedBy == CapacityBlockerKind.Host))
+            return details.Count == 0
+                ? $"All matching hosts are currently out of {backendName} capacity"
+                : $"All matching hosts are currently out of {backendName} capacity ({string.Join(" · ", details)})";
+
+        return details.Count == 0
+            ? $"No matching host is ready for backend '{backendName}'"
+            : $"No matching host is ready for backend '{backendName}' ({string.Join(" · ", details)})";
+    }
+
+    private static string FormatCapabilities(Host host)
+    {
+        var capabilities = GetEffectiveHostCapabilities(host)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return capabilities.Count == 0 ? "none" : string.Join(", ", capabilities);
+    }
+
     private static bool InstanceMatchesRunner(RunnerInstance instance, string runnerId) =>
         string.Equals(instance.RunnerDefinitionId, runnerId, StringComparison.OrdinalIgnoreCase)
         || string.Equals(instance.ProfileId, runnerId, StringComparison.OrdinalIgnoreCase);
@@ -671,16 +736,19 @@ public sealed class CapacityPlanningService
         if (!TryGetHostLabelValue(host, "docker_os", out var dockerOs) || string.IsNullOrWhiteSpace(dockerOs))
             return true;
 
-        var expectedDockerOs = profile.RequiredHostPlatform switch
+        var expectedDockerOs = GetExpectedDockerOs(profile.RequiredHostPlatform);
+
+        return expectedDockerOs == null
+            || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? GetExpectedDockerOs(HostPlatform platform) =>
+        platform switch
         {
             HostPlatform.Windows => "windows",
             HostPlatform.Linux => "linux",
             _ => null
         };
-
-        return expectedDockerOs == null
-            || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
-    }
 
     private static bool MatchesHostRouting(
         Host host,

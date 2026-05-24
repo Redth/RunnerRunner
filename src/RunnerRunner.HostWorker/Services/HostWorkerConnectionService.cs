@@ -205,6 +205,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
     internal HostWorkerMessage CreateHello()
     {
         var capabilities = DetectCapabilities();
+        var labels = CreateLabels(capabilities);
         var buildInfo = HostWorkerVersion.BuildInfo;
         var hello = new HostWorkerHello
         {
@@ -221,11 +222,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
                 Runtime = HostWorkerRuntimeDetector.Detect(_configuration)
             },
             EnrollmentToken = _configuration["HostWorker:EnrollmentToken"],
-            Labels = new Dictionary<string, string>
-            {
-                ["os"] = _identity.Platform.ToString().ToLowerInvariant(),
-                ["arch"] = _identity.Architecture.ToLowerInvariant()
-            }
+            Labels = labels
         };
 
         return HostWorkerProtocol.CreateMessage(
@@ -237,6 +234,25 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
 
     private IReadOnlyCollection<string> DetectCapabilities()
         => DetectCapabilities(_identity, _configuration["DOCKER_HOST"], File.Exists, ToolExists);
+
+    private Dictionary<string, string> CreateLabels(IReadOnlyCollection<string> capabilities)
+    {
+        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["os"] = _identity.Platform.ToString().ToLowerInvariant(),
+            ["arch"] = _identity.Architecture.ToLowerInvariant()
+        };
+
+        if (capabilities.Contains("docker", StringComparer.OrdinalIgnoreCase))
+        {
+            labels["docker"] = "true";
+            labels["docker_os"] = ResolveDockerOs(
+                _identity.Platform,
+                _configuration["HostWorker:DockerOs"] ?? _configuration["Docker:OSType"]);
+        }
+
+        return labels;
+    }
 
     internal static IReadOnlyCollection<string> DetectCapabilities(
         HostWorkerIdentity identity,
@@ -262,6 +278,18 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         }
 
         return capabilities;
+    }
+
+    internal static string ResolveDockerOs(HostPlatform platform, string? configuredDockerOs)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredDockerOs))
+        {
+            var normalized = configuredDockerOs.Trim().ToLowerInvariant();
+            if (normalized is "linux" or "windows")
+                return normalized;
+        }
+
+        return "linux";
     }
 
     private static bool ToolExists(string command)

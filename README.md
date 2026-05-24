@@ -352,7 +352,7 @@ Capacity is calculated from the narrowest remaining limit:
 2. Rule-level capacity: `DesiredCount`, `MaxInstances`, or `MaxConcurrent`.
 3. Host backend capacity: `MaxDockerContainers`, `MaxTartVMs`, or `MaxNativeProcesses`.
 
-For a runner target in a rule, the effective host capacity is the sum of matching hosts' backend limits. If a webhook rule allows 10 concurrent jobs, and the matching host route has 3 Docker hosts with 4 Docker slots each, the rule cap of 10 is narrower than the host route's 12 slots. A backend limit of `0` disables that backend on that host.
+For a runner target in a rule, the effective host capacity is the sum of matching hosts' backend limits, but only for hosts whose HostWorker advertises the selected backend capability (`docker`, `tart`, or `native`). If a webhook rule allows 10 concurrent jobs, and the matching host route has 3 Docker-capable hosts with 4 Docker slots each, the rule cap of 10 is narrower than the host route's 12 slots. A backend limit of `0` disables that backend on that host.
 
 ### 6. Runner image/backend info in the GHA job log
 

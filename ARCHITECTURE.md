@@ -222,13 +222,15 @@ Only instances whose runner target uses that backend consume the backend slots. 
 
 Before capacity is summed, hosts must match:
 
-- host platform equals the runner target's required host platform;
+- runner target platform compatibility:
+  - non-Docker targets require the HostWorker platform to equal the target platform;
+  - Docker targets require a compatible Docker engine OS (`linux` or `windows`), so Linux Docker targets can run from Linux/macOS hosts and from hosts reporting `docker_os=linux`;
 - rule `TargetHostId`, if set;
 - rule host routing `TargetGroupId`, if set;
 - every rule `RequiredHostLabels` key/value pair;
-- Docker host compatibility, when a host advertises `docker_os`.
+- every target-specific `RequiredHostCapabilities` entry.
 
-HostWorker execution also requires the selected host to be online in the Orleans cluster. If capacity exists but the HostWorker is offline, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
+HostWorker execution also requires the selected host to be online and to advertise the selected backend (`docker`, `tart`, or `native`) as a capability. Backend capabilities are the support signal; host resource limits are the scheduling allowance. A limit of `0` disables scheduling for that backend even if the HostWorker supports it. If capacity exists but the HostWorker is offline or missing the backend capability, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
 
 ### Effective pool math
 

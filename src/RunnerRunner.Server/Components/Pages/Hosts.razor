@@ -139,7 +139,7 @@
                         <div class="col-lg-5">
                             <section class="rr-form-section h-100">
                                 <div class="rr-form-section-title"><i class="bi bi-speedometer2"></i>Resource limits</div>
-                                <p class="form-text mb-3">Set a backend limit to <code>0</code> to hide and disable that backend on this host.</p>
+                                <p class="form-text mb-3">Detected HostWorker capabilities indicate which backends exist. These limits control how many jobs RunnerRunner may place there; set a limit to <code>0</code> to disable that backend on this host.</p>
                                 <div class="mb-2">
                                     <label class="form-label form-label-sm mb-1">Max Docker containers</label>
                                     <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxDockerContainers" min="0" />

@@ -9,8 +9,8 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void EvaluateRuleCapacity_UsesHostBackendPoolWithoutProfilePerHostLimit()
     {
-        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 2 };
-        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 1 };
+        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 2, Capabilities = ["docker"] };
+        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 1, Capabilities = ["docker"] };
         var profile = new RunnerProfile
         {
             Name = "docker-linux",
@@ -80,7 +80,7 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void EvaluateRuleCapacity_TreatsZeroWebhookMaxConcurrentAsUnlimited()
     {
-        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 1 };
+        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 1, Capabilities = ["docker"] };
         var profile = new RunnerProfile
         {
             Name = "docker-linux",
@@ -135,7 +135,7 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void BuildSnapshot_IncludesRuleOwnedRunnerDefinitions()
     {
-        var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 2 };
+        var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 2, Capabilities = ["tart"] };
         var rule = new ProvisioningRule
         {
             Name = "mac webhook",
@@ -168,7 +168,7 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void AnalyzeHostSelection_IgnoresLegacyProfilePerHostLimitWhenBackendHasCapacity()
     {
-        var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 3 };
+        var host = new Host { Name = "mac-mini", Platform = HostPlatform.MacOS, MaxTartVMs = 3, Capabilities = ["tart"] };
         var profile = new RunnerProfile
         {
             Name = "macos-jit",
@@ -208,6 +208,7 @@ public class CapacityPlanningServiceTests
             Name = "mac-mini",
             Platform = HostPlatform.MacOS,
             MaxTartVMs = 2,
+            Capabilities = ["tart"],
             ObservedRunningTartVMs = 2,
             ObservedResourceUsageAt = DateTime.UtcNow
         };
@@ -236,8 +237,8 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void AnalyzeHostSelection_RespectsTargetHostAndHostCapacity()
     {
-        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 5 };
-        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 1 };
+        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 5, Capabilities = ["docker"] };
+        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 1, Capabilities = ["docker"] };
         var profile = new RunnerProfile
         {
             Name = "docker-jit",
@@ -437,6 +438,7 @@ public class CapacityPlanningServiceTests
             Name = "win-linux-mode",
             Platform = HostPlatform.Windows,
             MaxDockerContainers = 4,
+            Capabilities = ["docker"],
             Labels = { ["docker"] = "true", ["docker_os"] = "linux" }
         };
 
@@ -445,6 +447,7 @@ public class CapacityPlanningServiceTests
             Name = "win-windows-mode",
             Platform = HostPlatform.Windows,
             MaxDockerContainers = 4,
+            Capabilities = ["docker"],
             Labels = { ["docker"] = "true", ["docker_os"] = "windows" }
         };
 
@@ -467,6 +470,68 @@ public class CapacityPlanningServiceTests
         Assert.NotNull(analysis.SelectedHost);
         Assert.Equal(compatibleHost.Id, analysis.SelectedHost!.Id);
         Assert.Single(analysis.Candidates);
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_AllowsLinuxDockerTargetsOnMacDockerHosts()
+    {
+        var host = new Host
+        {
+            Name = "mac-docker",
+            Platform = HostPlatform.MacOS,
+            AgentStatus = AgentStatus.Online,
+            MaxDockerContainers = 2,
+            Capabilities = ["docker"]
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-docker",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [],
+            requireDispatchReadiness: true);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(host.Id, analysis.SelectedHost!.Id);
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_ExplainsMissingBackendCapabilityWhenDispatching()
+    {
+        var host = new Host
+        {
+            Name = "linux-native-only",
+            Platform = HostPlatform.Linux,
+            AgentStatus = AgentStatus.Online,
+            MaxDockerContainers = 2,
+            Capabilities = ["native"]
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-docker",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [],
+            requireDispatchReadiness: true);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.Null(analysis.SelectedHost);
+        Assert.Contains("Missing 'docker' capability", analysis.Reason);
     }
 
     [Fact]
@@ -500,7 +565,7 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void ExplainEvent_ShowsProvisioningRuleLimit()
     {
-        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 10 };
+        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 10, Capabilities = ["docker"] };
         var profile = new RunnerProfile
         {
             Name = "docker-jit",
@@ -598,7 +663,7 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void ExplainEvent_ShowsFifoWhenOlderSameLaneEventIsStillQueued()
     {
-        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 10 };
+        var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 10, Capabilities = ["docker"] };
         var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
         var rule = CreateWebhookRule("rule-1", profile.Id, ["ubuntu"]);
         var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
@@ -620,8 +685,8 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void AnalyzeHostSelection_SelectsLeastLoadedReadyHost()
     {
-        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 3 };
-        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 3 };
+        var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 3, Capabilities = ["docker"] };
+        var hostB = new Host { Name = "linux-b", Platform = HostPlatform.Linux, MaxDockerContainers = 3, Capabilities = ["docker"] };
         var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker, maxParallelPerHost: 3);
         var activeOnHostA = new RunnerInstance
         {
@@ -647,8 +712,8 @@ public class CapacityPlanningServiceTests
     [Fact]
     public void EvaluateRuleCapacity_StaticRuleCountsOnlyHostsMatchingRuleFilters()
     {
-        var targetHost = new Host { Name = "target", Platform = HostPlatform.Linux, GroupId = "pool-a", MaxDockerContainers = 2 };
-        var otherHost = new Host { Name = "other", Platform = HostPlatform.Linux, GroupId = "pool-b", MaxDockerContainers = 2 };
+        var targetHost = new Host { Name = "target", Platform = HostPlatform.Linux, GroupId = "pool-a", MaxDockerContainers = 2, Capabilities = ["docker"] };
+        var otherHost = new Host { Name = "other", Platform = HostPlatform.Linux, GroupId = "pool-b", MaxDockerContainers = 2, Capabilities = ["docker"] };
         var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
         var rule = new ProvisioningRule
         {
@@ -841,12 +906,15 @@ public class CapacityPlanningServiceTests
         {
             case ExecutionBackend.Docker:
                 host.MaxDockerContainers = limit;
+                host.Capabilities.Add("docker");
                 break;
             case ExecutionBackend.Tart:
                 host.MaxTartVMs = limit;
+                host.Capabilities.Add("tart");
                 break;
             default:
                 host.MaxNativeProcesses = limit;
+                host.Capabilities.Add("native");
                 break;
         }
 

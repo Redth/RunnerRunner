@@ -1312,39 +1312,21 @@ public class DynamicProvisioningService : BackgroundService
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
         var rules = (await store.Query<ProvisioningRule>().ToList()).ToList();
         ProvisioningRuleRunnerResolver.AddMaterializedRunnerProfiles(profilesById, rules);
-        var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
-        var analysis = CapacityPlanningService.AnalyzeHostSelection(profile, rule, hosts, profilesById, instances);
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            rule,
+            hosts,
+            profilesById,
+            instances,
+            requireDispatchReadiness: true);
 
-        foreach (var candidate in analysis.Candidates.Where(c => c.CanRunNow))
-        {
-            var host = hosts.First(h => string.Equals(h.Id, candidate.HostId, StringComparison.OrdinalIgnoreCase));
-
-            if (host.AgentStatus != AgentStatus.Online)
-                continue;
-
-            if (!CapacityPlanningService.HasBackendCapability(host, profile.ExecutionBackend))
-                continue;
-
-            return new HostSelectionResult(host, null, false);
-        }
+        if (analysis.SelectedHost != null)
+            return new HostSelectionResult(analysis.SelectedHost, null, false);
 
         if (analysis.CapacityBlocked)
-        {
-            var detail = analysis.Candidates
-                .Take(2)
-                .Select(c => c.Detail)
-                .ToList();
-            var reason = detail.Count > 0
-                ? $"{analysis.Reason} ({string.Join(" · ", detail)})"
-                : analysis.Reason;
+            return new HostSelectionResult(null, analysis.Reason, true);
 
-            return new HostSelectionResult(null, reason, true);
-        }
-
-        return new HostSelectionResult(
-            null,
-            $"No online HostWorker currently matches platform '{profile.RequiredHostPlatform}' with backend '{backendName}'",
-            false);
+        return new HostSelectionResult(null, analysis.Reason, false);
     }
 
     private static bool MatchesRuleHostRequirements(Host host, ProvisioningRule? rule)

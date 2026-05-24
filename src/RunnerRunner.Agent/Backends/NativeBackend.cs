@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
@@ -14,6 +16,9 @@ namespace RunnerRunner.Agent.Backends;
 /// </summary>
 public class NativeBackend : IRunnerBackend
 {
+    private const int RunnerDirectoryHashBytes = 8;
+    private const string InstanceMetadataFileName = "rr-instance.json";
+
     private readonly ILogger<NativeBackend> _logger;
     private readonly Dictionary<string, ManagedNativeRunner> _runners = new();
 
@@ -28,16 +33,17 @@ public class NativeBackend : IRunnerBackend
 
     public async Task<RunnerInstanceInfo> StartRunnerAsync(RunnerStartRequest request, CancellationToken ct = default)
     {
-        var basePath = request.RunnerBasePath
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
+        var basePath = request.RunnerBasePath ?? GetDefaultRunnerBasePath();
         var provider = request.Provider;
         var agentVersion = await ResolveAgentVersionAsync(provider, request.RunnerAgentVersion, ct);
+        var runnerDirectoryName = CreateSafeRunnerDirectoryName(request.RunnerName, request.InstanceId);
 
         // Path token context for ${TOKEN} expansion
         var tokens = new Dictionary<string, string>
         {
             ["BASE_PATH"] = basePath,
-            ["RUNNER_NAME"] = request.RunnerName,
+            ["RUNNER_NAME"] = runnerDirectoryName,
+            ["RUNNER_DISPLAY_NAME"] = request.RunnerName,
             ["INSTANCE_ID"] = request.InstanceId,
             ["PROVIDER"] = provider.ToString().ToLower(),
             ["VERSION"] = agentVersion,
@@ -45,7 +51,7 @@ public class NativeBackend : IRunnerBackend
         };
 
         var workBase = ExpandTokens(request.WorkDirectory ?? "${BASE_PATH}/work", tokens);
-        var workDir = Path.Combine(workBase, request.RunnerName);
+        var workDir = Path.Combine(workBase, runnerDirectoryName);
 
         // Inject path tokens as env vars too
         request.EnvironmentVariables["RR_BASE_PATH"] = basePath;
@@ -72,12 +78,13 @@ public class NativeBackend : IRunnerBackend
         }
 
         // Step 2: Create isolated instance directory (clone the agent)
-        var instanceDir = Path.Combine(basePath, "instances", request.RunnerName);
+        var instanceDir = Path.Combine(basePath, "instances", runnerDirectoryName);
         if (Directory.Exists(instanceDir))
             Directory.Delete(instanceDir, recursive: true);
 
         _logger.LogInformation("Creating isolated instance at {Dir}", instanceDir);
         CopyDirectory(agentDir, instanceDir);
+        await WriteInstanceMetadataAsync(instanceDir, request, ct);
 
         // Step 3: Set up work directory (already expanded with tokens above)
         Directory.CreateDirectory(workDir);
@@ -272,7 +279,7 @@ public class NativeBackend : IRunnerBackend
     public async Task<List<DiscoveredRunner>> DiscoverManagedProcessesAsync(CancellationToken ct = default)
     {
         var result = new List<DiscoveredRunner>();
-        var basePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".runnerrunner");
+        var basePath = GetDefaultRunnerBasePath();
         var instancesDir = Path.Combine(basePath, "instances");
 
         if (!Directory.Exists(instancesDir))
@@ -301,10 +308,12 @@ public class NativeBackend : IRunnerBackend
                     // Process not found — not running
                 }
 
+                var metadata = await ReadInstanceMetadataAsync(dir, ct);
                 result.Add(new DiscoveredRunner
                 {
+                    InstanceId = metadata?.InstanceId ?? "",
                     ProcessId = pid,
-                    RunnerName = Path.GetFileName(dir),
+                    RunnerName = metadata?.RunnerName ?? Path.GetFileName(dir),
                     InstanceDir = dir,
                     Backend = ExecutionBackend.Native,
                     IsRunning = isRunning,
@@ -313,11 +322,50 @@ public class NativeBackend : IRunnerBackend
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to read PID file in {Dir}", dir);
+                _logger.LogWarning(ex, "Failed to discover native runner in {Dir}", dir);
             }
         }
 
         return result;
+    }
+
+    internal static string CreateSafeRunnerDirectoryName(string runnerName, string instanceId)
+    {
+        var hashInput = string.IsNullOrWhiteSpace(instanceId)
+            ? runnerName
+            : $"{instanceId}\n{runnerName}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(hashInput));
+        return "rr-" + Convert.ToHexString(hash.AsSpan(0, RunnerDirectoryHashBytes)).ToLowerInvariant();
+    }
+
+    public static string GetDefaultRunnerBasePath() =>
+        GetDefaultRunnerBasePath(OperatingSystem.IsWindows(), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    internal static string GetDefaultRunnerBasePath(bool isWindows, string homePath) =>
+        isWindows
+            ? @"C:\rr"
+            : Path.Combine(homePath, ".runnerrunner");
+
+    private static async Task WriteInstanceMetadataAsync(string instanceDir, RunnerStartRequest request, CancellationToken ct)
+    {
+        var metadata = new NativeRunnerInstanceMetadata
+        {
+            InstanceId = request.InstanceId,
+            RunnerName = request.RunnerName
+        };
+
+        var path = Path.Combine(instanceDir, InstanceMetadataFileName);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(metadata), ct);
+    }
+
+    private static async Task<NativeRunnerInstanceMetadata?> ReadInstanceMetadataAsync(string instanceDir, CancellationToken ct)
+    {
+        var path = Path.Combine(instanceDir, InstanceMetadataFileName);
+        if (!File.Exists(path))
+            return null;
+
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<NativeRunnerInstanceMetadata>(stream, cancellationToken: ct);
     }
 
     /// <summary>
@@ -728,7 +776,8 @@ public class NativeBackend : IRunnerBackend
 
     /// <summary>
     /// Expands ${TOKEN} references in a path string.
-    /// Available tokens: BASE_PATH, RUNNER_NAME, INSTANCE_ID, PROVIDER, VERSION, HOME
+    /// Available tokens include BASE_PATH, RUNNER_NAME (safe directory token),
+    /// RUNNER_DISPLAY_NAME, INSTANCE_ID, PROVIDER, VERSION, and HOME.
     /// </summary>
     internal static string ExpandTokens(string input, Dictionary<string, string> tokens)
     {
@@ -749,6 +798,12 @@ public class NativeBackend : IRunnerBackend
         public string? LogFile { get; set; }
         public List<Core.Models.ResolvedInitStep> PostExitSteps { get; set; } = [];
         public Dictionary<string, string> RunnerEnvironment { get; set; } = new();
+    }
+
+    private sealed class NativeRunnerInstanceMetadata
+    {
+        public string InstanceId { get; set; } = "";
+        public string RunnerName { get; set; } = "";
     }
 
     /// <summary>
