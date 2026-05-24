@@ -139,18 +139,45 @@
                         <div class="col-lg-5">
                             <section class="rr-form-section h-100">
                                 <div class="rr-form-section-title"><i class="bi bi-speedometer2"></i>Resource limits</div>
-                                <p class="form-text mb-3">Detected HostWorker capabilities indicate which backends exist. These limits control how many jobs RunnerRunner may place there; set a limit to <code>0</code> to disable that backend on this host.</p>
-                                <div class="mb-2">
-                                    <label class="form-label form-label-sm mb-1">Max Docker containers</label>
-                                    <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxDockerContainers" min="0" />
+                                <p class="form-text mb-3">Enable a backend to show its resource limit. Turning it off stores <code>0</code>, which disables scheduling for that backend on this host.</p>
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input id="docker-limit-enabled" class="form-check-input" type="checkbox"
+                                               checked="@IsBackendEnabled(configureHost, ExecutionBackend.Docker)"
+                                               @onchange="e => SetBackendEnabled(configureHost, ExecutionBackend.Docker, IsChecked(e.Value))" />
+                                        <label class="form-check-label" for="docker-limit-enabled">Enable Docker</label>
+                                    </div>
+                                    @if (IsBackendEnabled(configureHost, ExecutionBackend.Docker))
+                                    {
+                                        <label class="form-label form-label-sm mb-1 mt-2">Max Docker containers</label>
+                                        <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxDockerContainers" min="1" />
+                                    }
                                 </div>
-                                <div class="mb-2">
-                                    <label class="form-label form-label-sm mb-1">Max Tart VMs</label>
-                                    <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxTartVMs" min="0" />
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input id="tart-limit-enabled" class="form-check-input" type="checkbox"
+                                               checked="@IsBackendEnabled(configureHost, ExecutionBackend.Tart)"
+                                               @onchange="e => SetBackendEnabled(configureHost, ExecutionBackend.Tart, IsChecked(e.Value))" />
+                                        <label class="form-check-label" for="tart-limit-enabled">Enable Tart</label>
+                                    </div>
+                                    @if (IsBackendEnabled(configureHost, ExecutionBackend.Tart))
+                                    {
+                                        <label class="form-label form-label-sm mb-1 mt-2">Max Tart VMs</label>
+                                        <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxTartVMs" min="1" />
+                                    }
                                 </div>
-                                <div class="mb-2">
-                                    <label class="form-label form-label-sm mb-1">Max Native processes</label>
-                                    <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxNativeProcesses" min="0" />
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input id="native-limit-enabled" class="form-check-input" type="checkbox"
+                                               checked="@IsBackendEnabled(configureHost, ExecutionBackend.Native)"
+                                               @onchange="e => SetBackendEnabled(configureHost, ExecutionBackend.Native, IsChecked(e.Value))" />
+                                        <label class="form-check-label" for="native-limit-enabled">Enable Native</label>
+                                    </div>
+                                    @if (IsBackendEnabled(configureHost, ExecutionBackend.Native))
+                                    {
+                                        <label class="form-label form-label-sm mb-1 mt-2">Max Native processes</label>
+                                        <input type="number" class="form-control form-control-sm" @bind="configureHost.MaxNativeProcesses" min="1" />
+                                    }
                                 </div>
                                 <div>
                                     <label class="form-label form-label-sm mb-1">Host routing group</label>
@@ -695,6 +722,41 @@
         CreatedAt = host.CreatedAt,
         UpdatedAt = host.UpdatedAt
     };
+
+    private static bool IsChecked(object? value) => value is bool checkedValue && checkedValue;
+
+    private static bool IsBackendEnabled(Host host, ExecutionBackend backend) =>
+        CapacityPlanningService.GetBackendLimit(host, backend) > 0;
+
+    private static void SetBackendEnabled(Host host, ExecutionBackend backend, bool enabled)
+    {
+        var currentLimit = CapacityPlanningService.GetBackendLimit(host, backend);
+        SetBackendLimit(host, backend, enabled ? Math.Max(currentLimit, GetDefaultBackendLimit(backend)) : 0);
+    }
+
+    private static int GetDefaultBackendLimit(ExecutionBackend backend) =>
+        backend switch
+        {
+            ExecutionBackend.Docker => 10,
+            ExecutionBackend.Tart => 3,
+            _ => 5
+        };
+
+    private static void SetBackendLimit(Host host, ExecutionBackend backend, int limit)
+    {
+        switch (backend)
+        {
+            case ExecutionBackend.Docker:
+                host.MaxDockerContainers = limit;
+                break;
+            case ExecutionBackend.Tart:
+                host.MaxTartVMs = limit;
+                break;
+            default:
+                host.MaxNativeProcesses = limit;
+                break;
+        }
+    }
 
     private void StartRename(Host host)
     {

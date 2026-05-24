@@ -296,7 +296,8 @@ public sealed class CapacityPlanningService
             .Where(host =>
                 HostCanProvideRunnerPlatform(host, profile)
                 && MatchesRuleHostRequirements(host, rule)
-                && MatchesProfileHostRequirements(host, profile))
+                && MatchesProfileHostRequirements(host, profile)
+                && GetBackendLimit(host, profile.ExecutionBackend) > 0)
             .ToList();
 
         if (matchingHosts.Count == 0)
@@ -305,7 +306,7 @@ public sealed class CapacityPlanningService
             {
                 CapacityBlocked = false,
                 BlockedBy = CapacityBlockerKind.Matching,
-                Reason = $"No host can provide target platform '{profile.RequiredHostPlatform}' for backend '{backendName}' and the rule target filters"
+                Reason = $"No host matches target platform '{profile.RequiredHostPlatform}', backend '{backendName}' capacity, and the rule target filters"
             };
         }
 
@@ -326,12 +327,6 @@ public sealed class CapacityPlanningService
                     canRunNow = false;
                     blockedBy = CapacityBlockerKind.Matching;
                     detail = $"HostWorker is {host.AgentStatus.ToString().ToLowerInvariant()}";
-                }
-                else if (!HasBackendCapability(host, profile.ExecutionBackend))
-                {
-                    canRunNow = false;
-                    blockedBy = CapacityBlockerKind.Matching;
-                    detail = $"Missing '{backendName}' capability (reports: {FormatCapabilities(host)})";
                 }
                 else if (backendUsage.IsSaturated)
                 {
@@ -611,7 +606,7 @@ public sealed class CapacityPlanningService
                 HostCanProvideRunnerPlatform(host, profile)
                 && MatchesRuleHostRequirements(host, rule)
                 && MatchesProfileHostRequirements(host, profile)
-                && HasBackendCapability(host, profile.ExecutionBackend))
+                && GetBackendLimit(host, profile.ExecutionBackend) > 0)
             .ToList();
 
         var matchingHostUsages = matchingHosts
@@ -669,9 +664,6 @@ public sealed class CapacityPlanningService
             _ => host.MaxNativeProcesses
         };
 
-    public static bool HasBackendCapability(Host host, ExecutionBackend backend) =>
-        GetEffectiveHostCapabilities(host).Contains(backend.ToString().ToLowerInvariant());
-
     private static bool HostCanProvideRunnerPlatform(Host host, RunnerProfile profile)
     {
         if (profile.ExecutionBackend != ExecutionBackend.Docker)
@@ -705,15 +697,6 @@ public sealed class CapacityPlanningService
         return details.Count == 0
             ? $"No matching host is ready for backend '{backendName}'"
             : $"No matching host is ready for backend '{backendName}' ({string.Join(" · ", details)})";
-    }
-
-    private static string FormatCapabilities(Host host)
-    {
-        var capabilities = GetEffectiveHostCapabilities(host)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return capabilities.Count == 0 ? "none" : string.Join(", ", capabilities);
     }
 
     private static bool InstanceMatchesRunner(RunnerInstance instance, string runnerId) =>

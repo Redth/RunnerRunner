@@ -15,7 +15,7 @@ public class HostGrainState
 
     // Resource limits
     [Id(7)] public int MaxDockerContainers { get; set; } = 10;
-    [Id(8)] public int MaxTartVMs { get; set; } = 3;
+    [Id(8)] public int MaxTartVMs { get; set; }
     [Id(9)] public int MaxNativeProcesses { get; set; } = 5;
 
     // Current usage

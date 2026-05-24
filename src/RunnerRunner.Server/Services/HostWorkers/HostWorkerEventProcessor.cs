@@ -3,6 +3,7 @@ using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Hubs;
+using RunnerRunner.Server.Services;
 using Shiny.DocumentDb;
 using Host = RunnerRunner.Core.Models.Host;
 using Grpc.Core;
@@ -178,9 +179,11 @@ public sealed class HostWorkerEventProcessor
                 Id = agentInfo.AgentId,
                 Name = agentInfo.Name,
                 Platform = agentInfo.Platform,
+                Capabilities = [.. agentInfo.Capabilities],
                 IsApproved = true,
                 CreatedAt = DateTime.UtcNow
             };
+            HostBackendLimitDefaults.ApplyToNewHost(host);
             await _store.Insert(host);
         }
 

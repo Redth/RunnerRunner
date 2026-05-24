@@ -25,8 +25,9 @@ public class Host
     public string? ContainerImage { get; set; }
     /// <summary>
     /// HostWorker-advertised backend and feature support, e.g. docker, tart,
-    /// native, gpu, xcode16. Backend scheduling requires this plus a positive
-    /// backend resource limit.
+    /// native, gpu, xcode16. Backend scheduling is controlled by backend
+    /// resource limits; capabilities provide discovered defaults and optional
+    /// target-specific routing filters.
     /// </summary>
     public List<string> Capabilities { get; set; } = [];
     public Dictionary<string, string> EnvironmentOverrides { get; set; } = new();
@@ -69,11 +70,11 @@ public class Host
     public Dictionary<string, string> Labels { get; set; } = new();
 
     /// <summary>
-    /// Resource limits per execution backend. A backend must also be advertised
-    /// in Capabilities; set its limit to 0 to disable scheduling for it.
+    /// Resource limits per execution backend. Set a limit to 0 to disable
+    /// scheduling for that backend on this host.
     /// </summary>
     public int MaxDockerContainers { get; set; } = 10;
-    public int MaxTartVMs { get; set; } = 3;
+    public int MaxTartVMs { get; set; }
     public int MaxNativeProcesses { get; set; } = 5;
 
     /// <summary>

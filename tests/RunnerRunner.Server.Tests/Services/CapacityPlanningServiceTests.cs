@@ -504,15 +504,44 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
-    public void AnalyzeHostSelection_ExplainsMissingBackendCapabilityWhenDispatching()
+    public void AnalyzeHostSelection_UsesPositiveBackendLimitAsSupportSignal()
     {
         var host = new Host
         {
-            Name = "linux-native-only",
+            Name = "linux-docker-configured",
             Platform = HostPlatform.Linux,
             AgentStatus = AgentStatus.Online,
-            MaxDockerContainers = 2,
-            Capabilities = ["native"]
+            MaxDockerContainers = 2
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-docker",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [],
+            requireDispatchReadiness: true);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(host.Id, analysis.SelectedHost!.Id);
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_ExcludesHostsWithDisabledBackendLimit()
+    {
+        var host = new Host
+        {
+            Name = "linux-docker-disabled",
+            Platform = HostPlatform.Linux,
+            AgentStatus = AgentStatus.Online,
+            MaxDockerContainers = 0
         };
         var profile = new RunnerProfile
         {
@@ -531,7 +560,34 @@ public class CapacityPlanningServiceTests
 
         Assert.False(analysis.CapacityBlocked);
         Assert.Null(analysis.SelectedHost);
-        Assert.Contains("Missing 'docker' capability", analysis.Reason);
+        Assert.Contains("backend 'docker' capacity", analysis.Reason);
+    }
+
+    [Fact]
+    public void HostBackendLimitDefaults_DisablesUnsupportedBackendsForNewHosts()
+    {
+        var linuxHost = new Host
+        {
+            Name = "linux-worker",
+            Platform = HostPlatform.Linux,
+            Capabilities = ["native", "docker"]
+        };
+        var macHost = new Host
+        {
+            Name = "mac-worker",
+            Platform = HostPlatform.MacOS,
+            Capabilities = ["native", "tart"]
+        };
+
+        HostBackendLimitDefaults.ApplyToNewHost(linuxHost);
+        HostBackendLimitDefaults.ApplyToNewHost(macHost);
+
+        Assert.Equal(10, linuxHost.MaxDockerContainers);
+        Assert.Equal(0, linuxHost.MaxTartVMs);
+        Assert.Equal(5, linuxHost.MaxNativeProcesses);
+        Assert.Equal(0, macHost.MaxDockerContainers);
+        Assert.Equal(3, macHost.MaxTartVMs);
+        Assert.Equal(5, macHost.MaxNativeProcesses);
     }
 
     [Fact]

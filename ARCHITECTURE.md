@@ -228,9 +228,10 @@ Before capacity is summed, hosts must match:
 - rule `TargetHostId`, if set;
 - rule host routing `TargetGroupId`, if set;
 - every rule `RequiredHostLabels` key/value pair;
+- selected backend resource limit is greater than `0`;
 - every target-specific `RequiredHostCapabilities` entry.
 
-HostWorker execution also requires the selected host to be online and to advertise the selected backend (`docker`, `tart`, or `native`) as a capability. Backend capabilities are the support signal; host resource limits are the scheduling allowance. A limit of `0` disables scheduling for that backend even if the HostWorker supports it. If capacity exists but the HostWorker is offline or missing the backend capability, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
+HostWorker execution also requires the selected host to be online. Backend resource limits are the support and scheduling signal: a positive limit means RunnerRunner may place that backend on the host, while `0` disables scheduling for that backend. HostWorker-advertised capabilities are used to seed sensible defaults for new hosts and for optional target-specific routing filters. If capacity exists but the HostWorker is offline, the webhook event is retried as a host-match/execution-channel wait rather than consuming a runner slot forever.
 
 ### Effective pool math
 

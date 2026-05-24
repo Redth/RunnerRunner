@@ -1853,12 +1853,10 @@ else
             return new HostMatchPreview(Array.Empty<Host>(), $"No hosts can provide target platform {runner.RequiredHostPlatform} for {runner.ExecutionBackend} after global host routing.");
 
         var backendMatches = platformMatches
-            .Where(host =>
-                CapacityPlanningService.HasBackendCapability(host, runner.ExecutionBackend)
-                && CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
+            .Where(host => CapacityPlanningService.GetBackendLimit(host, runner.ExecutionBackend) > 0)
             .ToList();
         if (backendMatches.Count == 0)
-            return new HostMatchPreview(Array.Empty<Host>(), $"No compatible hosts advertise {runner.ExecutionBackend.ToString().ToLowerInvariant()} support with capacity enabled.");
+            return new HostMatchPreview(Array.Empty<Host>(), $"No compatible hosts have {runner.ExecutionBackend.ToString().ToLowerInvariant()} capacity enabled.");
 
         var matches = backendMatches
             .Where(host => HostMatchesRunnerRouting(host, runner))

@@ -123,6 +123,7 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
                 LastHeartbeat = DateTime.UtcNow,
                 IsApproved = true
             };
+            HostBackendLimitDefaults.ApplyToNewHost(host);
             await _store.Insert(host);
         }
 
