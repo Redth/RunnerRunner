@@ -93,6 +93,21 @@ public class ModelDefaultsTests
     }
 
     [Fact]
+    public void WebhookEvent_IgnoredTargetIsTerminalAndNotRetryable()
+    {
+        var evt = new WebhookEvent
+        {
+            Action = "queued",
+            Status = WebhookEvent.StatusIgnoredTarget,
+            NextRetryAt = DateTime.UtcNow.AddMinutes(-1)
+        };
+
+        Assert.True(evt.IsTerminal);
+        Assert.False(evt.IsOpenEndedQueueWait);
+        Assert.False(evt.IsRetryCandidate(DateTime.UtcNow));
+    }
+
+    [Fact]
     public void ProvisioningRule_ResolvesRunnerTargetBeforeLegacyMatchers()
     {
         var linux = new RunnerDefinition

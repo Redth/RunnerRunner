@@ -162,7 +162,7 @@ public class RunnerTimeoutService : BackgroundService
         {
             var linkedEvent = await store.Get<WebhookEvent>(instance.WebhookEventId);
             var eventStatus = linkedEvent?.Status?.Trim();
-            if (eventStatus is "completed" or "timed_out" or "ignored" or WebhookEvent.StatusIgnoredScope or "rejected")
+            if (eventStatus is "completed" or "timed_out" or "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget or "rejected")
             {
                 _logger.LogWarning(
                     "Dynamic runner {RunnerName} ({Id}) is still active after its event resolved with status {EventStatus}",
@@ -374,7 +374,7 @@ public class RunnerTimeoutService : BackgroundService
         if (evt.Status is "completed" or "timed_out")
             return age > CompletedWebhookRetention;
 
-        if (evt.Status is "ignored" or WebhookEvent.StatusIgnoredScope or "rejected")
+        if (evt.Status is "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget or "rejected")
             return age > IgnoredWebhookRetention;
 
         if (evt.Status is "in_progress" or "provisioned")

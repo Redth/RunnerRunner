@@ -328,8 +328,10 @@ public class DynamicProvisioningServiceTests
     [InlineData("timed_out", false)]
     [InlineData("rejected", false)]
     [InlineData("ignored", false)]
+    [InlineData(WebhookEvent.StatusIgnoredScope, false)]
+    [InlineData(WebhookEvent.StatusIgnoredTarget, true)]
     [InlineData("in_progress", false)]
-    public void ShouldBlockQueuedGitHubBackfill_BlocksOnlyNonTerminalQueuedEvents(
+    public void ShouldBlockQueuedGitHubBackfill_BlocksActiveAndIgnoredTargetQueuedEvents(
         string status,
         bool expected)
     {
