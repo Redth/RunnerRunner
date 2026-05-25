@@ -622,6 +622,25 @@ public sealed class DemoDataSeeder
             },
             new()
             {
+                Id = "demo-event-ignored-target",
+                BindingId = jitRule.Id,
+                Provider = "GitHubActions",
+                Action = "queued",
+                JobId = "927340492",
+                RunId = "88099147",
+                Repository = "redth-labs/docs",
+                WorkflowName = "Docs",
+                Labels = ["self-hosted", "linux"],
+                Status = WebhookEvent.StatusIgnoredTarget,
+                Error = "No runner target was requested by labels [self-hosted, linux]. Valid targets: rr-linux-docker, rr-macos-arm64.",
+                ReceivedAt = now.AddHours(-2).AddMinutes(-10),
+                UpdatedAt = now.AddHours(-2).AddMinutes(-9),
+                ResolvedAt = now.AddHours(-2).AddMinutes(-9),
+                NextRetryAt = null,
+                ExpiresAt = null
+            },
+            new()
+            {
                 Id = "demo-event-ignored-scope",
                 Provider = "GitHubActions",
                 Action = "queued",

@@ -284,7 +284,7 @@ public class DynamicProvisioningService : BackgroundService
                     ExpiresAt = null
                 };
 
-                var (_, profile, runnerDefinition, reason) = await ResolveProvisioningMatchAsync(store, evt, null);
+                var (matchedRule, profile, runnerDefinition, reason) = await ResolveProvisioningMatchAsync(store, evt, null);
                 if (profile != null)
                 {
                     evt.MatchedProfileId = profile.Id;
@@ -294,7 +294,9 @@ public class DynamicProvisioningService : BackgroundService
                 }
                 else
                 {
-                    evt.Status = "no_match";
+                    evt.Status = matchedRule?.IsMissingRunnerTargetRequest(evt.Labels) == true
+                        ? WebhookEvent.StatusIgnoredTarget
+                        : "no_match";
                     evt.Error = reason;
                 }
 
@@ -332,7 +334,7 @@ public class DynamicProvisioningService : BackgroundService
     internal static bool ShouldBlockQueuedGitHubBackfill(WebhookEvent evt) =>
         string.Equals(evt.Provider, RunnerProvider.GitHubActions.ToString(), StringComparison.OrdinalIgnoreCase)
         && string.Equals(evt.Action, "queued", StringComparison.OrdinalIgnoreCase)
-        && !evt.IsTerminal;
+        && (!evt.IsTerminal || string.Equals(evt.Status, WebhookEvent.StatusIgnoredTarget, StringComparison.OrdinalIgnoreCase));
 
     private async Task<List<GitHubWorkflowRunRef>> ListRelevantGitHubWorkflowRunsAsync(
         HttpClient client,
@@ -602,7 +604,7 @@ public class DynamicProvisioningService : BackgroundService
                 return QueueProcessingOutcome.Advanced;
             }
 
-            if (currentEvent.Status is "completed" or "timed_out" or "rejected" or "ignored" or WebhookEvent.StatusIgnoredScope or "in_progress")
+            if (currentEvent.Status is "completed" or "timed_out" or "rejected" or "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget or "in_progress")
                 return QueueProcessingOutcome.Advanced;
 
             if (currentEvent.HasExpired(now))

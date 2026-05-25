@@ -345,6 +345,63 @@ public sealed class WebhookProcessorGrainTests
     }
 
     [Fact]
+    public async Task ProcessWebhook_GitHubQueued_IgnoresMissingRunnerTargetRequest()
+    {
+        var id = OrleansTestIds.Create("github-missing-target");
+        var secret = $"{id}-secret";
+        var jobId = NextJobId();
+        var rule = new ProvisioningRule
+        {
+            Id = $"{id}-rule",
+            Name = "targeted rule",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            WebhookSecret = secret,
+            AllowedOrgs = ["octo-org"],
+            RunnerDefinitions =
+            [
+                new RunnerDefinition
+                {
+                    Id = $"{id}-linux",
+                    Name = "Linux",
+                    TargetKey = "rr-linux",
+                    RequiredHostPlatform = HostPlatform.Linux,
+                    ExecutionBackend = ExecutionBackend.Docker
+                },
+                new RunnerDefinition
+                {
+                    Id = $"{id}-macos",
+                    Name = "macOS",
+                    TargetKey = "rr-macos",
+                    RequiredHostPlatform = HostPlatform.MacOS,
+                    ExecutionBackend = ExecutionBackend.Tart
+                }
+            ]
+        };
+        await _store.Insert(rule);
+        var body = BuildWorkflowJobPayload(
+            action: "queued",
+            jobId: jobId,
+            runId: jobId + 1,
+            repository: "octo-org/unmanaged-repo",
+            labels: ["self-hosted", "linux"]);
+
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, secret));
+
+        Assert.True(result.Success);
+        Assert.Equal(WebhookEvent.StatusIgnoredTarget, result.Status);
+        Assert.Contains("No runner target was requested", result.Message);
+
+        var webhookEvent = Assert.Single(await EventsForJob(jobId));
+        Assert.Equal(rule.Id, webhookEvent.BindingId);
+        Assert.Equal(WebhookEvent.StatusIgnoredTarget, webhookEvent.Status);
+        Assert.True(webhookEvent.IsTerminal);
+        Assert.Empty(webhookEvent.RequestedRunnerTargetKey ?? "");
+        Assert.Equal(["rr-linux", "rr-macos"], webhookEvent.ValidRunnerTargetKeys);
+        Assert.Contains("No runner target was requested", webhookEvent.Error);
+    }
+
+    [Fact]
     public async Task ProcessWebhook_GitHubQueued_KeepsNoMatchForConfiguredRepoTargetMismatch()
     {
         var id = OrleansTestIds.Create("github-target-mismatch");

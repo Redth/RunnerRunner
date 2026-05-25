@@ -813,7 +813,7 @@ else
         "Running" or "provisioned" or "in_progress" => 3,
         "Stopping" => 4,
         "Failed" or "Crashed" or "timed_out" or "rejected" => 5,
-        "Stopped" or "completed" or "ignored" => 6,
+        "Stopped" or "completed" or "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget => 6,
         _ => 7
     };
 
@@ -858,7 +858,7 @@ else
         "matching" or "preparing" or "dispatching" => "bg-info",
         "timed_out" => "bg-danger",
         "rejected" => "bg-danger",
-        "ignored" => "bg-dark",
+        "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget => "bg-dark",
         "no_match" => "bg-warning text-dark",
         _ when status.StartsWith("pending", StringComparison.OrdinalIgnoreCase) => "bg-warning text-dark",
         _ => "bg-secondary"
@@ -876,6 +876,8 @@ else
         "provisioned" => "Provisioned",
         "in_progress" => "Job running",
         "no_match" => "No match",
+        WebhookEvent.StatusIgnoredScope => "Ignored org/repo",
+        WebhookEvent.StatusIgnoredTarget => "Ignored target",
         _ => status
     };
 
@@ -938,6 +940,8 @@ else
             "in_progress" => "Workflow job is running on a matched runner.",
             "completed" => "Workflow job completed.",
             "ignored" => "Event ignored by the provisioning pipeline.",
+            WebhookEvent.StatusIgnoredScope => "Repository/org is outside all configured webhook rule scopes.",
+            WebhookEvent.StatusIgnoredTarget => "No RunnerRunner target was requested, so this job is informational only.",
             _ => null
         };
     }

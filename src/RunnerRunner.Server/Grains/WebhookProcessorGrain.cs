@@ -297,9 +297,21 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 var selectionReason = matchedRule.RunnerDefinitions.Count > 0
                     ? matchedRule.BuildNoRunnerTargetMatchReason(labels)
                     : $"No current label mapping matches labels [{string.Join(", ", labels)}]";
+                var status = matchedRule.IsMissingRunnerTargetRequest(labels)
+                    ? WebhookEvent.StatusIgnoredTarget
+                    : "no_match";
 
-                _logger.LogInformation("No profile match for labels [{Labels}] in rule {RuleName}",
-                    string.Join(", ", labels), matchedRule.Name);
+                if (status == WebhookEvent.StatusIgnoredTarget)
+                {
+                    _logger.LogInformation(
+                        "Webhook job {JobId} from {Repo} ignored by rule {RuleName}: no RunnerRunner target requested in labels [{Labels}]",
+                        jobId, repo, matchedRule.Name, string.Join(", ", labels));
+                }
+                else
+                {
+                    _logger.LogInformation("No profile match for labels [{Labels}] in rule {RuleName}",
+                        string.Join(", ", labels), matchedRule.Name);
+                }
 
                 await store.Insert(new WebhookEvent
                 {
@@ -312,7 +324,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                     GitHubInstallationId = githubInstallationId,
                     WorkflowName = workflowName,
                     Labels = labels,
-                    Status = "no_match",
+                    Status = status,
                     RequestedRunnerTargetKey = requestedTargetKey,
                     ValidRunnerTargetKeys = validTargetKeys,
                     RunnerTargetSelectionReason = selectionReason,
@@ -321,7 +333,12 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                     ImageTagOverrideRejectedReason = imageTagOverrideRejectedReason
                 });
 
-                return new WebhookProcessResult { Success = false, Status = "no_match", Message = selectionReason };
+                return new WebhookProcessResult
+                {
+                    Success = status == WebhookEvent.StatusIgnoredTarget,
+                    Status = status,
+                    Message = selectionReason
+                };
             }
 
             var profileId = profile.Id;

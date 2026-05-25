@@ -77,8 +77,8 @@
         <div class="rr-filter-field">
             <label class="form-label">Visibility</label>
             <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="showIgnoredScopeEvents" @bind="showIgnoredScopeEvents" @bind:after="ApplyFilterFromInput" />
-                <label class="form-check-label" for="showIgnoredScopeEvents">Show ignored org/repo</label>
+                <input class="form-check-input" type="checkbox" id="showIgnoredEvents" @bind="showIgnoredEvents" @bind:after="ApplyFilterFromInput" />
+                <label class="form-check-label" for="showIgnoredEvents">Show ignored org/repo/target</label>
             </div>
         </div>
         <div class="rr-filter-field">
@@ -98,9 +98,9 @@
     </div>
     <div class="rr-filter-summary">
         Showing @filteredEvents.Count of @allEvents.Count events
-        @if (HiddenIgnoredScopeEventCount > 0 && !IncludeIgnoredScopeEvents)
+        @if (HiddenIgnoredEventCount > 0 && !IncludeIgnoredEvents)
         {
-            <span class="text-muted">(@HiddenIgnoredScopeEventCount ignored org/repo hidden)</span>
+            <span class="text-muted">(@HiddenIgnoredEventCount ignored hidden)</span>
         }
     </div>
 </div>
@@ -280,7 +280,7 @@ else
     private string statusFilter = "";
     private string actionFilter = "";
     private string profileFilter = "";
-    private bool showIgnoredScopeEvents;
+    private bool showIgnoredEvents;
     private CancellationTokenSource? _refreshCts;
     private const string AutoRefreshNever = "never";
     private string autoRefreshInterval = "5";
@@ -304,9 +304,9 @@ else
     private IEnumerable<string> ProfileOptions => DistinctOptions(allEvents
         .SelectMany(e => new[] { e.MatchedRunnerDefinitionName, e.RequestedRunnerTargetKey, e.MatchedProfileName }));
 
-    private int HiddenIgnoredScopeEventCount => allEvents.Count(IsIgnoredScopeEvent);
+    private int HiddenIgnoredEventCount => allEvents.Count(IsHiddenIgnoredEvent);
 
-    private bool IncludeIgnoredScopeEvents => showIgnoredScopeEvents || IsIgnoredScopeStatus(statusFilter);
+    private bool IncludeIgnoredEvents => showIgnoredEvents || IsHiddenIgnoredStatus(statusFilter);
 
     private bool HasActiveFilters =>
         !string.IsNullOrWhiteSpace(searchText)
@@ -317,7 +317,7 @@ else
         || !string.IsNullOrWhiteSpace(statusFilter)
         || !string.IsNullOrWhiteSpace(actionFilter)
         || !string.IsNullOrWhiteSpace(profileFilter)
-        || showIgnoredScopeEvents;
+        || showIgnoredEvents;
 
     protected override async Task OnInitializedAsync()
     {
@@ -340,15 +340,15 @@ else
             statusFilter,
             actionFilter,
             profileFilter,
-            showIgnoredScopeEvents);
+            showIgnoredEvents);
 
         if (!force && signature == _lastFilterSignature && filteredEvents.Any())
             return;
         _lastFilterSignature = signature;
 
         var q = allEvents.AsEnumerable();
-        if (!IncludeIgnoredScopeEvents)
-            q = q.Where(e => !IsIgnoredScopeEvent(e));
+        if (!IncludeIgnoredEvents)
+            q = q.Where(e => !IsHiddenIgnoredEvent(e));
 
         if (!string.IsNullOrWhiteSpace(searchText))
         {
@@ -423,7 +423,7 @@ else
         statusFilter = "";
         actionFilter = "";
         profileFilter = "";
-        showIgnoredScopeEvents = false;
+        showIgnoredEvents = false;
         ApplyFilter(force: true);
     }
 
@@ -440,11 +440,12 @@ else
             .Split([','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(term => !string.IsNullOrWhiteSpace(term));
 
-    private static bool IsIgnoredScopeEvent(WebhookEvent evt) =>
-        IsIgnoredScopeStatus(evt.Status);
+    private static bool IsHiddenIgnoredEvent(WebhookEvent evt) =>
+        IsHiddenIgnoredStatus(evt.Status);
 
-    private static bool IsIgnoredScopeStatus(string? status) =>
-        string.Equals(status, WebhookEvent.StatusIgnoredScope, StringComparison.OrdinalIgnoreCase);
+    private static bool IsHiddenIgnoredStatus(string? status) =>
+        string.Equals(status, WebhookEvent.StatusIgnoredScope, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, WebhookEvent.StatusIgnoredTarget, StringComparison.OrdinalIgnoreCase);
 
     private async Task Refresh()
     {
@@ -524,7 +525,7 @@ else
         "matched" or "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "bg-warning text-dark",
         "error" or "rejected" or "timed_out" => "bg-danger",
         "in_progress" => "bg-info",
-        "ignored" or WebhookEvent.StatusIgnoredScope => "bg-light text-muted",
+        "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget => "bg-light text-muted",
         _ => "bg-secondary"
     };
 
@@ -541,6 +542,7 @@ else
         "in_progress" => "Job running",
         "no_match" => "No match",
         WebhookEvent.StatusIgnoredScope => "Ignored org/repo",
+        WebhookEvent.StatusIgnoredTarget => "Ignored target",
         _ => status
     };
 
@@ -561,6 +563,7 @@ else
             "completed" => "Workflow job completed.",
             "ignored" => "Event ignored by the provisioning pipeline.",
             WebhookEvent.StatusIgnoredScope => "Repository/org is outside all configured webhook rule scopes.",
+            WebhookEvent.StatusIgnoredTarget => "No RunnerRunner target was requested, so this job is informational only.",
             _ => null
         };
     }
@@ -592,7 +595,7 @@ else
         "matching" or "preparing" or "dispatching" or "in_progress" => "event-status-info",
         "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "event-status-warn",
         "error" or "rejected" or "timed_out" => "event-status-danger",
-        "ignored" or WebhookEvent.StatusIgnoredScope => "event-status-muted",
+        "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget => "event-status-muted",
         _ => ""
     };
 

@@ -187,6 +187,9 @@ public class ProvisioningRule
         return $"No runner target was requested by labels [{string.Join(", ", labels)}]. Valid targets: {validDisplay}.";
     }
 
+    public bool IsMissingRunnerTargetRequest(IEnumerable<string> labels) =>
+        RunnerDefinitions.Count > 0 && string.IsNullOrWhiteSpace(ResolveRequestedTargetKey(labels));
+
     public IEnumerable<string> GetRunnerProfileIds()
     {
         if (RunnerDefinitions.Count > 0)

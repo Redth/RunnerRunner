@@ -388,13 +388,8 @@ public sealed class CapacityPlanningService
                 e.Action == "queued"
                 && e.Id != currentEvent.Id
                 && e.JobId != currentEvent.JobId
-                && e.Status is not "completed"
-                    and not "timed_out"
-                    and not "rejected"
-                    and not "ignored"
-                    and not WebhookEvent.StatusIgnoredScope
-                    and not "in_progress"
-                    and not "provisioned")
+                && !e.IsTerminal
+                && e.Status is not "provisioned")
             .OrderBy(e => e.ReceivedAt)
             .ThenBy(e => e.Id, StringComparer.Ordinal)
             .ToList();

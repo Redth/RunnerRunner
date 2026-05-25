@@ -717,6 +717,28 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void HasEarlierQueuedWorkAhead_IgnoresEarlierMissingTargetEvent()
+    {
+        var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
+        var rule = CreateWebhookRule("rule-1", profile.Id, ["ubuntu"]);
+        var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
+        var earlier = CreateQueuedEvent("evt-ignored", rule.Id, "job-a", now, ["self-hosted"], profile.Id);
+        earlier.Status = WebhookEvent.StatusIgnoredTarget;
+        earlier.MatchedProfileId = null;
+        var current = CreateQueuedEvent("evt-current", rule.Id, "job-b", now.AddSeconds(1), ["ubuntu"], profile.Id);
+
+        var result = CapacityPlanningService.HasEarlierQueuedWorkAhead(
+            current,
+            rule,
+            profile,
+            [earlier, current],
+            new Dictionary<string, ProvisioningRule> { [rule.Id] = rule },
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile });
+
+        Assert.False(result);
+    }
+
+    [Fact]
     public void ExplainEvent_ShowsFifoWhenOlderSameLaneEventIsStillQueued()
     {
         var host = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 10, Capabilities = ["docker"] };
