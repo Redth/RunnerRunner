@@ -602,7 +602,7 @@ public class DynamicProvisioningService : BackgroundService
                 return QueueProcessingOutcome.Advanced;
             }
 
-            if (currentEvent.Status is "completed" or "timed_out" or "rejected" or "ignored" or "in_progress")
+            if (currentEvent.Status is "completed" or "timed_out" or "rejected" or "ignored" or WebhookEvent.StatusIgnoredScope or "in_progress")
                 return QueueProcessingOutcome.Advanced;
 
             if (currentEvent.HasExpired(now))

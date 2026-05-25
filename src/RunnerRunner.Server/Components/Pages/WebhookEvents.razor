@@ -75,6 +75,13 @@
             </select>
         </div>
         <div class="rr-filter-field">
+            <label class="form-label">Visibility</label>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="showIgnoredScopeEvents" @bind="showIgnoredScopeEvents" @bind:after="ApplyFilterFromInput" />
+                <label class="form-check-label" for="showIgnoredScopeEvents">Show ignored org/repo</label>
+            </div>
+        </div>
+        <div class="rr-filter-field">
             <label class="form-label">Action</label>
             <select class="form-select form-select-sm" @bind="actionFilter" @bind:after="ApplyFilterFromInput">
                 <option value="">Any action</option>
@@ -89,7 +96,13 @@
             <input type="search" class="form-control form-control-sm" list="event-profile-options" placeholder="runner target or profile" @bind="profileFilter" @bind:event="oninput" @bind:after="ApplyFilterFromInput" />
         </div>
     </div>
-    <div class="rr-filter-summary">Showing @filteredEvents.Count of @allEvents.Count events</div>
+    <div class="rr-filter-summary">
+        Showing @filteredEvents.Count of @allEvents.Count events
+        @if (HiddenIgnoredScopeEventCount > 0 && !IncludeIgnoredScopeEvents)
+        {
+            <span class="text-muted">(@HiddenIgnoredScopeEventCount ignored org/repo hidden)</span>
+        }
+    </div>
 </div>
 
 <datalist id="event-repository-options">
@@ -267,6 +280,7 @@ else
     private string statusFilter = "";
     private string actionFilter = "";
     private string profileFilter = "";
+    private bool showIgnoredScopeEvents;
     private CancellationTokenSource? _refreshCts;
     private const string AutoRefreshNever = "never";
     private string autoRefreshInterval = "5";
@@ -290,6 +304,10 @@ else
     private IEnumerable<string> ProfileOptions => DistinctOptions(allEvents
         .SelectMany(e => new[] { e.MatchedRunnerDefinitionName, e.RequestedRunnerTargetKey, e.MatchedProfileName }));
 
+    private int HiddenIgnoredScopeEventCount => allEvents.Count(IsIgnoredScopeEvent);
+
+    private bool IncludeIgnoredScopeEvents => showIgnoredScopeEvents || IsIgnoredScopeStatus(statusFilter);
+
     private bool HasActiveFilters =>
         !string.IsNullOrWhiteSpace(searchText)
         || !string.IsNullOrWhiteSpace(repositoryFilter)
@@ -298,7 +316,8 @@ else
         || !string.IsNullOrWhiteSpace(labelFilter)
         || !string.IsNullOrWhiteSpace(statusFilter)
         || !string.IsNullOrWhiteSpace(actionFilter)
-        || !string.IsNullOrWhiteSpace(profileFilter);
+        || !string.IsNullOrWhiteSpace(profileFilter)
+        || showIgnoredScopeEvents;
 
     protected override async Task OnInitializedAsync()
     {
@@ -320,13 +339,17 @@ else
             labelFilter,
             statusFilter,
             actionFilter,
-            profileFilter);
+            profileFilter,
+            showIgnoredScopeEvents);
 
         if (!force && signature == _lastFilterSignature && filteredEvents.Any())
             return;
         _lastFilterSignature = signature;
 
         var q = allEvents.AsEnumerable();
+        if (!IncludeIgnoredScopeEvents)
+            q = q.Where(e => !IsIgnoredScopeEvent(e));
+
         if (!string.IsNullOrWhiteSpace(searchText))
         {
             var term = searchText.Trim();
@@ -400,6 +423,7 @@ else
         statusFilter = "";
         actionFilter = "";
         profileFilter = "";
+        showIgnoredScopeEvents = false;
         ApplyFilter(force: true);
     }
 
@@ -415,6 +439,12 @@ else
         value
             .Split([','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(term => !string.IsNullOrWhiteSpace(term));
+
+    private static bool IsIgnoredScopeEvent(WebhookEvent evt) =>
+        IsIgnoredScopeStatus(evt.Status);
+
+    private static bool IsIgnoredScopeStatus(string? status) =>
+        string.Equals(status, WebhookEvent.StatusIgnoredScope, StringComparison.OrdinalIgnoreCase);
 
     private async Task Refresh()
     {
@@ -494,7 +524,7 @@ else
         "matched" or "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "bg-warning text-dark",
         "error" or "rejected" or "timed_out" => "bg-danger",
         "in_progress" => "bg-info",
-        "ignored" => "bg-light text-muted",
+        "ignored" or WebhookEvent.StatusIgnoredScope => "bg-light text-muted",
         _ => "bg-secondary"
     };
 
@@ -510,6 +540,7 @@ else
         "provisioned" => "Provisioned",
         "in_progress" => "Job running",
         "no_match" => "No match",
+        WebhookEvent.StatusIgnoredScope => "Ignored org/repo",
         _ => status
     };
 
@@ -529,6 +560,7 @@ else
             "in_progress" => "Workflow job is running on a matched runner.",
             "completed" => "Workflow job completed.",
             "ignored" => "Event ignored by the provisioning pipeline.",
+            WebhookEvent.StatusIgnoredScope => "Repository/org is outside all configured webhook rule scopes.",
             _ => null
         };
     }
@@ -560,7 +592,7 @@ else
         "matching" or "preparing" or "dispatching" or "in_progress" => "event-status-info",
         "pending" or "pending_fifo" or "pending_capacity" or "pending_host_match" or "pending_config" or "no_match" or "rate_limited" => "event-status-warn",
         "error" or "rejected" or "timed_out" => "event-status-danger",
-        "ignored" => "event-status-muted",
+        "ignored" or WebhookEvent.StatusIgnoredScope => "event-status-muted",
         _ => ""
     };
 

@@ -392,6 +392,7 @@ public sealed class CapacityPlanningService
                     and not "timed_out"
                     and not "rejected"
                     and not "ignored"
+                    and not WebhookEvent.StatusIgnoredScope
                     and not "in_progress"
                     and not "provisioned")
             .OrderBy(e => e.ReceivedAt)

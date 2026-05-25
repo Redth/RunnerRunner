@@ -147,26 +147,43 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
         if (matchedRule == null)
         {
-            var status = hmacMatchCount > 0 ? "rejected" : (candidateRules.Count > 0 ? "rejected" : "no_match");
+            var repositoryOutsideScope = hmacMatchCount > 0;
+            var status = repositoryOutsideScope
+                ? WebhookEvent.StatusIgnoredScope
+                : (candidateRules.Count > 0 ? "rejected" : "no_match");
             var signatureFailure = string.IsNullOrWhiteSpace(signatureHeader)
                 ? "Missing signature header"
                 : signingSecretCount == 0
                     ? "No webhook signing secret configured"
                     : "Signature validation failed";
-            var error = hmacMatchCount > 0
-                ? "Repository not in scope"
+            var ignoredScopeMessage = $"Repository/org is not handled by any enabled webhook rule (checked {hmacMatchCount} HMAC-matched rules)";
+            var error = repositoryOutsideScope
+                ? "Repository/org is not handled by any enabled webhook rule"
                 : (candidateRules.Count > 0 ? signatureFailure : null);
-            var message = hmacMatchCount > 0
-                ? $"Repository not in scope (checked {hmacMatchCount} HMAC-matched rules)"
+            var message = repositoryOutsideScope
+                ? ignoredScopeMessage
                 : (candidateRules.Count > 0 ? signatureFailure : "No matching rule");
 
-            _logger.LogWarning(
-                "Webhook from {Repo}: {Message} (checked {Count} rules, {SigningSecretCount} configured signing secrets, signature header present: {HasSignature})",
-                repo,
-                message,
-                candidateRules.Count,
-                signingSecretCount,
-                !string.IsNullOrWhiteSpace(signatureHeader));
+            if (repositoryOutsideScope)
+            {
+                _logger.LogInformation(
+                    "Webhook from {Repo}: {Message} (checked {Count} rules, {SigningSecretCount} configured signing secrets, signature header present: {HasSignature})",
+                    repo,
+                    message,
+                    candidateRules.Count,
+                    signingSecretCount,
+                    !string.IsNullOrWhiteSpace(signatureHeader));
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Webhook from {Repo}: {Message} (checked {Count} rules, {SigningSecretCount} configured signing secrets, signature header present: {HasSignature})",
+                    repo,
+                    message,
+                    candidateRules.Count,
+                    signingSecretCount,
+                    !string.IsNullOrWhiteSpace(signatureHeader));
+            }
 
             await store.Insert(new WebhookEvent
             {
@@ -184,7 +201,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
 
             return new WebhookProcessResult
             {
-                Success = false,
+                Success = repositoryOutsideScope,
                 Status = status,
                 Message = message
             };

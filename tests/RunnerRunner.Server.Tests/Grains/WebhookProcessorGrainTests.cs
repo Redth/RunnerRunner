@@ -302,7 +302,7 @@ public sealed class WebhookProcessorGrainTests
     }
 
     [Fact]
-    public async Task ProcessWebhook_GiteaQueued_RejectsRepositoryOutsideMatchedSecretScope()
+    public async Task ProcessWebhook_GiteaQueued_IgnoresRepositoryOutsideMatchedSecretScope()
     {
         var id = OrleansTestIds.Create("gitea-webhook");
         var secret = $"{id}-secret";
@@ -333,14 +333,63 @@ public sealed class WebhookProcessorGrainTests
 
         var result = await Processor().ProcessWebhook("gitea", body, BodyBytes(body), ComputeSignature(body, secret));
 
-        Assert.False(result.Success);
-        Assert.Equal("rejected", result.Status);
-        Assert.Equal("Repository not in scope (checked 1 HMAC-matched rules)", result.Message);
+        Assert.True(result.Success);
+        Assert.Equal(WebhookEvent.StatusIgnoredScope, result.Status);
+        Assert.Equal("Repository/org is not handled by any enabled webhook rule (checked 1 HMAC-matched rules)", result.Message);
 
         var webhookEvent = Assert.Single(await EventsForJob(jobId));
         Assert.Equal(nameof(RunnerProvider.GiteaActions), webhookEvent.Provider);
-        Assert.Equal("rejected", webhookEvent.Status);
-        Assert.Equal("Repository not in scope", webhookEvent.Error);
+        Assert.Equal(WebhookEvent.StatusIgnoredScope, webhookEvent.Status);
+        Assert.Equal("Repository/org is not handled by any enabled webhook rule", webhookEvent.Error);
+        Assert.Empty(webhookEvent.BindingId);
+    }
+
+    [Fact]
+    public async Task ProcessWebhook_GitHubQueued_KeepsNoMatchForConfiguredRepoTargetMismatch()
+    {
+        var id = OrleansTestIds.Create("github-target-mismatch");
+        var secret = $"{id}-secret";
+        var jobId = NextJobId();
+        var rule = new ProvisioningRule
+        {
+            Id = $"{id}-rule",
+            Name = "targeted rule",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            WebhookSecret = secret,
+            AllowedRepos = ["octo-org/octo-repo"],
+            RunnerDefinitions =
+            [
+                new RunnerDefinition
+                {
+                    Id = $"{id}-linux",
+                    Name = "Linux",
+                    TargetKey = "rr-linux",
+                    RequiredHostPlatform = HostPlatform.Linux,
+                    ExecutionBackend = ExecutionBackend.Docker
+                }
+            ]
+        };
+        await _store.Insert(rule);
+        var body = BuildWorkflowJobPayload(
+            action: "queued",
+            jobId: jobId,
+            runId: jobId + 1,
+            repository: "octo-org/octo-repo",
+            labels: ["self-hosted", "rr-windows"]);
+
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, secret));
+
+        Assert.False(result.Success);
+        Assert.Equal("no_match", result.Status);
+        Assert.Contains("No runner target 'rr-windows' exists", result.Message);
+
+        var webhookEvent = Assert.Single(await EventsForJob(jobId));
+        Assert.Equal(rule.Id, webhookEvent.BindingId);
+        Assert.Equal("no_match", webhookEvent.Status);
+        Assert.Equal("rr-windows", webhookEvent.RequestedRunnerTargetKey);
+        Assert.Equal(["rr-linux"], webhookEvent.ValidRunnerTargetKeys);
+        Assert.Contains("No runner target 'rr-windows' exists", webhookEvent.Error);
     }
 
     [Fact]
