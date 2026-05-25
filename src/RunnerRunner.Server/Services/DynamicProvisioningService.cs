@@ -635,7 +635,7 @@ public class DynamicProvisioningService : BackgroundService
                 await ScheduleRetryAsync(
                     store,
                     currentEvent,
-                    "Waiting for earlier queued jobs ahead in the FIFO provisioning queue",
+                    "Waiting for earlier queued jobs in the same capacity lane",
                     now,
                     status: "pending_fifo",
                     countAttempt: false,

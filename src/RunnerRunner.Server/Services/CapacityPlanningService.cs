@@ -132,6 +132,8 @@ public sealed class CapacitySnapshot
 
 public sealed class CapacityPlanningService
 {
+    private sealed record QueuedWorkBlocker(WebhookEvent Event, RunnerProfile Profile);
+
     private readonly IDocumentStore _store;
 
     public CapacityPlanningService(IDocumentStore store)
@@ -382,7 +384,50 @@ public sealed class CapacityPlanningService
         IReadOnlyCollection<WebhookEvent> allEvents,
         IReadOnlyDictionary<string, ProvisioningRule> rulesById,
         IReadOnlyDictionary<string, RunnerProfile> profilesById)
+        => GetEarlierQueuedWorkAhead(
+            currentEvent,
+            currentRule,
+            currentProfile,
+            allEvents,
+            rulesById,
+            profilesById).Count > 0;
+
+    private static List<string> DescribeEarlierQueuedWorkAhead(
+        WebhookEvent currentEvent,
+        ProvisioningRule? currentRule,
+        RunnerProfile currentProfile,
+        IReadOnlyCollection<WebhookEvent> allEvents,
+        IReadOnlyDictionary<string, ProvisioningRule> rulesById,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
     {
+        var blockers = GetEarlierQueuedWorkAhead(
+            currentEvent,
+            currentRule,
+            currentProfile,
+            allEvents,
+            rulesById,
+            profilesById);
+
+        var details = blockers
+            .Take(5)
+            .Select(FormatQueuedWorkBlocker)
+            .ToList();
+
+        if (blockers.Count > details.Count)
+            details.Add($"...and {blockers.Count - details.Count} more older queued job(s)");
+
+        return details;
+    }
+
+    private static List<QueuedWorkBlocker> GetEarlierQueuedWorkAhead(
+        WebhookEvent currentEvent,
+        ProvisioningRule? currentRule,
+        RunnerProfile currentProfile,
+        IReadOnlyCollection<WebhookEvent> allEvents,
+        IReadOnlyDictionary<string, ProvisioningRule> rulesById,
+        IReadOnlyDictionary<string, RunnerProfile> profilesById)
+    {
+        var blockers = new List<QueuedWorkBlocker>();
         var queuedEvents = allEvents
             .Where(e =>
                 e.Action == "queued"
@@ -413,18 +458,141 @@ public sealed class CapacityPlanningService
             if (earlierProfile == null)
                 continue;
 
-            var sameRule = !string.IsNullOrWhiteSpace(currentRule?.Id)
-                && string.Equals(earlierRule?.Id, currentRule.Id, StringComparison.OrdinalIgnoreCase);
+            if (SharesCapacityLane(currentRule, currentProfile, earlierRule, earlierProfile))
+                blockers.Add(new QueuedWorkBlocker(earlierEvent, earlierProfile));
+        }
 
-            var sameCapacityLane =
-                earlierProfile.RequiredHostPlatform == currentProfile.RequiredHostPlatform
-                && earlierProfile.ExecutionBackend == currentProfile.ExecutionBackend;
+        return blockers;
+    }
 
-            if (sameRule || sameCapacityLane)
+    private static bool SharesCapacityLane(
+        ProvisioningRule? currentRule,
+        RunnerProfile currentProfile,
+        ProvisioningRule? earlierRule,
+        RunnerProfile earlierProfile)
+    {
+        if (earlierProfile.RequiredHostPlatform != currentProfile.RequiredHostPlatform
+            || earlierProfile.ExecutionBackend != currentProfile.ExecutionBackend)
+        {
+            return false;
+        }
+
+        if (!CanHostRoutingOverlap(currentRule, currentProfile, earlierRule, earlierProfile))
+            return false;
+
+        return true;
+    }
+
+    private static bool CanHostRoutingOverlap(
+        ProvisioningRule? currentRule,
+        RunnerProfile currentProfile,
+        ProvisioningRule? earlierRule,
+        RunnerProfile earlierProfile)
+    {
+        if (!string.IsNullOrWhiteSpace(currentRule?.TargetHostId)
+            && !string.IsNullOrWhiteSpace(earlierRule?.TargetHostId)
+            && !string.Equals(currentRule.TargetHostId, earlierRule.TargetHostId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var currentGroup = GetRequiredGroupId(currentRule, currentProfile, out var currentGroupConflict);
+        var earlierGroup = GetRequiredGroupId(earlierRule, earlierProfile, out var earlierGroupConflict);
+        if (currentGroupConflict || earlierGroupConflict)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(currentGroup)
+            && !string.IsNullOrWhiteSpace(earlierGroup)
+            && !string.Equals(currentGroup, earlierGroup, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !RequiredLabelsConflict(currentRule?.RequiredHostLabels, earlierRule?.RequiredHostLabels);
+    }
+
+    private static string? GetRequiredGroupId(ProvisioningRule? rule, RunnerProfile profile, out bool hasConflict)
+    {
+        var groups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(rule?.TargetGroupId))
+            groups.Add(rule.TargetGroupId.Trim());
+        if (!string.IsNullOrWhiteSpace(profile.TargetGroupId))
+            groups.Add(profile.TargetGroupId.Trim());
+
+        hasConflict = groups.Count > 1;
+        return groups.Count == 1 ? groups.Single() : null;
+    }
+
+    private static bool RequiredLabelsConflict(
+        IReadOnlyDictionary<string, string>? currentLabels,
+        IReadOnlyDictionary<string, string>? earlierLabels)
+    {
+        if (currentLabels == null || earlierLabels == null)
+            return false;
+
+        foreach (var current in currentLabels)
+        {
+            var earlier = earlierLabels.FirstOrDefault(label => string.Equals(label.Key, current.Key, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(earlier.Key)
+                && !string.Equals(earlier.Value, current.Value, StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
 
         return false;
+    }
+
+    private static string BuildFifoSummary(int blockerCount)
+        => blockerCount switch
+        {
+            0 => "Waiting for older queued work in the same capacity lane",
+            1 => "Waiting for 1 older queued job in the same capacity lane",
+            _ => $"Waiting for {blockerCount} older queued jobs in the same capacity lane"
+        };
+
+    private static string FormatQueuedWorkBlocker(QueuedWorkBlocker blocker)
+    {
+        var evt = blocker.Event;
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(evt.JobId))
+            parts.Add($"Job {evt.JobId}");
+        if (!string.IsNullOrWhiteSpace(evt.Repository))
+            parts.Add(evt.Repository);
+        if (!string.IsNullOrWhiteSpace(evt.WorkflowName))
+            parts.Add(evt.WorkflowName);
+        parts.Add($"target {blocker.Profile.Name}");
+        if (!string.IsNullOrWhiteSpace(evt.Status))
+            parts.Add($"status {evt.Status}");
+        if (!string.IsNullOrWhiteSpace(evt.Error))
+            parts.Add(evt.Error);
+
+        return string.Join(" · ", parts);
+    }
+
+    private static List<string> BuildRuleCapacityDetails(RuleCapacityView ruleView, RunnerProfile currentProfile)
+    {
+        var details = new List<string>
+        {
+            $"Max concurrent: {ruleView.ActiveCount}/{ruleView.ConfiguredLimit} active for rule '{ruleView.RuleName}' ({ruleView.RemainingSlots} remaining)"
+        };
+
+        var mappedRunners = ruleView.MappedRunners
+            .OrderBy(view => string.Equals(view.RunnerId, currentProfile.Id, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(view => view.RunnerName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var runner in mappedRunners.Take(5))
+        {
+            details.Add(
+                $"Target '{runner.RunnerName}': {runner.ActiveNow} active, {runner.AvailableNow} host slot(s) available across {runner.MatchingHosts} matching host(s)");
+        }
+
+        if (mappedRunners.Count > 5)
+            details.Add($"...and {mappedRunners.Count - 5} more target(s)");
+
+        return details;
     }
 
     public static EventCapacityView ExplainEvent(
@@ -440,11 +608,16 @@ public sealed class CapacityPlanningService
 
         if (evt.Status == "pending_fifo")
         {
+            var (fifoRule, fifoProfile, _) = ResolveProvisioningMatch(evt, evt.MatchedProfileId, rulesById.Values, profilesById);
+            var details = fifoProfile == null
+                ? []
+                : DescribeEarlierQueuedWorkAhead(evt, fifoRule, fifoProfile, allEvents, rulesById, profilesById);
+
             return new EventCapacityView
             {
                 BlockedBy = CapacityBlockerKind.Fifo,
-                Summary = "Waiting for older queued work in the same provisioning lane",
-                Details = []
+                Summary = BuildFifoSummary(details.Count),
+                Details = details
             };
         }
 
@@ -467,12 +640,14 @@ public sealed class CapacityPlanningService
             };
         }
 
-        if (HasEarlierQueuedWorkAhead(evt, rule, profile, allEvents, rulesById, profilesById))
+        var fifoDetails = DescribeEarlierQueuedWorkAhead(evt, rule, profile, allEvents, rulesById, profilesById);
+        if (fifoDetails.Count > 0)
         {
             return new EventCapacityView
             {
                 BlockedBy = CapacityBlockerKind.Fifo,
-                Summary = "Waiting for older queued work in the same provisioning lane"
+                Summary = BuildFifoSummary(fifoDetails.Count),
+                Details = fifoDetails
             };
         }
 
@@ -484,7 +659,8 @@ public sealed class CapacityPlanningService
                 return new EventCapacityView
                 {
                     BlockedBy = CapacityBlockerKind.ProvisioningRule,
-                    Summary = $"Rule '{rule.Name}' is using {ruleView.ActiveCount}/{ruleView.ConfiguredLimit} concurrent slots"
+                    Summary = $"Rule '{rule.Name}' is using {ruleView.ActiveCount}/{ruleView.ConfiguredLimit} concurrent slots",
+                    Details = BuildRuleCapacityDetails(ruleView, profile)
                 };
             }
         }

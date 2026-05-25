@@ -222,6 +222,8 @@ else
                             var insight = GetEventInsight(evt);
                             var primaryMessage = GetPrimaryStatusMessage(evt);
                             var metaItems = GetStatusMeta(evt).ToList();
+                            var insightDetails = insight?.Details.Take(3).ToList() ?? [];
+                            var hiddenInsightDetails = (insight?.Details.Count ?? 0) - insightDetails.Count;
                         }
                         <div class="event-status-card @GetStatusToneClass(evt.Status)">
                             <div class="event-status-heading">
@@ -245,6 +247,19 @@ else
                                         <span title="@item.Title">
                                             <i class="bi @item.Icon"></i>@item.Text
                                         </span>
+                                    }
+                                </div>
+                            }
+                            @if (insightDetails.Any())
+                            {
+                                <div class="event-status-details">
+                                    @foreach (var detail in insightDetails)
+                                    {
+                                        <span title="@detail">@detail</span>
+                                    }
+                                    @if (hiddenInsightDetails > 0)
+                                    {
+                                        <span>+@hiddenInsightDetails more blocker detail(s)</span>
                                     }
                                 </div>
                             }

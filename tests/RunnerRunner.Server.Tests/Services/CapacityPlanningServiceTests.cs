@@ -670,6 +670,8 @@ public class CapacityPlanningServiceTests
 
         Assert.Equal(CapacityBlockerKind.ProvisioningRule, result.BlockedBy);
         Assert.Contains("1/1", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Details, detail => detail.Contains("Max concurrent: 1/1", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Details, detail => detail.Contains("Target 'docker-jit'", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -717,6 +719,74 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void HasEarlierQueuedWorkAhead_IgnoresEarlierSameRuleEventInDifferentCapacityLane()
+    {
+        var windowsProfile = CreateProfile("windows-docker", HostPlatform.Windows, ExecutionBackend.Docker);
+        var macProfile = CreateProfile("macos-native", HostPlatform.MacOS, ExecutionBackend.Native);
+        var rule = new ProvisioningRule
+        {
+            Id = "rule-1",
+            Name = "multi-target",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 10,
+            LabelMappings =
+            [
+                new LabelProfileMapping { ProfileId = windowsProfile.Id, RequiredLabels = ["windows"] },
+                new LabelProfileMapping { ProfileId = macProfile.Id, RequiredLabels = ["macos"] }
+            ]
+        };
+        var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
+        var earlier = CreateQueuedEvent("evt-windows", rule.Id, "job-windows", now, ["windows"], windowsProfile.Id);
+        var current = CreateQueuedEvent("evt-macos", rule.Id, "job-macos", now.AddSeconds(1), ["macos"], macProfile.Id);
+
+        var result = CapacityPlanningService.HasEarlierQueuedWorkAhead(
+            current,
+            rule,
+            macProfile,
+            [earlier, current],
+            new Dictionary<string, ProvisioningRule> { [rule.Id] = rule },
+            new Dictionary<string, RunnerProfile> { [windowsProfile.Id] = windowsProfile, [macProfile.Id] = macProfile });
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void HasEarlierQueuedWorkAhead_IgnoresEarlierSameBackendEventWithDifferentTargetGroups()
+    {
+        var profileA = CreateProfile("macos-a", HostPlatform.MacOS, ExecutionBackend.Native);
+        profileA.TargetGroupId = "mac-pool-a";
+        var profileB = CreateProfile("macos-b", HostPlatform.MacOS, ExecutionBackend.Native);
+        profileB.TargetGroupId = "mac-pool-b";
+        var rule = new ProvisioningRule
+        {
+            Id = "rule-1",
+            Name = "mac-targets",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            MaxConcurrent = 10,
+            LabelMappings =
+            [
+                new LabelProfileMapping { ProfileId = profileA.Id, RequiredLabels = ["macos-a"] },
+                new LabelProfileMapping { ProfileId = profileB.Id, RequiredLabels = ["macos-b"] }
+            ]
+        };
+        var now = new DateTime(2026, 5, 18, 12, 0, 0, DateTimeKind.Utc);
+        var earlier = CreateQueuedEvent("evt-a", rule.Id, "job-a", now, ["macos-a"], profileA.Id);
+        var current = CreateQueuedEvent("evt-b", rule.Id, "job-b", now.AddSeconds(1), ["macos-b"], profileB.Id);
+
+        var result = CapacityPlanningService.HasEarlierQueuedWorkAhead(
+            current,
+            rule,
+            profileB,
+            [earlier, current],
+            new Dictionary<string, ProvisioningRule> { [rule.Id] = rule },
+            new Dictionary<string, RunnerProfile> { [profileA.Id] = profileA, [profileB.Id] = profileB });
+
+        Assert.False(result);
+    }
+
+    [Fact]
     public void HasEarlierQueuedWorkAhead_IgnoresEarlierMissingTargetEvent()
     {
         var profile = CreateProfile("linux-docker", HostPlatform.Linux, ExecutionBackend.Docker);
@@ -757,7 +827,9 @@ public class CapacityPlanningServiceTests
             [earlier, current]);
 
         Assert.Equal(CapacityBlockerKind.Fifo, result.BlockedBy);
-        Assert.Contains("older queued work", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("older queued job", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Details, detail => detail.Contains("Job job-a", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Details, detail => detail.Contains("target linux-docker", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
