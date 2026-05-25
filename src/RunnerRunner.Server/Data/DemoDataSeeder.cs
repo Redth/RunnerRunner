@@ -622,8 +622,7 @@ public sealed class DemoDataSeeder
             },
             new()
             {
-                Id = "demo-event-rejected",
-                BindingId = jitRule.Id,
+                Id = "demo-event-ignored-scope",
                 Provider = "GitHubActions",
                 Action = "queued",
                 JobId = "927340455",
@@ -631,8 +630,8 @@ public sealed class DemoDataSeeder
                 Repository = "unknown/fork",
                 WorkflowName = "Pull Request",
                 Labels = ["self-hosted", "linux"],
-                Status = "rejected",
-                Error = "Repository unknown/fork is not allowed by this provisioning rule.",
+                Status = WebhookEvent.StatusIgnoredScope,
+                Error = "Repository/org is not handled by any enabled webhook rule.",
                 ReceivedAt = now.AddHours(-2),
                 UpdatedAt = now.AddHours(-2).AddMinutes(1),
                 ResolvedAt = now.AddHours(-2).AddMinutes(1),

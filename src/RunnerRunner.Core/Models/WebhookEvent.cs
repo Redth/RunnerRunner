@@ -5,12 +5,15 @@ namespace RunnerRunner.Core.Models;
 /// </summary>
 public class WebhookEvent
 {
+    public const string StatusIgnoredScope = "ignored_scope";
+
     private static readonly HashSet<string> TerminalStatuses =
     [
         "completed",
         "timed_out",
         "rejected",
         "ignored",
+        StatusIgnoredScope,
         "in_progress"
     ];
 
@@ -72,7 +75,7 @@ public class WebhookEvent
     public string? ImageTagOverrideRejectedReason { get; set; }
 
     /// <summary>
-    /// pending*, matching/preparing/dispatching, no_match, rejected, provisioned, in_progress, completed, timed_out, ignored
+    /// pending*, matching/preparing/dispatching, no_match, rejected, provisioned, in_progress, completed, timed_out, ignored, ignored_scope
     /// </summary>
     public string Status { get; set; } = "";
     public string? Error { get; set; }
