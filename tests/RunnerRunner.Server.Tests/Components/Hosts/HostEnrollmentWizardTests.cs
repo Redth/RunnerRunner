@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Components.Hosts;
 using RunnerRunner.Server.Services;
@@ -96,6 +97,7 @@ public class HostEnrollmentWizardTests
             gitHubAuth,
             store,
             Substitute.For<IHostCommandDispatcher>(),
+            Substitute.For<IGrainFactory>(),
             localUpdateStore,
             NullLogger<HostWorkerUpdateService>.Instance);
 

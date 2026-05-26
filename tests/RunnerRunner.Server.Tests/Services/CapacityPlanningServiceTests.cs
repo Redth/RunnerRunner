@@ -235,6 +235,39 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void AnalyzeHostSelection_DoesNotSelectDrainingHosts()
+    {
+        var host = new Host
+        {
+            Name = "linux-a",
+            Platform = HostPlatform.Linux,
+            MaxDockerContainers = 2,
+            Capabilities = ["docker"],
+            IsDraining = true
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "docker-linux",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            []);
+
+        Assert.True(analysis.CapacityBlocked);
+        Assert.Null(analysis.SelectedHost);
+        var candidate = Assert.Single(analysis.Candidates);
+        Assert.False(candidate.CanRunNow);
+        Assert.Equal(CapacityBlockerKind.Host, candidate.BlockedBy);
+        Assert.Equal("Host is draining for update", candidate.Detail);
+    }
+
+    [Fact]
     public void AnalyzeHostSelection_RespectsTargetHostAndHostCapacity()
     {
         var hostA = new Host { Name = "linux-a", Platform = HostPlatform.Linux, MaxDockerContainers = 5, Capabilities = ["docker"] };

@@ -84,6 +84,30 @@ public sealed class GrainStateTests
     }
 
     [Fact]
+    public async Task SchedulerGrain_SelectHost_SkipsDrainingHosts()
+    {
+        var hostId = OrleansTestIds.Create("linux-host");
+        var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(CreatePositiveLong());
+        var host = _grainFactory.GetGrain<IHostGrain>(hostId);
+        await host.Register("linux-builder", HostPlatform.Linux, "x64", "1.0.0");
+        await host.UpdateLabels(new Dictionary<string, string> { ["builder"] = "true" });
+        await scheduler.RegisterHost(hostId);
+
+        await host.SetDraining(true);
+
+        Assert.False(await host.CanAcceptRunner(ExecutionBackend.Docker));
+        Assert.Null(await scheduler.SelectHost(
+            new Dictionary<string, string> { ["builder"] = "true" },
+            ExecutionBackend.Docker));
+
+        await host.SetDraining(false);
+
+        Assert.Equal(hostId, await scheduler.SelectHost(
+            new Dictionary<string, string> { ["builder"] = "true" },
+            ExecutionBackend.Docker));
+    }
+
+    [Fact]
     public async Task SchedulerGrain_SelectHost_ReturnsNullWhenUnregisteredNoCapacityOrLabelsMissing()
     {
         var hostId = OrleansTestIds.Create("linux-host");

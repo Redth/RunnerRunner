@@ -178,7 +178,11 @@ public class HostWorkerEventProcessorTests
             EnrollmentTokenCreatedAt = DateTime.UtcNow,
             UpdateStatus = "Restarting",
             LatestAvailableVersion = "v0.3.0",
-            LatestAvailableCommitSha = commitSha
+            LatestAvailableCommitSha = commitSha,
+            IsDraining = true,
+            PendingHostWorkerUpdateSource = "release",
+            PendingHostWorkerUpdateQueuedAt = DateTime.UtcNow,
+            PendingHostWorkerUpdateDispatchedAt = DateTime.UtcNow
         });
         var processor = CreateProcessor(store);
 
@@ -203,6 +207,8 @@ public class HostWorkerEventProcessorTests
         Assert.Equal("Current", host.UpdateStatus);
         Assert.Equal(commitSha, host.AgentCommitSha);
         Assert.NotNull(host.LastUpdateCompletedAt);
+        Assert.False(host.IsDraining);
+        Assert.Null(host.PendingHostWorkerUpdateSource);
     }
 
     [Fact]

@@ -47,6 +47,9 @@ public class SchedulerGrain : Grain, ISchedulerGrain
             if (state.Status != AgentStatus.Online)
                 continue;
 
+            if (state.IsDraining)
+                continue;
+
             if (!LabelsMatch(state.Labels, requiredLabels))
                 continue;
 

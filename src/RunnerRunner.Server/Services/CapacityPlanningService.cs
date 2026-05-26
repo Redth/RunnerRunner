@@ -56,6 +56,7 @@ public sealed class HostCapacityView
 {
     public required string HostId { get; init; }
     public required string HostLabel { get; init; }
+    public bool IsDraining { get; init; }
     public int ActiveInstances { get; init; }
     public Dictionary<ExecutionBackend, CapacityCounter> BackendUsage { get; init; } = new();
     public List<HostProfileUsage> ProfileUsage { get; init; } = [];
@@ -324,7 +325,13 @@ public sealed class CapacityPlanningService
                 var blockedBy = CapacityBlockerKind.None;
                 var detail = $"Ready now: {backendName} {backendUsage.Summary}";
 
-                if (requireDispatchReadiness && host.AgentStatus != AgentStatus.Online)
+                if (host.IsDraining)
+                {
+                    canRunNow = false;
+                    blockedBy = CapacityBlockerKind.Host;
+                    detail = "Host is draining for update";
+                }
+                else if (requireDispatchReadiness && host.AgentStatus != AgentStatus.Online)
                 {
                     canRunNow = false;
                     blockedBy = CapacityBlockerKind.Matching;
@@ -726,6 +733,7 @@ public sealed class CapacityPlanningService
         {
             HostId = host.Id,
             HostLabel = host.Label,
+            IsDraining = host.IsDraining,
             ActiveInstances = hostInstances.Count,
             BackendUsage = new Dictionary<ExecutionBackend, CapacityCounter>
             {
@@ -790,12 +798,14 @@ public sealed class CapacityPlanningService
 
                 var backendUsage = GetBackendUsage(host, profile.ExecutionBackend, hostInstances, profilesById);
                 var activeRunnerInstances = hostInstances.Count(i => InstanceMatchesRunner(i, profile.Id));
-                return new { backendUsage, activeRunnerInstances };
+                return new { backendUsage, activeRunnerInstances, host.IsDraining };
             })
             .ToList();
 
         var effectivePoolLimit = matchingHostUsages.Sum(x => x.backendUsage.Limit);
-        var availableNow = matchingHostUsages.Sum(x => x.backendUsage.Remaining);
+        var availableNow = matchingHostUsages
+            .Where(x => !x.IsDraining)
+            .Sum(x => x.backendUsage.Remaining);
         var activeNow = matchingHostUsages.Sum(x => x.activeRunnerInstances);
 
         return new RuleRunnerCapacityView
@@ -803,7 +813,7 @@ public sealed class CapacityPlanningService
             RunnerId = profile.Id,
             RunnerName = profile.Name,
             MatchingHosts = matchingHosts.Count,
-            SaturatedHosts = matchingHostUsages.Count(x => x.backendUsage.IsSaturated),
+            SaturatedHosts = matchingHostUsages.Count(x => x.IsDraining || x.backendUsage.IsSaturated),
             EffectivePoolLimit = effectivePoolLimit,
             AvailableNow = availableNow,
             ActiveNow = activeNow

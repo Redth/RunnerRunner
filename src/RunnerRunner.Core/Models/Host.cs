@@ -43,6 +43,13 @@ public class Host
     public string? UpdateMessage { get; set; }
     public DateTime? LastUpdateStartedAt { get; set; }
     public DateTime? LastUpdateCompletedAt { get; set; }
+    public bool IsDraining { get; set; }
+    public string? PendingHostWorkerUpdateSource { get; set; }
+    public string? PendingHostWorkerUpdateVersion { get; set; }
+    public bool PendingHostWorkerUpdateAllowNonUpgrade { get; set; }
+    public string? PendingHostWorkerUpdatePublicBaseUrl { get; set; }
+    public DateTime? PendingHostWorkerUpdateQueuedAt { get; set; }
+    public DateTime? PendingHostWorkerUpdateDispatchedAt { get; set; }
     public bool IsApproved { get; set; }
 
     /// <summary>

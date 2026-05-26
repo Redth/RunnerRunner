@@ -5,8 +5,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Services.HostWorkers;
 using RunnerRunner.Server.Tests.TestSupport;
@@ -264,6 +266,102 @@ public class HostWorkerUpdateServiceTests
     }
 
     [Fact]
+    public async Task QueueUpdateAsync_DrainsActiveStaticRunnersBeforeDispatchingUpdate()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Id = "github-cred",
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubOrg = "Redth",
+            GitHubToken = "stored-token"
+        });
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = "1.0.0"
+        });
+        await store.Insert(new RunnerInstance
+        {
+            Id = "runner-1",
+            HostId = "host-1",
+            ProfileId = "profile-1",
+            RunnerName = "static-runner",
+            ProvisioningMode = "static",
+            Status = RunnerInstanceStatus.Running,
+            ContainerId = "container-1"
+        });
+
+        using var fixture = CreateService(store, LatestReleaseHandler);
+
+        await fixture.Service.QueueUpdateAsync("host-1", HostWorkerUpdateSelection.LatestRelease());
+
+        var host = await store.Get<Host>("host-1");
+        Assert.NotNull(host);
+        Assert.True(host.IsDraining);
+        Assert.Equal("Draining", host.UpdateStatus);
+        Assert.Equal("release", host.PendingHostWorkerUpdateSource);
+        Assert.NotNull(host.PendingHostWorkerUpdateQueuedAt);
+        Assert.Null(host.PendingHostWorkerUpdateDispatchedAt);
+        Assert.DoesNotContain(fixture.Dispatcher.Commands, command => command.Kind == HostCommandKind.ApplyHostWorkerUpdate);
+
+        var dispatched = Assert.Single(fixture.Dispatcher.Commands);
+        Assert.Equal(HostCommandKind.StopRunner, dispatched.Kind);
+        var stop = Assert.IsType<StopRunnerCommand>(dispatched.Command);
+        Assert.Equal("runner-1", stop.InstanceId);
+        Assert.Equal("container-1", stop.InstanceHandle);
+    }
+
+    [Fact]
+    public async Task ProcessPendingDrainedUpdateAsync_DispatchesUpdateAfterRunnersDrain()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Id = "github-cred",
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubOrg = "Redth",
+            GitHubToken = "stored-token"
+        });
+        await EnsureRunnerInstancesTable(store);
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = "1.0.0",
+            IsDraining = true,
+            PendingHostWorkerUpdateSource = "release",
+            PendingHostWorkerUpdateQueuedAt = DateTime.UtcNow
+        });
+
+        using var fixture = CreateService(store, LatestReleaseHandler);
+
+        var dispatchedPending = await fixture.Service.ProcessPendingDrainedUpdateAsync("host-1");
+
+        Assert.True(dispatchedPending);
+        var host = await store.Get<Host>("host-1");
+        Assert.NotNull(host);
+        Assert.True(host.IsDraining);
+        Assert.Equal("Queued", host.UpdateStatus);
+        Assert.NotNull(host.PendingHostWorkerUpdateDispatchedAt);
+
+        var dispatched = Assert.Single(fixture.Dispatcher.Commands);
+        Assert.Equal(HostCommandKind.ApplyHostWorkerUpdate, dispatched.Kind);
+        var update = Assert.IsType<HostWorkerUpdateCommand>(dispatched.Command);
+        Assert.Equal("v2.0.0", update.TargetVersion);
+        Assert.False(update.Force);
+    }
+
+    [Fact]
     public async Task RefreshHostUpdateStateAsync_MarksReleaseCurrentWhenCommitMatches()
     {
         const string commitSha = "3bf419d5a5a9f21f24f69dfb44b13639a4137448";
@@ -413,6 +511,10 @@ public class HostWorkerUpdateServiceTests
             .Build();
         var httpFactory = new FakeProviderHttpApi(handler);
         var dispatcher = new RecordingHostCommandDispatcher();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IHostGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IHostGrain>());
+        grainFactory.GetGrain<IRunnerInstanceGrain>(Arg.Any<string>(), null)
+            .Returns(_ => Substitute.For<IRunnerInstanceGrain>());
 
         var environment = Substitute.For<IWebHostEnvironment>();
         environment.ContentRootPath.Returns(root);
@@ -423,6 +525,7 @@ public class HostWorkerUpdateServiceTests
             new GitHubAuthenticationService(httpFactory, NullLogger<GitHubAuthenticationService>.Instance),
             store,
             dispatcher,
+            grainFactory,
             new HostWorkerLocalUpdateStore(
                 configuration,
                 environment),
@@ -436,6 +539,46 @@ public class HostWorkerUpdateServiceTests
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+
+    private static async Task EnsureRunnerInstancesTable(Shiny.DocumentDb.IDocumentStore store)
+    {
+        var sentinel = new RunnerInstance { Id = $"__sentinel__{Guid.NewGuid():N}", RunnerName = "__sentinel__" };
+        await store.Insert(sentinel);
+        await store.Remove<RunnerInstance>(sentinel.Id);
+    }
+
+    private static HttpResponseMessage LatestReleaseHandler(HttpRequestMessage request)
+    {
+        var uri = request.RequestUri!;
+        if (uri.AbsolutePath.EndsWith("/repos/Redth/RunnerRunner/releases/latest", StringComparison.Ordinal))
+        {
+            return JsonResponse("""
+                {
+                  "tag_name": "v2.0.0",
+                  "html_url": "https://github.com/Redth/RunnerRunner/releases/tag/v2.0.0",
+                  "published_at": "2026-05-16T00:00:00Z",
+                  "assets": [
+                    { "name": "release-manifest.json", "browser_download_url": "https://downloads.example.test/release-manifest.json" },
+                    { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "browser_download_url": "https://downloads.example.test/runnerrunner-hostworker-linux-x64.tar.gz" }
+                  ]
+                }
+                """);
+        }
+
+        if (uri.AbsoluteUri == "https://downloads.example.test/release-manifest.json")
+        {
+            return JsonResponse("""
+                {
+                  "assets": [
+                    { "name": "runnerrunner-hostworker-linux-x64.tar.gz", "sha256": "asset-sha" }
+                  ],
+                  "images": {}
+                }
+                """);
+        }
+
+        throw new InvalidOperationException($"Unexpected request {request.RequestUri}");
+    }
 
     private static HttpResponseMessage ZipResponse(string entryName, string content)
     {

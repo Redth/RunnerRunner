@@ -48,6 +48,7 @@ public sealed class HostWorkerEventProcessor
         if (labels.Count > 0)
             await hostGrain.UpdateLabels(new Dictionary<string, string>(labels));
 
+        await hostGrain.SetDraining(host.IsDraining);
         await hostGrain.RecordHeartbeat(connectionId, agentInfo.CurrentRunners.Count, null);
 
         var scheduler = _grainFactory.GetGrain<ISchedulerGrain>(0);
@@ -476,6 +477,12 @@ public sealed class HostWorkerEventProcessor
         host.LastUpdateStartedAt ??= DateTime.UtcNow;
         if (evt.IsComplete)
             host.LastUpdateCompletedAt = DateTime.UtcNow;
+        if (evt.IsComplete && !evt.Success)
+        {
+            var hostGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
+            await hostGrain.SetDraining(false);
+            ClearPendingUpdate(host);
+        }
 
         await _store.Update(host);
         AgentHub.NotifyQueueRelevantChange();
@@ -506,6 +513,18 @@ public sealed class HostWorkerEventProcessor
         host.UpdateStatus = "Current";
         host.UpdateMessage = $"HostWorker is current at {HostWorkerUpdateSelector.FormatVersionWithCommit(host.AgentVersion, host.AgentCommitSha)}.";
         host.LastUpdateCompletedAt ??= DateTime.UtcNow;
+        ClearPendingUpdate(host);
+    }
+
+    private static void ClearPendingUpdate(Host host)
+    {
+        host.IsDraining = false;
+        host.PendingHostWorkerUpdateSource = null;
+        host.PendingHostWorkerUpdateVersion = null;
+        host.PendingHostWorkerUpdateAllowNonUpgrade = false;
+        host.PendingHostWorkerUpdatePublicBaseUrl = null;
+        host.PendingHostWorkerUpdateQueuedAt = null;
+        host.PendingHostWorkerUpdateDispatchedAt = null;
     }
 
     private static ImageRefreshStatusEvent WithHost(string hostId, ImageRefreshStatusEvent evt)
