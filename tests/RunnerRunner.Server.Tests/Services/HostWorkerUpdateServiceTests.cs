@@ -263,6 +263,13 @@ public class HostWorkerUpdateServiceTests
         Assert.Equal("https://downloads.example.test/runnerrunner-hostworker-linux-x64.tar.gz", command.AssetUrl);
         Assert.Equal("asset-sha", command.Sha256);
         Assert.True(command.Force);
+
+        var task = Assert.Single(fixture.Tasks.GetSnapshot());
+        Assert.Equal(LongRunningTaskKind.HostWorkerUpdate, task.Kind);
+        Assert.Equal(LongRunningTaskStatus.Running, task.Status);
+        Assert.Equal("host-1", task.HostId);
+        Assert.Equal("v2.0.0", task.Subject);
+        Assert.Contains("Queued update to v2.0.0", task.StatusText);
     }
 
     [Fact]
@@ -309,6 +316,11 @@ public class HostWorkerUpdateServiceTests
         Assert.NotNull(host.PendingHostWorkerUpdateQueuedAt);
         Assert.Null(host.PendingHostWorkerUpdateDispatchedAt);
         Assert.DoesNotContain(fixture.Dispatcher.Commands, command => command.Kind == HostCommandKind.ApplyHostWorkerUpdate);
+        var task = Assert.Single(fixture.Tasks.GetSnapshot());
+        Assert.Equal(LongRunningTaskKind.HostWorkerUpdate, task.Kind);
+        Assert.Equal(LongRunningTaskStatus.Running, task.Status);
+        Assert.Equal(10, task.ProgressPercent);
+        Assert.Contains("Draining 1 active runner", task.StatusText);
 
         var dispatched = Assert.Single(fixture.Dispatcher.Commands);
         Assert.Equal(HostCommandKind.StopRunner, dispatched.Kind);
@@ -353,6 +365,11 @@ public class HostWorkerUpdateServiceTests
         Assert.True(host.IsDraining);
         Assert.Equal("Queued", host.UpdateStatus);
         Assert.NotNull(host.PendingHostWorkerUpdateDispatchedAt);
+        var task = Assert.Single(fixture.Tasks.GetSnapshot());
+        Assert.Equal(LongRunningTaskKind.HostWorkerUpdate, task.Kind);
+        Assert.Equal(LongRunningTaskStatus.Running, task.Status);
+        Assert.Equal("v2.0.0", task.Subject);
+        Assert.Contains("queued update to v2.0.0", task.StatusText.ToLowerInvariant());
 
         var dispatched = Assert.Single(fixture.Dispatcher.Commands);
         Assert.Equal(HostCommandKind.ApplyHostWorkerUpdate, dispatched.Kind);
@@ -511,6 +528,7 @@ public class HostWorkerUpdateServiceTests
             .Build();
         var httpFactory = new FakeProviderHttpApi(handler);
         var dispatcher = new RecordingHostCommandDispatcher();
+        var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IHostGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IHostGrain>());
         grainFactory.GetGrain<IRunnerInstanceGrain>(Arg.Any<string>(), null)
@@ -529,9 +547,10 @@ public class HostWorkerUpdateServiceTests
             new HostWorkerLocalUpdateStore(
                 configuration,
                 environment),
+            tasks,
             NullLogger<HostWorkerUpdateService>.Instance);
 
-        return new ServiceFixture(root, service, dispatcher, httpFactory);
+        return new ServiceFixture(root, service, dispatcher, httpFactory, tasks);
     }
 
     private static HttpResponseMessage JsonResponse(string json) =>
@@ -604,21 +623,25 @@ public class HostWorkerUpdateServiceTests
             string root,
             HostWorkerUpdateService service,
             RecordingHostCommandDispatcher dispatcher,
-            FakeProviderHttpApi httpFactory)
+            FakeProviderHttpApi httpFactory,
+            LongRunningTaskService tasks)
         {
             Root = root;
             Service = service;
             Dispatcher = dispatcher;
             _httpFactory = httpFactory;
+            Tasks = tasks;
         }
 
         public string Root { get; }
         public HostWorkerUpdateService Service { get; }
         public RecordingHostCommandDispatcher Dispatcher { get; }
+        public LongRunningTaskService Tasks { get; }
 
         public void Dispose()
         {
             _httpFactory.Dispose();
+            Tasks.Dispose();
             if (Directory.Exists(Root))
                 Directory.Delete(Root, recursive: true);
         }

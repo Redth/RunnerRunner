@@ -153,4 +153,58 @@ public class LongRunningTaskServiceTests
         Assert.Equal("HostWorker is not connected.", task.Error);
         Assert.Equal(0, service.ActiveCount);
     }
+
+    [Fact]
+    public void TrackHostWorkerUpdateCreatesRunningTask()
+    {
+        using var service = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var host = new Host
+        {
+            Id = "host-1",
+            Name = "linux-host"
+        };
+
+        var taskId = service.TrackHostWorkerUpdate(host, "v2.0.0", "3bf419d5a5a9f21f24f69dfb44b13639a4137448", "Queued update.");
+
+        var task = Assert.Single(service.GetSnapshot());
+        Assert.Equal(taskId, task.Id);
+        Assert.Equal(LongRunningTaskKind.HostWorkerUpdate, task.Kind);
+        Assert.Equal("host-1", task.HostId);
+        Assert.Equal("v2.0.0+3bf419d5", task.Subject);
+        Assert.Equal("Update HostWorker to v2.0.0+3bf419d5", task.Title);
+        Assert.Equal(LongRunningTaskStatus.Running, task.Status);
+        Assert.Equal(1, service.ActiveCount);
+    }
+
+    [Fact]
+    public void HostWorkerUpdateStatusTransitionsToSucceededAndFailed()
+    {
+        using var service = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var host = new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            LatestAvailableVersion = "v2.0.0"
+        };
+        service.TrackHostWorkerUpdate(host, "v2.0.0", null, "Queued update.");
+
+        service.UpdateHostWorkerUpdate(host, "Downloading", "Downloading update.", "v2.0.0", null);
+        var running = Assert.Single(service.GetSnapshot());
+        Assert.Equal(LongRunningTaskStatus.Running, running.Status);
+        Assert.Equal("Downloading update.", running.StatusText);
+        Assert.Equal(30, running.ProgressPercent);
+
+        service.MarkHostWorkerUpdateSucceeded(host, "HostWorker is current.");
+        var succeeded = Assert.Single(service.GetSnapshot());
+        Assert.Equal(LongRunningTaskStatus.Succeeded, succeeded.Status);
+        Assert.Equal(100, succeeded.ProgressPercent);
+        Assert.Equal("HostWorker is current.", succeeded.StatusText);
+
+        service.TrackHostWorkerUpdate(host, "v3.0.0", null, "Queued update.");
+        service.MarkHostWorkerUpdateFailed(host, "Download failed.");
+        var failed = Assert.Single(service.GetSnapshot());
+        Assert.Equal(LongRunningTaskStatus.Failed, failed.Status);
+        Assert.Equal("Download failed.", failed.Error);
+        Assert.Equal(0, service.ActiveCount);
+    }
 }

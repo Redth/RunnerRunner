@@ -240,6 +240,16 @@ else
                             <td>@(inst.LastHealthCheck?.ToString("HH:mm:ss") ?? "—")</td>
                             <td class="actions-cell">
                                 <a href="/logs?source=runner:@inst.Id" class="btn btn-sm btn-outline-secondary" title="View logs"><i class="bi bi-file-text"></i></a>
+                                @if (GetProviderRunnerUrl(inst) is { } providerRunnerUrl)
+                                {
+                                    <a href="@providerRunnerUrl"
+                                       class="btn btn-sm btn-outline-secondary"
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                       title="Open @GetProviderRunnerLabel(inst) runners page">
+                                        <i class="bi bi-box-arrow-up-right"></i><span class="host-action-label"> Provider</span>
+                                    </a>
+                                }
                                 @if (!isOrphan && inst.Status is RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting)
                                 {
                                     <button class="btn btn-sm btn-warning" @onclick="() => StopInstance(inst)"><i class="bi bi-stop-circle"></i> Stop</button>
@@ -291,6 +301,8 @@ else
     private Dictionary<string, Host> hostsById = new();
     private HashSet<string> validHostIds = new();
     private Dictionary<string, string> profileNames = new();
+    private Dictionary<string, RunnerProfile> profilesById = new();
+    private Dictionary<string, ProviderCredential> credentialsById = new();
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private int unmanagedHiddenCount;
     private static readonly ExecutionBackend[] BackendCapacityOrder =
@@ -349,10 +361,13 @@ else
         instances = allInstances.Where(IsManagedInstance).ToList();
         var hosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
+        var credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
         validHostIds = hosts.Select(h => h.Id).ToHashSet();
         hostsById = hosts.ToDictionary(h => h.Id);
         hostNames = hosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
+        profilesById = profiles.ToDictionary(p => p.Id, p => p);
+        credentialsById = credentials.ToDictionary(c => c.Id, c => c);
         capacitySnapshot = await CapacityService.GetSnapshotAsync();
 
         // Auto-expand all hosts that have instances
@@ -530,6 +545,31 @@ else
 
     private string GetProfileName(RunnerInstance instance) =>
         profileNames.GetValueOrDefault(instance.ProfileId, instance.ProfileId);
+
+    private string? GetProviderRunnerUrl(RunnerInstance instance)
+    {
+        if (!profilesById.TryGetValue(instance.ProfileId, out var profile))
+            return null;
+
+        var credential = ResolveCredential(profile);
+        return ProviderNavigationLinks.BuildRunnerPageUrl(profile, credential);
+    }
+
+    private string GetProviderRunnerLabel(RunnerInstance instance)
+        => profilesById.TryGetValue(instance.ProfileId, out var profile)
+            ? ProviderNavigationLinks.GetProviderLabel(profile.Provider.ToString())
+            : "provider";
+
+    private ProviderCredential? ResolveCredential(RunnerProfile profile)
+    {
+        if (!string.IsNullOrWhiteSpace(profile.ProviderCredentialId)
+            && credentialsById.TryGetValue(profile.ProviderCredentialId, out var profileCredential))
+        {
+            return profileCredential;
+        }
+
+        return credentialsById.Values.FirstOrDefault(c => c.Provider == profile.Provider);
+    }
 
     private void ToggleHost(string hostId)
     {
