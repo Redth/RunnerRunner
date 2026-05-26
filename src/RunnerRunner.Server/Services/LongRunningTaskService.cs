@@ -2,6 +2,7 @@ using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Hubs;
 using RunnerRunner.Server.Services.HostWorkers;
+using HostModel = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Services;
 
@@ -76,7 +77,7 @@ public sealed class LongRunningTaskService : IDisposable
     }
 
     public string TrackHostWorkerUpdate(
-        Host host,
+        HostModel host,
         string? targetVersion,
         string? targetCommitSha,
         string statusText,
@@ -91,7 +92,7 @@ public sealed class LongRunningTaskService : IDisposable
             null);
 
     public void UpdateHostWorkerUpdate(
-        Host host,
+        HostModel host,
         string? status,
         string? statusText,
         string? targetVersion,
@@ -107,7 +108,7 @@ public sealed class LongRunningTaskService : IDisposable
             null);
     }
 
-    public void MarkHostWorkerUpdateSucceeded(Host host, string? statusText)
+    public void MarkHostWorkerUpdateSucceeded(HostModel host, string? statusText)
     {
         var taskId = BuildHostWorkerUpdateTaskId(host.Id);
         var changed = false;
@@ -129,7 +130,7 @@ public sealed class LongRunningTaskService : IDisposable
             NotifyChanged();
     }
 
-    public void MarkHostWorkerUpdateFailed(Host host, string error)
+    public void MarkHostWorkerUpdateFailed(HostModel host, string error)
     {
         var taskId = BuildHostWorkerUpdateTaskId(host.Id);
         var changed = false;
@@ -323,7 +324,7 @@ public sealed class LongRunningTaskService : IDisposable
     private void NotifyChanged() => OnChanged?.Invoke();
 
     private string UpsertHostWorkerUpdate(
-        Host host,
+        HostModel host,
         string? targetVersion,
         string? targetCommitSha,
         string? status,

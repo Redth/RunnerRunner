@@ -5,6 +5,7 @@ using RunnerRunner.Core.HostWorkers;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
+using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Services.HostWorkers;
 using Shiny.DocumentDb;
 using Host = RunnerRunner.Core.Models.Host;
