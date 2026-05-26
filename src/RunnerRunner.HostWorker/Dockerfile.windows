@@ -13,7 +13,7 @@ COPY . .
 
 ENV DOTNET_ENVIRONMENT=Production
 ENV HostWorker__Platform=Windows
-ENV HostWorker__DataRoot=C:\ProgramData\RunnerRunner
+ENV HostWorker__DataRoot=C:/ProgramData/RunnerRunner
 ENV DOCKER_HOST=npipe://./pipe/docker_engine
 
 ENTRYPOINT ["C:\\app\\RunnerRunner.HostWorker.exe"]

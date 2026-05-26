@@ -243,7 +243,7 @@
 
             if (IsUpdateMode && UpdateHost != null)
             {
-                target = InferTarget(UpdateHost);
+                target = HostWorkerEnrollmentGuideBuilder.GetTargetForHost(UpdateHost);
                 hostName = UpdateHost.Label;
                 hostId = UpdateHost.WorkerId ?? UpdateHost.Id;
                 manualUpdateSource = UpdateSource;
@@ -1058,24 +1058,6 @@
     public async ValueTask DisposeAsync()
     {
         await StopWizardAsync(notifyChanged: false);
-    }
-
-    private static HostWorkerEnrollmentTarget InferTarget(Host host)
-    {
-        if (host.IsContainerized)
-        {
-            if (host.Platform == HostPlatform.Windows)
-                return HostWorkerEnrollmentTarget.WindowsDockerWindows;
-
-            return HostWorkerEnrollmentTarget.LinuxDocker;
-        }
-
-        return host.Platform switch
-        {
-            HostPlatform.MacOS => HostWorkerEnrollmentTarget.MacOSNative,
-            HostPlatform.Windows => HostWorkerEnrollmentTarget.WindowsService,
-            _ => HostWorkerEnrollmentTarget.LinuxDocker
-        };
     }
 
     private static string GetStatusBadge(AgentStatus status) => status switch

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Services.HostWorkers;
 
 namespace RunnerRunner.Server.Tests.Services;
@@ -103,6 +104,24 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
         Assert.Contains("Install-HostWorker.ps1", instructions.RemoteSetupScript);
         Assert.Contains("-ServerUrl 'http://runner.example.com:4780'", instructions.RemoteSetupScript);
         Assert.Contains("-EnrollmentToken 'token-123'", instructions.RemoteSetupScript);
+    }
+
+    [Fact]
+    public void BuildWindowsDockerWindows_UsesSlashSafeDataMountTarget()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.Build(new HostWorkerEnrollmentRequest(
+            HostWorkerEnrollmentTarget.WindowsDockerWindows,
+            "http://runner.example.com:4780",
+            "token-123",
+            "windows-docker-1",
+            "Windows Docker 1",
+            new HostWorkerEnrollmentProxy(null, null, null)));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Contains("target=C:/ProgramData/RunnerRunner", command);
+        Assert.DoesNotContain(@"target=C:\ProgramData\RunnerRunner", command);
     }
 
     [Fact]
@@ -238,6 +257,130 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
         var command = Assert.Single(instructions.CommandBlocks).Command;
         Assert.Contains("image='ghcr.io/example/worker:abc123def456'", command);
         Assert.DoesNotContain("image='ghcr.io/example/worker:latest'", command);
+    }
+
+    [Fact]
+    public void BuildManualUpdate_ForWindowsDockerWindows_UsesSlashSafeDataMountTarget()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildManualUpdate(new HostWorkerManualUpdateRequest(
+            HostWorkerEnrollmentTarget.WindowsDockerWindows,
+            "host-1",
+            "Windows Docker",
+            "windows-docker",
+            "abcdef123456",
+            new HostWorkerEnrollmentProxy(null, null, null)));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Contains("target=C:/ProgramData/RunnerRunner", command);
+        Assert.DoesNotContain(@"target=C:\ProgramData\RunnerRunner", command);
+    }
+
+    [Fact]
+    public void BuildRemoval_ForWindowsService_RemovesServiceAndData()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildRemoval(new HostWorkerRemovalRequest(
+            HostWorkerEnrollmentTarget.WindowsService,
+            "host-1",
+            "Windows Host",
+            "windows-host",
+            null,
+            @"C:\rr",
+            @"C:\rr\work"));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Equal(HostWorkerEnrollmentRemoteShell.PowerShell, instructions.RemoteShell);
+        Assert.Contains("sc.exe delete $serviceName", command);
+        Assert.Contains("Stop-Process -Id $runnerProcessId", command);
+        Assert.Contains("rr.pid", command);
+        Assert.Contains(@"C:\Program Files\RunnerRunner", command);
+        Assert.Contains(@"C:\ProgramData\RunnerRunner", command);
+        Assert.Contains(@"C:\rr", command);
+    }
+
+    [Fact]
+    public void BuildRemoval_ForMacOSNative_UnloadsLaunchAgent()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildRemoval(new HostWorkerRemovalRequest(
+            HostWorkerEnrollmentTarget.MacOSNative,
+            "host-1",
+            "Mac Host",
+            "mac-host",
+            null,
+            "/Users/runner/.runnerrunner",
+            "/Users/runner/.runnerrunner/work"));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Equal(HostWorkerEnrollmentRemoteShell.Bash, instructions.RemoteShell);
+        Assert.Contains("launchctl bootout", command);
+        Assert.Contains("kill \"$pid\"", command);
+        Assert.Contains("rr.pid", command);
+        Assert.Contains("com.runnerrunner.hostworker", command);
+        Assert.Contains("rm -rf \"${install_root}\"", command);
+    }
+
+    [Fact]
+    public void BuildRemoval_ForLinuxDocker_RemovesContainerAndVolumes()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildRemoval(new HostWorkerRemovalRequest(
+            HostWorkerEnrollmentTarget.LinuxDocker,
+            "host-1",
+            "Linux Docker",
+            "linux-docker",
+            "abcdef123456",
+            "/var/lib/runnerrunner",
+            null));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Equal(HostWorkerEnrollmentRemoteShell.Bash, instructions.RemoteShell);
+        Assert.Contains("container='abcdef123456'", command);
+        Assert.Contains("docker compose down -v --remove-orphans", command);
+        Assert.Contains("runnerrunner-hostworker-data", command);
+        Assert.Contains("label=runnerrunner.managed=true", command);
+    }
+
+    [Fact]
+    public void BuildRemoval_ForWindowsDocker_RemovesContainerAndVolume()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.BuildRemoval(new HostWorkerRemovalRequest(
+            HostWorkerEnrollmentTarget.WindowsDockerWindows,
+            "host-1",
+            "Windows Docker",
+            "windows-docker",
+            "abcdef123456",
+            null,
+            null));
+
+        var command = Assert.Single(instructions.CommandBlocks).Command;
+        Assert.Equal(HostWorkerEnrollmentRemoteShell.PowerShell, instructions.RemoteShell);
+        Assert.Contains("$container = 'abcdef123456'", command);
+        Assert.Contains("docker rm -f $container", command);
+        Assert.Contains("runnerrunner-hostworker-windows-data", command);
+        Assert.Contains("label=runnerrunner.managed=true", command);
+    }
+
+    [Fact]
+    public void GetTargetForHost_UsesContainerizedWindowsTarget()
+    {
+        var host = new Host
+        {
+            Name = "windows-container",
+            Platform = HostPlatform.Windows,
+            IsContainerized = true
+        };
+
+        var target = HostWorkerEnrollmentGuideBuilder.GetTargetForHost(host);
+
+        Assert.Equal(HostWorkerEnrollmentTarget.WindowsDockerWindows, target);
     }
 
     private static HostWorkerEnrollmentGuideBuilder CreateBuilder(Dictionary<string, string?>? values = null)

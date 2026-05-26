@@ -213,5 +213,10 @@ jobs:
             -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:main" `
             -t "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}" `
             $publishDir
+          docker run --rm `
+            --entrypoint powershell `
+            "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}" `
+            -NoProfile `
+            -Command '$ErrorActionPreference = "Stop"; if ($env:HostWorker__DataRoot -match "[`r`n]") { throw "HostWorker__DataRoot contains a control character." }; [System.IO.Directory]::CreateDirectory($env:HostWorker__DataRoot) | Out-Null; Write-Host $env:HostWorker__DataRoot'
           docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:main"
           docker push "${{ env.HOSTWORKER_WINDOWS_IMAGE }}:${{ github.sha }}"
