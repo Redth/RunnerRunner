@@ -238,7 +238,7 @@ docker run -d `
   -e 'HostWorker__Platform=Windows' `
   -e 'DOTNET_ENVIRONMENT=Production' `
   --mount 'type=npipe,source=\\.\pipe\docker_engine,target=\\.\pipe\docker_engine' `
-  --mount 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:\ProgramData\RunnerRunner' `
+  --mount 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:/ProgramData/RunnerRunner' `
   ghcr.io/redth/runnerrunner-hostworker-windows:latest
 ```
 

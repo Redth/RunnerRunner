@@ -56,6 +56,15 @@ public sealed record HostWorkerManualUpdateRequest(
     HostWorkerEnrollmentProxy Proxy,
     HostWorkerManualUpdatePackage? Package = null);
 
+public sealed record HostWorkerRemovalRequest(
+    HostWorkerEnrollmentTarget Target,
+    string HostId,
+    string HostName,
+    string? WorkerId,
+    string? ContainerId,
+    string? RunnerBasePath,
+    string? WorkDirectory);
+
 public sealed record HostWorkerManualUpdatePackage(
     HostWorkerUpdateSourceKind Source,
     string? RequestedVersion,
@@ -153,6 +162,18 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         };
     }
 
+    public HostWorkerEnrollmentInstructions BuildRemoval(HostWorkerRemovalRequest request)
+        => request.Target switch
+        {
+            HostWorkerEnrollmentTarget.LinuxDocker => BuildDockerRemoval(request, HostPlatform.Linux),
+            HostWorkerEnrollmentTarget.MacOSDocker => BuildDockerRemoval(request, HostPlatform.Linux),
+            HostWorkerEnrollmentTarget.WindowsDockerLinux => BuildDockerRemoval(request, HostPlatform.Linux),
+            HostWorkerEnrollmentTarget.MacOSNative => BuildMacOSNativeRemoval(request),
+            HostWorkerEnrollmentTarget.WindowsService => BuildWindowsServiceRemoval(request),
+            HostWorkerEnrollmentTarget.WindowsDockerWindows => BuildWindowsDockerRemoval(request),
+            _ => throw new ArgumentOutOfRangeException(nameof(request.Target), request.Target, "Unsupported removal target.")
+        };
+
     public static string GetTargetDisplayName(HostWorkerEnrollmentTarget target)
         => target switch
         {
@@ -179,6 +200,24 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             _ => "host"
         };
         return $"{prefix}-{suffix}";
+    }
+
+    public static HostWorkerEnrollmentTarget GetTargetForHost(Host host)
+    {
+        if (host.IsContainerized)
+        {
+            if (host.Platform == HostPlatform.Windows)
+                return HostWorkerEnrollmentTarget.WindowsDockerWindows;
+
+            return HostWorkerEnrollmentTarget.LinuxDocker;
+        }
+
+        return host.Platform switch
+        {
+            HostPlatform.MacOS => HostWorkerEnrollmentTarget.MacOSNative,
+            HostPlatform.Windows => HostWorkerEnrollmentTarget.WindowsService,
+            _ => HostWorkerEnrollmentTarget.LinuxDocker
+        };
     }
 
     private HostWorkerEnrollmentInstructions BuildLinuxDocker(
@@ -385,7 +424,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
           -e 'HostWorker__Platform=Windows' `
           -e 'DOTNET_ENVIRONMENT=Production' `
         {{BuildWindowsDockerProxyArgs(request.Proxy)}}  --mount 'type=npipe,source=\\.\pipe\docker_engine,target=\\.\pipe\docker_engine' `
-          --mount 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:\ProgramData\RunnerRunner' `
+          --mount 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:/ProgramData/RunnerRunner' `
           {{options.WindowsHostWorkerImage}}
         docker logs -f runnerrunner-host-worker-windows
         """;
@@ -890,7 +929,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
 
         $dockerArgs += @(
           '--mount', 'type=npipe,source=\\.\pipe\docker_engine,target=\\.\pipe\docker_engine',
-          '--mount', 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:\ProgramData\RunnerRunner',
+          '--mount', 'type=volume,source=runnerrunner-hostworker-windows-data,target=C:/ProgramData/RunnerRunner',
           $image
         )
 
@@ -949,6 +988,230 @@ public sealed class HostWorkerEnrollmentGuideBuilder
 
         return notes;
     }
+
+    private HostWorkerEnrollmentInstructions BuildDockerRemoval(
+        HostWorkerRemovalRequest request,
+        HostPlatform platform)
+    {
+        var container = string.IsNullOrWhiteSpace(request.ContainerId)
+            ? "runnerrunner-host-worker"
+            : request.ContainerId;
+        var command = NormalizeCommand("""
+        set -euo pipefail
+        container=__CONTAINER__
+        container_name='runnerrunner-host-worker'
+
+        if [ -d "${HOME}/runnerrunner-hostworker" ]; then
+          (cd "${HOME}/runnerrunner-hostworker" && docker compose down -v --remove-orphans || true)
+        fi
+
+        if docker container inspect "$container" >/dev/null 2>&1; then
+          docker rm -f "$container"
+        fi
+        if [ "$container" != "$container_name" ] && docker container inspect "$container_name" >/dev/null 2>&1; then
+          docker rm -f "$container_name"
+        fi
+
+        runner_containers="$(docker ps -aq --filter label=runnerrunner.managed=true)"
+        if [ -n "$runner_containers" ]; then
+          docker rm -f $runner_containers
+        fi
+
+        docker volume rm runnerrunner-hostworker-data runnerrunner-hostworker_hostworker-data hostworker-data 2>/dev/null || true
+        rm -rf "${HOME}/runnerrunner-hostworker"
+        """)
+            .Replace("__CONTAINER__", ShellQuote(container));
+
+        return new HostWorkerEnrollmentInstructions(
+            request.Target,
+            platform,
+            $"Remove - {GetTargetDisplayName(request.Target)}",
+            "Stop and remove the HostWorker container, RunnerRunner-managed runner containers, Docker volumes, and the generated compose project from the host.",
+            [
+                "Run this on the Docker host that owns the HostWorker.",
+                "The user running the command can access Docker.",
+                "This removes HostWorker data, logs, and RunnerRunner-managed runner containers on that Docker engine."
+            ],
+            [
+                new(
+                    "Clean up the Docker HostWorker",
+                    "Run this on the target host before removing the host record from RunnerRunner.",
+                    "bash",
+                    command)
+            ],
+            command,
+            HostWorkerEnrollmentRemoteShell.Bash,
+            BuildRemovalNotes(request));
+    }
+
+    private HostWorkerEnrollmentInstructions BuildMacOSNativeRemoval(HostWorkerRemovalRequest request)
+    {
+        var command = NormalizeCommand("""
+        set -euo pipefail
+        install_root="${INSTALL_ROOT:-${HOME}/.runnerrunner}"
+        service_label='com.runnerrunner.hostworker'
+        runner_base_path=__RUNNER_BASE_PATH__
+        work_directory=__WORK_DIRECTORY__
+        native_base_path="${runner_base_path:-${install_root}}"
+        instances_dir="${native_base_path}/instances"
+
+        if [ -d "$instances_dir" ]; then
+          find "$instances_dir" -name rr.pid -print | while IFS= read -r pid_file; do
+            pid="$(cat "$pid_file" 2>/dev/null || true)"
+            case "$pid" in ''|*[!0-9]*) continue ;; esac
+            kill "$pid" 2>/dev/null || true
+          done
+        fi
+
+        launchctl bootout "gui/$(id -u)/${service_label}" 2>/dev/null || true
+        launchctl unload "${HOME}/Library/LaunchAgents/${service_label}.plist" 2>/dev/null || true
+        rm -f "${HOME}/Library/LaunchAgents/${service_label}.plist"
+        rm -rf "${install_root}"
+        if [ -n "$work_directory" ]; then rm -rf "$work_directory"; fi
+        if [ -n "$runner_base_path" ] && [ "$runner_base_path" != "$install_root" ]; then rm -rf "$runner_base_path"; fi
+        """)
+            .Replace("__RUNNER_BASE_PATH__", ShellQuote(request.RunnerBasePath ?? ""))
+            .Replace("__WORK_DIRECTORY__", ShellQuote(request.WorkDirectory ?? ""));
+
+        return new HostWorkerEnrollmentInstructions(
+            request.Target,
+            HostPlatform.MacOS,
+            $"Remove - {GetTargetDisplayName(request.Target)}",
+            "Stop RunnerRunner-managed native runner processes, unload the macOS LaunchAgent, and remove the HostWorker install, logs, update cache, and local runner working directories.",
+            [
+                "Run from the same macOS user account that owns the existing LaunchAgent.",
+                "This removes ~/.runnerrunner by default.",
+                "Stop or drain active runners before deleting the server host record."
+            ],
+            [
+                new(
+                    "Remove the macOS HostWorker LaunchAgent",
+                    "Run this in Terminal on the target macOS host.",
+                    "bash",
+                    command)
+            ],
+            command,
+            HostWorkerEnrollmentRemoteShell.Bash,
+            BuildRemovalNotes(request));
+    }
+
+    private HostWorkerEnrollmentInstructions BuildWindowsServiceRemoval(HostWorkerRemovalRequest request)
+    {
+        var command = NormalizeCommand("""
+        $ErrorActionPreference = 'Stop'
+        $serviceName = 'RunnerRunnerHostWorker'
+        $deployDir = 'C:\Program Files\RunnerRunner'
+        $dataDir = 'C:\ProgramData\RunnerRunner'
+        $runnerBasePath = __RUNNER_BASE_PATH__
+        $workDirectory = __WORK_DIRECTORY__
+        $nativeBasePath = if ([string]::IsNullOrWhiteSpace($runnerBasePath)) { 'C:\rr' } else { $runnerBasePath }
+        $instancesDir = Join-Path $nativeBasePath 'instances'
+
+        if (Test-Path $instancesDir) {
+          Get-ChildItem -Path $instancesDir -Filter rr.pid -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $pidText = [string](Get-Content -Raw -Path $_.FullName -ErrorAction SilentlyContinue)
+            $pidText = $pidText.Trim()
+            $runnerProcessId = 0
+            if ([int]::TryParse($pidText, [ref]$runnerProcessId)) {
+              Stop-Process -Id $runnerProcessId -Force -ErrorAction SilentlyContinue
+            }
+          }
+        }
+
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($null -ne $service) {
+          if ($service.Status -ne 'Stopped') {
+            Stop-Service -Name $serviceName -Force
+            $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+          }
+          sc.exe delete $serviceName | Out-Null
+          Start-Sleep -Seconds 2
+        }
+
+        Remove-Item -Path $deployDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($workDirectory)) {
+          Remove-Item -Path $workDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -Path $nativeBasePath -Recurse -Force -ErrorAction SilentlyContinue
+        """)
+            .Replace("__RUNNER_BASE_PATH__", PowerShellQuote(request.RunnerBasePath ?? ""))
+            .Replace("__WORK_DIRECTORY__", PowerShellQuote(request.WorkDirectory ?? ""));
+
+        return new HostWorkerEnrollmentInstructions(
+            request.Target,
+            HostPlatform.Windows,
+            $"Remove - {GetTargetDisplayName(request.Target)}",
+            "Stop RunnerRunner-managed native runner processes, delete the Windows service, then remove the HostWorker binaries, ProgramData, logs, and local runner working directories.",
+            [
+                "Run PowerShell as Administrator.",
+                "This removes C:\\Program Files\\RunnerRunner and C:\\ProgramData\\RunnerRunner.",
+                "Stop or drain active runners before deleting the server host record."
+            ],
+            [
+                new(
+                    "Remove the Windows HostWorker service",
+                    "Run this in an elevated PowerShell session on the Windows host.",
+                    "powershell",
+                    command)
+            ],
+            command,
+            HostWorkerEnrollmentRemoteShell.PowerShell,
+            BuildRemovalNotes(request));
+    }
+
+    private HostWorkerEnrollmentInstructions BuildWindowsDockerRemoval(HostWorkerRemovalRequest request)
+    {
+        var container = string.IsNullOrWhiteSpace(request.ContainerId)
+            ? "runnerrunner-host-worker-windows"
+            : request.ContainerId;
+        var command = NormalizeCommand("""
+        $ErrorActionPreference = 'Stop'
+        $container = __CONTAINER__
+        $containerName = 'runnerrunner-host-worker-windows'
+
+        docker rm -f $container 2>$null
+        if ($container -ne $containerName) {
+          docker rm -f $containerName 2>$null
+        }
+
+        $runnerContainers = docker ps -aq --filter 'label=runnerrunner.managed=true'
+        if ($runnerContainers) {
+          docker rm -f $runnerContainers
+        }
+
+        docker volume rm runnerrunner-hostworker-windows-data 2>$null
+        """)
+            .Replace("__CONTAINER__", PowerShellQuote(container));
+
+        return new HostWorkerEnrollmentInstructions(
+            request.Target,
+            HostPlatform.Windows,
+            $"Remove - {GetTargetDisplayName(request.Target)}",
+            "Remove the Windows HostWorker container, RunnerRunner-managed runner containers, and the HostWorker data volume from the Windows Docker host.",
+            [
+                "Run PowerShell as Administrator.",
+                "Docker Engine is in Windows container mode.",
+                "This removes the runnerrunner-hostworker-windows-data Docker volume."
+            ],
+            [
+                new(
+                    "Remove the Windows HostWorker container",
+                    "Run this in an elevated PowerShell session on the Windows Docker host.",
+                    "powershell",
+                    command)
+            ],
+            command,
+            HostWorkerEnrollmentRemoteShell.PowerShell,
+            BuildRemovalNotes(request));
+    }
+
+    private static IReadOnlyList<string> BuildRemovalNotes(HostWorkerRemovalRequest request) =>
+        [
+            $"Host: {request.HostName}",
+            "After the host-side cleanup succeeds, remove the host record from RunnerRunner to clear assignments, instances, and direct provisioning-rule targeting.",
+            "If the host is still online, RunnerRunner will try to stop active runners before deleting its server-side records."
+        ];
 
     private static string DeriveServerUrlFromUiBase(string uiBaseUri)
     {

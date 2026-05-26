@@ -14,6 +14,7 @@
 @inject CapacityPlanningService CapacityService
 @inject IHostCommandDispatcher HostCommandDispatcher
 @inject HostWorkerUpdateService HostWorkerUpdateService
+@inject HostWorkerEnrollmentGuideBuilder GuideBuilder
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -192,6 +193,115 @@
                     <button type="button" class="btn btn-outline-secondary" @onclick="CloseConfigureHost">Cancel</button>
                     <button type="button" class="btn btn-primary" @onclick="SaveConfiguration">
                         <i class="bi bi-check2 me-1"></i>Save configuration
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (removalHost is not null && CurrentRemovalInstructions is { } removalInstructions)
+{
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal fade show d-block rr-modal" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="remove-host-title" @onclick="CloseRemoveHostGuide">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 id="remove-host-title" class="modal-title">
+                            <i class="bi bi-trash3 me-2"></i>Remove @removalHost.Label
+                        </h5>
+                        <div class="modal-kicker">Clean up the HostWorker on the target machine, then remove the server-side host record.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseRemoveHostGuide" aria-label="Close" disabled="@isRemovingHost"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!string.IsNullOrWhiteSpace(removeError))
+                    {
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle-fill me-1"></i>@removeError
+                        </div>
+                    }
+
+                    <div class="row g-3">
+                        <div class="col-lg-8">
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5>@removalInstructions.Title</h5>
+                                    <p>@removalInstructions.Summary</p>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <h6>Prerequisites</h6>
+                                            <ul class="small">
+                                                @foreach (var prerequisite in removalInstructions.Prerequisites)
+                                                {
+                                                    <li>@prerequisite</li>
+                                                }
+                                            </ul>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <h6>Cleanup target</h6>
+                                            <ul class="small">
+                                                <li><strong>Host ID:</strong> <code>@removalHost.Id</code></li>
+                                                <li><strong>Worker ID:</strong> <code>@(removalHost.WorkerId ?? "unknown")</code></li>
+                                                <li><strong>Platform:</strong> @removalInstructions.HostPlatform</li>
+                                                @if (!string.IsNullOrWhiteSpace(removalHost.ContainerId))
+                                                {
+                                                    <li><strong>Container:</strong> <code>@removalHost.ContainerId</code></li>
+                                                }
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            @foreach (var block in removalInstructions.CommandBlocks)
+                            {
+                                <div class="card mb-3">
+                                    <div class="card-body">
+                                        <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+                                            <div>
+                                                <h6 class="mb-1">@block.Title</h6>
+                                                <div class="small text-muted">@block.Description</div>
+                                            </div>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick='() => CopyRemovalCommand(block.Command, block.Title)'>
+                                                @(removeCopiedKey == block.Title ? "Copied" : "Copy")
+                                            </button>
+                                        </div>
+                                        <pre class="enrollment-command"><code>@block.Command</code></pre>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h6><i class="bi bi-info-circle me-1"></i>Removal flow</h6>
+                                    <ol class="small mb-0">
+                                        <li>Run the cleanup command on the target host.</li>
+                                        <li>Confirm the HostWorker service or container is gone.</li>
+                                        <li>Click <strong>I cleaned up the host; remove record</strong>.</li>
+                                    </ol>
+                                </div>
+                            </div>
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6>Notes</h6>
+                                    <ul class="small mb-0">
+                                        @foreach (var note in removalInstructions.Notes)
+                                        {
+                                            <li>@note</li>
+                                        }
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseRemoveHostGuide" disabled="@isRemovingHost">Cancel</button>
+                    <button type="button" class="btn btn-danger" @onclick="RemoveSelectedHost" disabled="@isRemovingHost">
+                        <i class="bi bi-trash3 me-1"></i>@(isRemovingHost ? "Removing..." : "I cleaned up the host; remove record")
                     </button>
                 </div>
             </div>
@@ -465,7 +575,7 @@
                                     <button type="button" class="host-action-dropdown-item" @onclick="() => OpenManualUpdateWizardFromMenu(host)">
                                         <i class="bi bi-tools"></i> Manual update
                                     </button>
-                                    <button type="button" class="host-action-dropdown-item text-danger" @onclick="() => ConfirmAndRemoveHostFromMenu(host)">
+                                    <button type="button" class="host-action-dropdown-item text-danger" @onclick="() => OpenRemoveHostGuideFromMenu(host)">
                                         <i class="bi bi-trash3"></i> Remove
                                     </button>
                                 </div>
@@ -485,14 +595,23 @@
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
     private bool showEnrollmentWizard;
     private Host? manualUpdateHost;
+    private Host? removalHost;
     private bool checkingUpdates;
     private string? updateError;
     private readonly HashSet<string> updatingHosts = [];
     private string? selectedUpdateVersion;
     private bool showUpdateOptions;
     private string? openActionsMenuHostId;
+    private string? removeCopiedKey;
+    private bool isRemovingHost;
+    private string? removeError;
     private static readonly ExecutionBackend[] BackendCapacityOrder =
         new[] { ExecutionBackend.Docker, ExecutionBackend.Tart, ExecutionBackend.Native };
+
+    private HostWorkerEnrollmentInstructions? CurrentRemovalInstructions =>
+        removalHost == null
+            ? null
+            : GuideBuilder.BuildRemoval(CreateRemovalRequest(removalHost));
 
     private string SelectedUpdateTargetLabel =>
         $"GitHub: {SelectedUpdateVersionLabel}";
@@ -632,10 +751,10 @@
         OpenManualUpdateWizard(host);
     }
 
-    private async Task ConfirmAndRemoveHostFromMenu(Host host)
+    private void OpenRemoveHostGuideFromMenu(Host host)
     {
         openActionsMenuHostId = null;
-        await ConfirmAndRemoveHost(host);
+        OpenRemoveHostGuide(host);
     }
 
     private Dictionary<string, string> GetAutoLabels(Host host)
@@ -970,10 +1089,71 @@
         manualUpdateHost = null;
     }
 
-    private async Task ConfirmAndRemoveHost(Host host)
+    private void OpenRemoveHostGuide(Host host)
     {
-        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Remove host '{host.Label}'? This will stop all runners on this host.");
-        if (confirmed) await RemoveHost(host.Id);
+        removalHost = host;
+        removeCopiedKey = null;
+        removeError = null;
+    }
+
+    private void CloseRemoveHostGuide()
+    {
+        if (isRemovingHost)
+            return;
+
+        removalHost = null;
+        removeCopiedKey = null;
+        removeError = null;
+    }
+
+    private async Task CopyRemovalCommand(string command, string key)
+    {
+        if (string.IsNullOrEmpty(command))
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", command);
+            removeCopiedKey = key;
+        }
+        catch (Exception ex)
+        {
+            removeError = $"Unable to copy cleanup command: {ex.Message}";
+        }
+    }
+
+    private async Task RemoveSelectedHost()
+    {
+        var host = removalHost ?? throw new InvalidOperationException("No host selected for removal.");
+        isRemovingHost = true;
+        removeError = null;
+
+        try
+        {
+            await RemoveHost(host.Id);
+            removalHost = null;
+            removeCopiedKey = null;
+        }
+        catch (Exception ex)
+        {
+            removeError = $"Unable to remove host record: {ex.Message}";
+        }
+        finally
+        {
+            isRemovingHost = false;
+        }
+    }
+
+    private static HostWorkerRemovalRequest CreateRemovalRequest(Host host)
+    {
+        return new HostWorkerRemovalRequest(
+            HostWorkerEnrollmentGuideBuilder.GetTargetForHost(host),
+            host.Id,
+            host.Label,
+            host.WorkerId,
+            host.ContainerId,
+            host.RunnerBasePath,
+            host.WorkDirectory);
     }
 
     private async Task RemoveHost(string id)
