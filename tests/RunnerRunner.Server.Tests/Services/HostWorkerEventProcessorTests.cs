@@ -86,6 +86,7 @@ public class HostWorkerEventProcessorTests
             Substitute.For<IDocumentStore>(),
             Substitute.For<IGrainFactory>(),
             cache,
+            new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance),
             new ConfigurationBuilder().Build(),
             NullLogger<HostWorkerEventProcessor>.Instance);
 
@@ -171,8 +172,9 @@ public class HostWorkerEventProcessorTests
         const string commitSha = "3bf419d5a5a9f21f24f69dfb44b13639a4137448";
         var token = HostEnrollmentToken.Create();
         var store = TestDocumentStore.Create();
-        await store.Insert(new Host
+        var pendingHost = new Host
         {
+            Id = "host-1",
             Name = "pending-host",
             EnrollmentTokenHash = HostEnrollmentToken.Hash(token),
             EnrollmentTokenCreatedAt = DateTime.UtcNow,
@@ -183,8 +185,11 @@ public class HostWorkerEventProcessorTests
             PendingHostWorkerUpdateSource = "release",
             PendingHostWorkerUpdateQueuedAt = DateTime.UtcNow,
             PendingHostWorkerUpdateDispatchedAt = DateTime.UtcNow
-        });
-        var processor = CreateProcessor(store);
+        };
+        await store.Insert(pendingHost);
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        tasks.TrackHostWorkerUpdate(pendingHost, "v0.3.0", commitSha, "Restarting HostWorker.", "Restarting");
+        var processor = CreateProcessor(store, tasks);
 
         var hostId = await processor.WorkerConnectedAsync(
             new AgentInfo
@@ -209,6 +214,47 @@ public class HostWorkerEventProcessorTests
         Assert.NotNull(host.LastUpdateCompletedAt);
         Assert.False(host.IsDraining);
         Assert.Null(host.PendingHostWorkerUpdateSource);
+        var task = Assert.Single(tasks.GetSnapshot());
+        Assert.Equal(LongRunningTaskStatus.Succeeded, task.Status);
+        Assert.Equal(100, task.ProgressPercent);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_TracksHostWorkerUpdateStatus()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            UpdateStatus = "Queued",
+            LatestAvailableVersion = "v2.0.0"
+        });
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var processor = CreateProcessor(store, tasks);
+        var message = HostWorkerProtocol.CreateMessage(
+            "worker-host",
+            HostWorkerMessageKinds.UpdateStatus,
+            new HostWorkerUpdateStatusEvent
+            {
+                HostId = "worker-host",
+                TargetVersion = "v2.0.0",
+                Stage = "downloading",
+                Message = "Downloading update.",
+                Success = true
+            });
+
+        await processor.HandleMessageAsync("host-1", message, CancellationToken.None);
+
+        var host = await store.Get<Host>("host-1");
+        Assert.NotNull(host);
+        Assert.Equal("Downloading", host.UpdateStatus);
+        var task = Assert.Single(tasks.GetSnapshot());
+        Assert.Equal(LongRunningTaskKind.HostWorkerUpdate, task.Kind);
+        Assert.Equal(LongRunningTaskStatus.Running, task.Status);
+        Assert.Equal("Downloading update.", task.StatusText);
+        Assert.Equal(30, task.ProgressPercent);
     }
 
     [Fact]
@@ -239,7 +285,7 @@ public class HostWorkerEventProcessorTests
             CancellationToken.None));
     }
 
-    private static HostWorkerEventProcessor CreateProcessor(IDocumentStore store)
+    private static HostWorkerEventProcessor CreateProcessor(IDocumentStore store, LongRunningTaskService? tasks = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IHostGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IHostGrain>());
@@ -249,6 +295,7 @@ public class HostWorkerEventProcessorTests
             store,
             grainFactory,
             CreateCache(),
+            tasks ?? new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance),
             new ConfigurationBuilder().Build(),
             NullLogger<HostWorkerEventProcessor>.Instance);
     }

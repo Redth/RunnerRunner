@@ -91,6 +91,7 @@ public class HostEnrollmentWizardTests
         var gitHubAuth = new GitHubAuthenticationService(
             httpClientFactory,
             NullLogger<GitHubAuthenticationService>.Instance);
+        var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
         var updateService = new HostWorkerUpdateService(
             httpClientFactory,
             configuration,
@@ -99,9 +100,11 @@ public class HostEnrollmentWizardTests
             Substitute.For<IHostCommandDispatcher>(),
             Substitute.For<IGrainFactory>(),
             localUpdateStore,
+            tasks,
             NullLogger<HostWorkerUpdateService>.Instance);
 
         context.Services.AddSingleton(store);
+        context.Services.AddSingleton(tasks);
         context.Services.AddSingleton(new HostWorkerEnrollmentGuideBuilder(configuration));
         context.Services.AddSingleton(updateService);
         context.Services.AddSingleton(new HostWorkerSshSetupService(NullLogger<HostWorkerSshSetupService>.Instance));

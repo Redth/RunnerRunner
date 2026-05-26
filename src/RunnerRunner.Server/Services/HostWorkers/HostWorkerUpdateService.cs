@@ -25,6 +25,7 @@ public sealed class HostWorkerUpdateService
     private readonly IHostCommandDispatcher _dispatcher;
     private readonly IGrainFactory _grainFactory;
     private readonly HostWorkerLocalUpdateStore _localUpdateStore;
+    private readonly LongRunningTaskService _tasks;
     private readonly ILogger<HostWorkerUpdateService> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private HostWorkerReleaseInfo? _cachedRelease;
@@ -38,6 +39,7 @@ public sealed class HostWorkerUpdateService
         IHostCommandDispatcher dispatcher,
         IGrainFactory grainFactory,
         HostWorkerLocalUpdateStore localUpdateStore,
+        LongRunningTaskService tasks,
         ILogger<HostWorkerUpdateService> logger)
     {
         _httpClientFactory = httpClientFactory;
@@ -47,6 +49,7 @@ public sealed class HostWorkerUpdateService
         _dispatcher = dispatcher;
         _grainFactory = grainFactory;
         _localUpdateStore = localUpdateStore;
+        _tasks = tasks;
         _logger = logger;
     }
 
@@ -237,6 +240,12 @@ public sealed class HostWorkerUpdateService
             host.UpdateStatus = "Draining";
             host.UpdateMessage = "Waiting for HostWorker to reconnect before applying drained update.";
             await _store.Update(host);
+            _tasks.UpdateHostWorkerUpdate(
+                host,
+                host.UpdateStatus,
+                host.UpdateMessage,
+                host.LatestAvailableVersion,
+                host.LatestAvailableCommitSha);
             return false;
         }
 
@@ -246,6 +255,12 @@ public sealed class HostWorkerUpdateService
             host.UpdateStatus = "Draining";
             host.UpdateMessage = $"Draining {activeRunners.Count} active runner(s) before updating HostWorker.";
             await _store.Update(host);
+            _tasks.UpdateHostWorkerUpdate(
+                host,
+                host.UpdateStatus,
+                host.UpdateMessage,
+                host.LatestAvailableVersion,
+                host.LatestAvailableCommitSha);
             await StopDrainableHostRunnersAsync(host.Id, activeRunners, ct);
             return false;
         }
@@ -284,6 +299,7 @@ public sealed class HostWorkerUpdateService
             await SetHostDrainingAsync(host, false);
             ClearPendingUpdate(host);
             await _store.Update(host);
+            _tasks.MarkHostWorkerUpdateSucceeded(host, host.UpdateMessage);
             return false;
         }
 
@@ -303,6 +319,12 @@ public sealed class HostWorkerUpdateService
             host.UpdateStatus = "Draining";
             host.UpdateMessage = $"Drained but failed to dispatch update: {ex.Message}";
             await _store.Update(host);
+            _tasks.UpdateHostWorkerUpdate(
+                host,
+                host.UpdateStatus,
+                host.UpdateMessage,
+                host.LatestAvailableVersion,
+                host.LatestAvailableCommitSha);
             return false;
         }
     }
@@ -327,6 +349,12 @@ public sealed class HostWorkerUpdateService
         host.PendingHostWorkerUpdateQueuedAt = DateTime.UtcNow;
         host.PendingHostWorkerUpdateDispatchedAt = null;
         await _store.Update(host);
+        _tasks.TrackHostWorkerUpdate(
+            host,
+            availability.Release.Version,
+            availability.Release.CommitSha,
+            host.UpdateMessage,
+            host.UpdateStatus);
 
         await StopDrainableHostRunnersAsync(host.Id, activeRunners, ct);
     }
@@ -348,8 +376,33 @@ public sealed class HostWorkerUpdateService
         if (isPendingDrain)
             host.PendingHostWorkerUpdateDispatchedAt = DateTime.UtcNow;
         await _store.Update(host);
+        _tasks.TrackHostWorkerUpdate(
+            host,
+            availability.Release.Version,
+            availability.Release.CommitSha,
+            host.UpdateMessage);
 
-        await _dispatcher.DispatchApplyHostWorkerUpdateAsync(host.Id, CreateUpdateCommand(selection, availability));
+        try
+        {
+            await _dispatcher.DispatchApplyHostWorkerUpdateAsync(host.Id, CreateUpdateCommand(selection, availability));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (!isPendingDrain)
+            {
+                host.UpdateStatus = "Failed";
+                host.UpdateMessage = $"Failed to dispatch update: {ex.Message}";
+                host.LastUpdateCompletedAt = DateTime.UtcNow;
+                await _store.Update(host);
+                _tasks.MarkHostWorkerUpdateFailed(host, host.UpdateMessage);
+            }
+
+            throw;
+        }
     }
 
     private static HostWorkerUpdateCommand CreateUpdateCommand(
@@ -443,6 +496,7 @@ public sealed class HostWorkerUpdateService
         host.UpdateMessage = message;
         host.LastUpdateCompletedAt = DateTime.UtcNow;
         await _store.Update(host);
+        _tasks.MarkHostWorkerUpdateFailed(host, message);
     }
 
     private async Task SetHostDrainingAsync(Host host, bool isDraining)

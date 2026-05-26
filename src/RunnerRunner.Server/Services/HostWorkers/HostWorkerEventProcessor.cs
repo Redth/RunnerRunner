@@ -15,6 +15,7 @@ public sealed class HostWorkerEventProcessor
     private readonly IDocumentStore _store;
     private readonly IGrainFactory _grainFactory;
     private readonly HostWorkerLogCache _logCache;
+    private readonly LongRunningTaskService _tasks;
     private readonly IConfiguration _configuration;
     private readonly ILogger<HostWorkerEventProcessor> _logger;
 
@@ -22,12 +23,14 @@ public sealed class HostWorkerEventProcessor
         IDocumentStore store,
         IGrainFactory grainFactory,
         HostWorkerLogCache logCache,
+        LongRunningTaskService tasks,
         IConfiguration configuration,
         ILogger<HostWorkerEventProcessor> logger)
     {
         _store = store;
         _grainFactory = grainFactory;
         _logCache = logCache;
+        _tasks = tasks;
         _configuration = configuration;
         _logger = logger;
     }
@@ -212,7 +215,8 @@ public sealed class HostWorkerEventProcessor
         host.UpdatedAt = DateTime.UtcNow;
         foreach (var (key, value) in labels)
             host.Labels[key] = value;
-        MarkUpdateCurrentIfTargetMatches(host);
+        if (MarkUpdateCurrentIfTargetMatches(host))
+            _tasks.MarkHostWorkerUpdateSucceeded(host, host.UpdateMessage);
 
         await _store.Update(host);
         return host;
@@ -482,6 +486,16 @@ public sealed class HostWorkerEventProcessor
             var hostGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
             await hostGrain.SetDraining(false);
             ClearPendingUpdate(host);
+            _tasks.MarkHostWorkerUpdateFailed(host, host.UpdateMessage ?? "HostWorker update failed.");
+        }
+        else
+        {
+            _tasks.UpdateHostWorkerUpdate(
+                host,
+                host.UpdateStatus,
+                host.UpdateMessage,
+                host.LatestAvailableVersion,
+                host.LatestAvailableCommitSha);
         }
 
         await _store.Update(host);
@@ -493,12 +507,12 @@ public sealed class HostWorkerEventProcessor
             ? "Updating"
             : char.ToUpperInvariant(stage[0]) + stage[1..];
 
-    private static void MarkUpdateCurrentIfTargetMatches(Host host)
+    private static bool MarkUpdateCurrentIfTargetMatches(Host host)
     {
         if (string.IsNullOrWhiteSpace(host.LatestAvailableVersion) &&
             string.IsNullOrWhiteSpace(host.LatestAvailableCommitSha))
         {
-            return;
+            return false;
         }
 
         if (HostWorkerUpdateSelector.IsUpdateAvailable(
@@ -507,13 +521,14 @@ public sealed class HostWorkerEventProcessor
                 host.LatestAvailableVersion,
                 host.LatestAvailableCommitSha))
         {
-            return;
+            return false;
         }
 
         host.UpdateStatus = "Current";
         host.UpdateMessage = $"HostWorker is current at {HostWorkerUpdateSelector.FormatVersionWithCommit(host.AgentVersion, host.AgentCommitSha)}.";
         host.LastUpdateCompletedAt ??= DateTime.UtcNow;
         ClearPendingUpdate(host);
+        return true;
     }
 
     private static void ClearPendingUpdate(Host host)

@@ -1,6 +1,7 @@
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Hubs;
+using RunnerRunner.Server.Services.HostWorkers;
 
 namespace RunnerRunner.Server.Services;
 
@@ -72,6 +73,105 @@ public sealed class LongRunningTaskService : IDisposable
 
         NotifyChanged();
         return taskId;
+    }
+
+    public string TrackHostWorkerUpdate(
+        Host host,
+        string? targetVersion,
+        string? targetCommitSha,
+        string statusText,
+        string? status = "Queued")
+        => UpsertHostWorkerUpdate(
+            host,
+            targetVersion,
+            targetCommitSha,
+            status,
+            statusText,
+            LongRunningTaskStatus.Running,
+            null);
+
+    public void UpdateHostWorkerUpdate(
+        Host host,
+        string? status,
+        string? statusText,
+        string? targetVersion,
+        string? targetCommitSha)
+    {
+        UpsertHostWorkerUpdate(
+            host,
+            targetVersion,
+            targetCommitSha,
+            status,
+            statusText,
+            LongRunningTaskStatus.Running,
+            null);
+    }
+
+    public void MarkHostWorkerUpdateSucceeded(Host host, string? statusText)
+    {
+        var taskId = BuildHostWorkerUpdateTaskId(host.Id);
+        var changed = false;
+        lock (_gate)
+        {
+            if (_tasks.TryGetValue(taskId, out var task))
+            {
+                task.Status = LongRunningTaskStatus.Succeeded;
+                task.StatusText = string.IsNullOrWhiteSpace(statusText) ? "Complete" : statusText;
+                task.ProgressPercent = 100;
+                task.CompletedAt = DateTimeOffset.UtcNow;
+                task.UpdatedAt = task.CompletedAt.Value;
+                changed = true;
+                PruneCompletedTasks();
+            }
+        }
+
+        if (changed)
+            NotifyChanged();
+    }
+
+    public void MarkHostWorkerUpdateFailed(Host host, string error)
+    {
+        var taskId = BuildHostWorkerUpdateTaskId(host.Id);
+        var changed = false;
+        lock (_gate)
+        {
+            if (_tasks.TryGetValue(taskId, out var task))
+            {
+                task.Status = LongRunningTaskStatus.Failed;
+                task.StatusText = "Failed";
+                task.Error = error;
+                task.ProgressPercent = Math.Max(task.ProgressPercent, GetHostWorkerUpdateProgress("Failed"));
+                task.CompletedAt = DateTimeOffset.UtcNow;
+                task.UpdatedAt = task.CompletedAt.Value;
+                changed = true;
+                PruneCompletedTasks();
+            }
+            else
+            {
+                var now = DateTimeOffset.UtcNow;
+                _tasks[taskId] = new LongRunningTaskInfo
+                {
+                    Id = taskId,
+                    Kind = LongRunningTaskKind.HostWorkerUpdate,
+                    Title = $"Update HostWorker to {FormatHostWorkerUpdateSubject(host.LatestAvailableVersion, host.LatestAvailableCommitSha)}",
+                    Location = host.Label,
+                    HostId = host.Id,
+                    Subject = FormatHostWorkerUpdateSubject(host.LatestAvailableVersion, host.LatestAvailableCommitSha),
+                    Status = LongRunningTaskStatus.Failed,
+                    StatusText = "Failed",
+                    Error = error,
+                    ProgressPercent = 100,
+                    StartedAt = now,
+                    UpdatedAt = now,
+                    CompletedAt = now
+                };
+                changed = true;
+                PruneCompletedTasks();
+            }
+        }
+
+        if (changed)
+            NotifyChanged();
     }
 
     public void MarkFailed(string taskId, string error)
@@ -221,6 +321,91 @@ public sealed class LongRunningTaskService : IDisposable
     }
 
     private void NotifyChanged() => OnChanged?.Invoke();
+
+    private string UpsertHostWorkerUpdate(
+        Host host,
+        string? targetVersion,
+        string? targetCommitSha,
+        string? status,
+        string? statusText,
+        LongRunningTaskStatus taskStatus,
+        DateTimeOffset? completedAt)
+    {
+        if (string.IsNullOrWhiteSpace(host.Id))
+            throw new ArgumentException("Host id is required to track a HostWorker update.", nameof(host));
+
+        var taskId = BuildHostWorkerUpdateTaskId(host.Id);
+        var now = DateTimeOffset.UtcNow;
+        var subject = FormatHostWorkerUpdateSubject(targetVersion, targetCommitSha);
+        var displayStatus = string.IsNullOrWhiteSpace(statusText) ? FormatHostWorkerUpdateStatus(status) : statusText.Trim();
+        var progress = taskStatus == LongRunningTaskStatus.Succeeded
+            ? 100
+            : GetHostWorkerUpdateProgress(status);
+
+        lock (_gate)
+        {
+            var startedAt = now;
+            if (_tasks.TryGetValue(taskId, out var existing) && existing.Status == LongRunningTaskStatus.Running)
+                startedAt = existing.StartedAt;
+
+            _tasks[taskId] = new LongRunningTaskInfo
+            {
+                Id = taskId,
+                Kind = LongRunningTaskKind.HostWorkerUpdate,
+                Title = $"Update HostWorker to {subject}",
+                Location = host.Label,
+                HostId = host.Id,
+                Subject = subject,
+                Status = taskStatus,
+                StatusText = displayStatus,
+                ProgressPercent = Math.Clamp(progress, 0, 100),
+                StartedAt = startedAt,
+                UpdatedAt = completedAt ?? now,
+                CompletedAt = completedAt
+            };
+
+            if (taskStatus != LongRunningTaskStatus.Running)
+                PruneCompletedTasks();
+        }
+
+        NotifyChanged();
+        return taskId;
+    }
+
+    private static string BuildHostWorkerUpdateTaskId(string hostId)
+        => $"host-worker-update:{hostId}";
+
+    private static string FormatHostWorkerUpdateSubject(string? targetVersion, string? targetCommitSha)
+    {
+        var subject = HostWorkerUpdateSelector.FormatVersionWithCommit(targetVersion, targetCommitSha);
+        return string.Equals(subject, "unknown", StringComparison.OrdinalIgnoreCase) ? "selected update" : subject;
+    }
+
+    private static string FormatHostWorkerUpdateStatus(string? status)
+        => string.IsNullOrWhiteSpace(status)
+            ? "Updating..."
+            : status switch
+            {
+                "Queued" => "Queued",
+                "Draining" => "Draining host runners",
+                "Current" => "Complete",
+                "Failed" => "Failed",
+                _ => status
+            };
+
+    private static double GetHostWorkerUpdateProgress(string? status)
+        => status?.Trim().ToLowerInvariant() switch
+        {
+            "queued" => 5,
+            "draining" => 10,
+            "pulling" or "downloading" => 30,
+            "verifying" => 60,
+            "creating" => 70,
+            "staged" => 80,
+            "restarting" => 90,
+            "current" or "failed" => 100,
+            _ => 10
+        };
 
     private static string FormatImageName(PullImageCommand command) =>
         ImageReference.Build(command.RegistryUrl, command.ImageName, command.Tag);

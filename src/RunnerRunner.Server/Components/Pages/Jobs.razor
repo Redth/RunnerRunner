@@ -192,6 +192,18 @@ else
                         {
                             <small class="secondary-label">@job.Repository</small>
                         }
+                        @if (!string.IsNullOrWhiteSpace(job.ExternalJobUrl))
+                        {
+                            <a class="external-nav-link small"
+                               href="@job.ExternalJobUrl"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               title="Open @job.ProviderLabel job"
+                               @onclick="() => { }"
+                               @onclick:stopPropagation="true">
+                                <i class="bi bi-box-arrow-up-right"></i> Open in @job.ProviderLabel
+                            </a>
+                        }
                     </td>
                     <td><span class="badge @(job.Mode == "dynamic" ? "bg-warning text-dark" : "bg-secondary")">@(job.Mode == "dynamic" ? "Dynamic" : "Static")</span></td>
                     <td>@job.RuleName</td>
@@ -289,6 +301,15 @@ else
                                                 <button class="btn btn-sm btn-outline-primary" @onclick="() => ShowLogs(job)" @onclick:stopPropagation="true">
                                                     <i class="bi bi-terminal me-1"></i> View Logs
                                                 </button>
+                                                @if (!string.IsNullOrWhiteSpace(job.ExternalJobUrl))
+                                                {
+                                                    <a class="btn btn-sm btn-outline-secondary ms-1"
+                                                       href="@job.ExternalJobUrl"
+                                                       target="_blank"
+                                                       rel="noopener noreferrer">
+                                                        <i class="bi bi-box-arrow-up-right me-1"></i>Open @job.ProviderLabel job
+                                                    </a>
+                                                }
                                             </div>
                                         }
                                         <h6><i class="bi bi-info-circle me-1"></i> Details</h6>
@@ -492,6 +513,16 @@ else
         overflow-y: auto;
         min-height: 200px;
     }
+    .external-nav-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        color: var(--bs-primary);
+        text-decoration: none;
+    }
+    .external-nav-link:hover {
+        text-decoration: underline;
+    }
 </style>
 
 @code {
@@ -501,6 +532,8 @@ else
     private Dictionary<string, string> profileNames = new();
     private Dictionary<string, RunnerProfile> profilesById = new();
     private Dictionary<string, string> ruleNames = new();
+    private Dictionary<string, ProvisioningRule> rulesById = new();
+    private Dictionary<string, ProviderCredential> credentialsById = new();
     private List<WebhookEvent> allWebhookEvents = [];
     private CapacitySnapshot capacitySnapshot = CapacitySnapshot.Empty;
 
@@ -577,12 +610,15 @@ else
         allHosts = (await Store.Query<Host>().ToList()).ToList();
         var profiles = (await Store.Query<RunnerProfile>().ToList()).ToList();
         var rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
+        var credentials = (await Store.Query<ProviderCredential>().ToList()).ToList();
         allWebhookEvents = (await Store.Query<WebhookEvent>().ToList()).ToList();
 
         hostNames = allHosts.ToDictionary(h => h.Id, h => h.Label);
         profileNames = profiles.ToDictionary(p => p.Id, p => p.Name);
         profilesById = profiles.ToDictionary(p => p.Id, p => p);
         ruleNames = rules.ToDictionary(r => r.Id, r => r.Name);
+        rulesById = rules.ToDictionary(r => r.Id, r => r);
+        credentialsById = credentials.ToDictionary(c => c.Id, c => c);
         capacitySnapshot = CapacityPlanningService.BuildSnapshot(allHosts, profiles, rules, managedInstances, allWebhookEvents);
 
         // Index webhook events by ID
@@ -628,6 +664,7 @@ else
         else if (whEvent != null && !string.IsNullOrEmpty(whEvent.BindingId) && ruleNames.TryGetValue(whEvent.BindingId, out var bn))
             ruleName = bn;
 
+        profilesById.TryGetValue(inst.ProfileId, out var profile);
         var duration = GetDuration(inst.CreatedAt, inst.StoppedAt);
         return new JobView
         {
@@ -650,7 +687,9 @@ else
             Duration = duration,
             FormattedDuration = FormatDuration(duration),
             IsQueued = false,
-            SortPriority = GetStatusSortPriority(inst.Status.ToString())
+            SortPriority = GetStatusSortPriority(inst.Status.ToString()),
+            ExternalJobUrl = BuildExternalJobUrl(whEvent, profile),
+            ProviderLabel = GetProviderLabel(whEvent, profile)
         };
     }
 
@@ -667,6 +706,7 @@ else
         else if (!string.IsNullOrEmpty(profileId) && profileNames.TryGetValue(profileId, out var pn))
             profileName = pn;
 
+        profilesById.TryGetValue(profileId, out var profile);
         var duration = GetDuration(evt.ReceivedAt, evt.ResolvedAt);
         var statusLabel = evt.IsTerminal ? evt.Status : $"Queued ({evt.Status})";
 
@@ -691,8 +731,43 @@ else
             Duration = duration,
             FormattedDuration = FormatDuration(duration),
             IsQueued = !evt.IsTerminal,
-            SortPriority = GetStatusSortPriority(evt.Status)
+            SortPriority = GetStatusSortPriority(evt.Status),
+            ExternalJobUrl = BuildExternalJobUrl(evt, profile),
+            ProviderLabel = GetProviderLabel(evt, profile)
         };
+    }
+
+    private string? BuildExternalJobUrl(WebhookEvent? evt, RunnerProfile? profile)
+    {
+        if (evt == null)
+            return null;
+
+        return ProviderNavigationLinks.BuildJobUrl(evt, ResolveCredential(evt, profile));
+    }
+
+    private string GetProviderLabel(WebhookEvent? evt, RunnerProfile? profile)
+        => ProviderNavigationLinks.GetProviderLabel(evt?.Provider ?? profile?.Provider.ToString());
+
+    private ProviderCredential? ResolveCredential(WebhookEvent evt, RunnerProfile? profile)
+    {
+        if (!string.IsNullOrWhiteSpace(evt.BindingId)
+            && rulesById.TryGetValue(evt.BindingId, out var rule)
+            && !string.IsNullOrWhiteSpace(rule.ProviderCredentialId)
+            && credentialsById.TryGetValue(rule.ProviderCredentialId, out var ruleCredential))
+        {
+            return ruleCredential;
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile?.ProviderCredentialId)
+            && credentialsById.TryGetValue(profile.ProviderCredentialId, out var profileCredential))
+        {
+            return profileCredential;
+        }
+
+        var provider = ProviderNavigationLinks.ParseProvider(evt.Provider);
+        return provider.HasValue
+            ? credentialsById.Values.FirstOrDefault(c => c.Provider == provider.Value)
+            : null;
     }
 
     private bool HasActiveFilters() =>
@@ -1100,6 +1175,8 @@ else
         public string FormattedDuration { get; set; } = "";
         public bool IsQueued { get; set; }
         public int SortPriority { get; set; }
+        public string? ExternalJobUrl { get; set; }
+        public string ProviderLabel { get; set; } = "provider";
     }
 
     // --- Log viewer ---

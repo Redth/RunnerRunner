@@ -1,6 +1,7 @@
 @page "/hosts"
 @attribute [Authorize(Policy = RunnerRunnerPolicies.ManageHosts)]
 @rendermode InteractiveServer
+@implements IAsyncDisposable
 @using Shiny.DocumentDb
 @using RunnerRunner.Core.Models
 @using RunnerRunner.Core.Hub
@@ -15,6 +16,7 @@
 @inject IHostCommandDispatcher HostCommandDispatcher
 @inject HostWorkerUpdateService HostWorkerUpdateService
 @inject HostWorkerEnrollmentGuideBuilder GuideBuilder
+@inject ILogger<Hosts> Logger
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -36,6 +38,12 @@
     {
         <div class="alert alert-warning mt-2 mb-0">
             @updateError
+        </div>
+    }
+    @if (!string.IsNullOrWhiteSpace(refreshError))
+    {
+        <div class="alert alert-warning mt-2 mb-0">
+            @refreshError
         </div>
     }
 </div>
@@ -598,6 +606,7 @@
     private Host? removalHost;
     private bool checkingUpdates;
     private string? updateError;
+    private string? refreshError;
     private readonly HashSet<string> updatingHosts = [];
     private string? selectedUpdateVersion;
     private bool showUpdateOptions;
@@ -605,6 +614,9 @@
     private string? removeCopiedKey;
     private bool isRemovingHost;
     private string? removeError;
+    private readonly CancellationTokenSource refreshCts = new();
+    private Task? refreshLoopTask;
+    private static readonly TimeSpan AutoRefreshInterval = TimeSpan.FromSeconds(5);
     private static readonly ExecutionBackend[] BackendCapacityOrder =
         new[] { ExecutionBackend.Docker, ExecutionBackend.Tart, ExecutionBackend.Native };
 
@@ -922,6 +934,7 @@
     protected override async Task OnInitializedAsync()
     {
         await ReloadData();
+        refreshLoopTask = RunAutoRefreshAsync(refreshCts.Token);
     }
 
     private async Task ReloadData()
@@ -929,6 +942,35 @@
         hosts = (await Store.Query<Host>().ToList()).ToList();
         rules = (await Store.Query<ProvisioningRule>().ToList()).ToList();
         capacitySnapshot = await CapacityService.GetSnapshotAsync();
+        refreshError = null;
+    }
+
+    private async Task RunAutoRefreshAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(AutoRefreshInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(async () =>
+                {
+                    try
+                    {
+                        await ReloadData();
+                        StateHasChanged();
+                    }
+                    catch (Exception ex) when (!ct.IsCancellationRequested)
+                    {
+                        Logger.LogWarning(ex, "Failed to refresh hosts page data.");
+                        refreshError = $"Unable to refresh hosts: {ex.Message}";
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
     }
 
     private async Task CheckHostWorkerUpdates()
@@ -1378,6 +1420,27 @@
 
     private static DateTime NormalizeUtc(DateTime value)
         => value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    public async ValueTask DisposeAsync()
+    {
+        await refreshCts.CancelAsync();
+        if (refreshLoopTask is not null)
+        {
+            try
+            {
+                await refreshLoopTask;
+            }
+            catch (OperationCanceledException) when (refreshCts.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Hosts auto-refresh loop faulted during disposal.");
+            }
+        }
+
+        refreshCts.Dispose();
+    }
 }
 
 @* Chip styles are in app.css *@
