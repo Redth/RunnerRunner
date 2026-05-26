@@ -214,6 +214,7 @@ builder.Services.AddHostedService<StreamSubscriptionService>();
 builder.Services.AddHostedService<GitHubRunnerSweepService>();
 builder.Services.AddHostedService<ReconciliationService>();    // extra stale/orphan cleanup during migration
 builder.Services.AddHostedService<RunnerTimeoutService>();     // catches stuck pre-registration / stale instances
+builder.Services.AddHostedService<HostWorkerUpdateDrainService>();
 
 // Blazor
 builder.Services.AddRazorComponents()

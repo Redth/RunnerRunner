@@ -99,10 +99,11 @@ public class OrchestrationEngine : BackgroundService
                 continue;
             }
 
-            if (host.AgentStatus != AgentStatus.Online)
+            if (host.AgentStatus != AgentStatus.Online || host.IsDraining)
             {
+                var status = host.IsDraining ? "draining" : host.AgentStatus.ToString();
                 _logger.LogInformation("Host {HostName} (id:{HostId}) HostWorker is {Status}, skipping.",
-                    host.Name, host.Id, host.AgentStatus);
+                    host.Name, host.Id, status);
                 continue;
             }
 

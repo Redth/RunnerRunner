@@ -84,6 +84,16 @@ public class HostGrain : Grain, IHostGrain
         await _state.WriteStateAsync();
     }
 
+    public async Task SetDraining(bool isDraining)
+    {
+        if (_state.State.IsDraining == isDraining)
+            return;
+
+        _state.State.IsDraining = isDraining;
+        await _state.WriteStateAsync();
+        await SyncToDocumentDb();
+    }
+
     public async Task RecordHeartbeat(string connectionId, int runningCount, HostResourceUsage? resourceUsage)
     {
         _state.State.ConnectionId = connectionId;
@@ -110,6 +120,9 @@ public class HostGrain : Grain, IHostGrain
 
     public Task<bool> CanAcceptRunner(ExecutionBackend backend)
     {
+        if (_state.State.IsDraining)
+            return Task.FromResult(false);
+
         var canAccept = backend switch
         {
             ExecutionBackend.Docker => _state.State.RunningDockerContainers < _state.State.MaxDockerContainers,
@@ -264,6 +277,7 @@ public class HostGrain : Grain, IHostGrain
         host.MaxNativeProcesses = _state.State.MaxNativeProcesses;
         host.ObservedRunningTartVMs = _state.State.ObservedRunningTartVMs;
         host.ObservedResourceUsageAt = _state.State.ObservedResourceUsageAt;
+        host.IsDraining = _state.State.IsDraining;
         host.GroupId = _state.State.GroupId;
         host.IsApproved = true;
         host.UpdatedAt = DateTime.UtcNow;
@@ -286,6 +300,13 @@ public class HostGrain : Grain, IHostGrain
         target.DisplayName ??= source.DisplayName;
         target.RunnerBasePath ??= source.RunnerBasePath;
         target.WorkDirectory ??= source.WorkDirectory;
+        target.IsDraining = source.IsDraining;
+        target.PendingHostWorkerUpdateSource ??= source.PendingHostWorkerUpdateSource;
+        target.PendingHostWorkerUpdateVersion ??= source.PendingHostWorkerUpdateVersion;
+        target.PendingHostWorkerUpdateAllowNonUpgrade = source.PendingHostWorkerUpdateAllowNonUpgrade;
+        target.PendingHostWorkerUpdatePublicBaseUrl ??= source.PendingHostWorkerUpdatePublicBaseUrl;
+        target.PendingHostWorkerUpdateQueuedAt ??= source.PendingHostWorkerUpdateQueuedAt;
+        target.PendingHostWorkerUpdateDispatchedAt ??= source.PendingHostWorkerUpdateDispatchedAt;
 
         if (target.EnvironmentOverrides.Count == 0 && source.EnvironmentOverrides.Count > 0)
             target.EnvironmentOverrides = new Dictionary<string, string>(source.EnvironmentOverrides);

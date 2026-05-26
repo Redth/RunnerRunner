@@ -17,6 +17,7 @@ public interface IHostGrain : IGrainWithStringKey
     Task SetGroupId(string? groupId);
     Task RecordHeartbeat(string connectionId, int runningCount, HostResourceUsage? resourceUsage);
     Task MarkOffline();
+    Task SetDraining(bool isDraining);
     Task<bool> CanAcceptRunner(ExecutionBackend backend);
     Task IncrementRunningCount(ExecutionBackend backend);
     Task DecrementRunningCount(ExecutionBackend backend);

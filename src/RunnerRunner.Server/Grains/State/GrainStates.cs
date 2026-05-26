@@ -35,6 +35,7 @@ public class HostGrainState
     // Host-observed usage that may include resources not started by RunnerRunner.
     [Id(18)] public int? ObservedRunningTartVMs { get; set; }
     [Id(19)] public DateTime? ObservedResourceUsageAt { get; set; }
+    [Id(20)] public bool IsDraining { get; set; }
 }
 
 [GenerateSerializer]

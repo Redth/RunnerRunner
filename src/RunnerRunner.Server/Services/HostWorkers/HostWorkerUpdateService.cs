@@ -4,8 +4,10 @@ using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Orleans;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Services;
 using Shiny.DocumentDb;
 using Host = RunnerRunner.Core.Models.Host;
@@ -21,6 +23,7 @@ public sealed class HostWorkerUpdateService
     private readonly GitHubAuthenticationService _gitHubAuth;
     private readonly IDocumentStore _store;
     private readonly IHostCommandDispatcher _dispatcher;
+    private readonly IGrainFactory _grainFactory;
     private readonly HostWorkerLocalUpdateStore _localUpdateStore;
     private readonly ILogger<HostWorkerUpdateService> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
@@ -33,6 +36,7 @@ public sealed class HostWorkerUpdateService
         GitHubAuthenticationService gitHubAuth,
         IDocumentStore store,
         IHostCommandDispatcher dispatcher,
+        IGrainFactory grainFactory,
         HostWorkerLocalUpdateStore localUpdateStore,
         ILogger<HostWorkerUpdateService> logger)
     {
@@ -41,6 +45,7 @@ public sealed class HostWorkerUpdateService
         _gitHubAuth = gitHubAuth;
         _store = store;
         _dispatcher = dispatcher;
+        _grainFactory = grainFactory;
         _localUpdateStore = localUpdateStore;
         _logger = logger;
     }
@@ -179,18 +184,6 @@ public sealed class HostWorkerUpdateService
         if (host.AgentStatus != AgentStatus.Online)
             throw new InvalidOperationException($"HostWorker '{host.Label}' must be online before it can be updated.");
 
-        if (!selection.Force)
-        {
-            var activeRunners = (await _store.Query<RunnerInstance>().ToList())
-                .Count(instance => instance.HostId == host.Id
-                                   && instance.Status is RunnerInstanceStatus.Pending
-                                      or RunnerInstanceStatus.Starting
-                                      or RunnerInstanceStatus.Running
-                                      or RunnerInstanceStatus.Stopping);
-            if (activeRunners > 0)
-                throw new InvalidOperationException($"HostWorker '{host.Label}' has {activeRunners} active runner(s). Stop them before updating.");
-        }
-
         var availability = await GetAvailabilityAsync(host, selection, forceRefresh: true, ct);
         if (!availability.IsAvailable || availability.Release == null)
             throw new InvalidOperationException(availability.UnavailableReason ?? "No HostWorker update asset is available for this host.");
@@ -204,23 +197,270 @@ public sealed class HostWorkerUpdateService
         if (!selection.Force && !selection.AllowNonUpgrade && !availability.UpdateAvailable)
             throw new InvalidOperationException($"HostWorker '{host.Label}' is already current.");
 
-        host.UpdateStatus = "Queued";
-        host.UpdateMessage = $"Queued update to {HostWorkerUpdateSelector.FormatVersionWithCommit(availability.Release.Version, availability.Release.CommitSha)} from {selection.Source.ToDisplayName()}.";
+        if (!selection.Force)
+        {
+            var activeRunners = await GetActiveHostRunnersAsync(host.Id);
+            if (activeRunners.Count > 0)
+            {
+                await QueueDrainedUpdateAsync(host, selection, availability, activeRunners, ct);
+                return;
+            }
+        }
+
+        await DispatchUpdateAsync(host, selection, availability, isPendingDrain: false, ct);
+    }
+
+    public async Task ProcessPendingDrainedUpdatesAsync(CancellationToken ct = default)
+    {
+        var hosts = (await _store.Query<Host>().ToList())
+            .Where(host => host.IsDraining
+                           && HasPendingUpdate(host)
+                           && host.PendingHostWorkerUpdateDispatchedAt == null)
+            .OrderBy(host => host.PendingHostWorkerUpdateQueuedAt ?? host.LastUpdateStartedAt ?? host.UpdatedAt)
+            .ToList();
+
+        foreach (var host in hosts)
+        {
+            ct.ThrowIfCancellationRequested();
+            await ProcessPendingDrainedUpdateAsync(host.Id, ct);
+        }
+    }
+
+    public async Task<bool> ProcessPendingDrainedUpdateAsync(string hostId, CancellationToken ct = default)
+    {
+        var host = await _store.Get<Host>(hostId);
+        if (host == null || !host.IsDraining || !HasPendingUpdate(host) || host.PendingHostWorkerUpdateDispatchedAt != null)
+            return false;
+
+        if (host.AgentStatus != AgentStatus.Online)
+        {
+            host.UpdateStatus = "Draining";
+            host.UpdateMessage = "Waiting for HostWorker to reconnect before applying drained update.";
+            await _store.Update(host);
+            return false;
+        }
+
+        var activeRunners = await GetActiveHostRunnersAsync(host.Id);
+        if (activeRunners.Count > 0)
+        {
+            host.UpdateStatus = "Draining";
+            host.UpdateMessage = $"Draining {activeRunners.Count} active runner(s) before updating HostWorker.";
+            await _store.Update(host);
+            await StopDrainableHostRunnersAsync(host.Id, activeRunners, ct);
+            return false;
+        }
+
+        var selection = CreatePendingSelection(host);
+        var availability = await GetAvailabilityAsync(host, selection, forceRefresh: true, ct);
+        if (!availability.IsAvailable || availability.Release == null)
+        {
+            await FailPendingDrainedUpdateAsync(
+                host,
+                availability.UnavailableReason ?? "No HostWorker update asset is available for this host.",
+                ct);
+            return false;
+        }
+
+        if (availability.Asset != null && string.IsNullOrWhiteSpace(availability.Asset.DownloadUrl))
+        {
+            await FailPendingDrainedUpdateAsync(
+                host,
+                "HostWorkerUpdates:PublicBaseUrl or a request base URL is required to queue this HostWorker update artifact.",
+                ct);
+            return false;
+        }
+
+        if (availability.Asset == null && string.IsNullOrWhiteSpace(availability.ContainerImage))
+        {
+            await FailPendingDrainedUpdateAsync(host, "No HostWorker update asset or container image is available for this host.", ct);
+            return false;
+        }
+
+        if (!selection.AllowNonUpgrade && !availability.UpdateAvailable)
+        {
+            host.UpdateStatus = "Current";
+            host.UpdateMessage = $"HostWorker is current at {HostWorkerUpdateSelector.FormatVersionWithCommit(host.AgentVersion, host.AgentCommitSha)}.";
+            host.LastUpdateCompletedAt = DateTime.UtcNow;
+            await SetHostDrainingAsync(host, false);
+            ClearPendingUpdate(host);
+            await _store.Update(host);
+            return false;
+        }
+
+        try
+        {
+            await DispatchUpdateAsync(host, selection, availability, isPendingDrain: true, ct);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Drained HostWorker update dispatch failed for host {HostId}", host.Id);
+            host.PendingHostWorkerUpdateDispatchedAt = null;
+            host.UpdateStatus = "Draining";
+            host.UpdateMessage = $"Drained but failed to dispatch update: {ex.Message}";
+            await _store.Update(host);
+            return false;
+        }
+    }
+
+    private async Task QueueDrainedUpdateAsync(
+        Host host,
+        HostWorkerUpdateSelection selection,
+        HostWorkerUpdateAvailability availability,
+        IReadOnlyCollection<RunnerInstance> activeRunners,
+        CancellationToken ct)
+    {
+        await SetHostDrainingAsync(host, true);
+        host.UpdateStatus = "Draining";
+        host.UpdateMessage = $"Draining {activeRunners.Count} active runner(s) before updating to {HostWorkerUpdateSelector.FormatVersionWithCommit(availability.Release!.Version, availability.Release.CommitSha)} from {selection.Source.ToDisplayName()}.";
         host.LatestAvailableVersion = availability.Release.Version;
         host.LatestAvailableCommitSha = availability.Release.CommitSha;
         host.LastUpdateStartedAt = DateTime.UtcNow;
+        host.PendingHostWorkerUpdateSource = selection.Source.ToSourceId();
+        host.PendingHostWorkerUpdateVersion = selection.Version;
+        host.PendingHostWorkerUpdateAllowNonUpgrade = selection.AllowNonUpgrade;
+        host.PendingHostWorkerUpdatePublicBaseUrl = selection.PublicBaseUrl;
+        host.PendingHostWorkerUpdateQueuedAt = DateTime.UtcNow;
+        host.PendingHostWorkerUpdateDispatchedAt = null;
         await _store.Update(host);
 
-        await _dispatcher.DispatchApplyHostWorkerUpdateAsync(host.Id, new HostWorkerUpdateCommand
+        await StopDrainableHostRunnersAsync(host.Id, activeRunners, ct);
+    }
+
+    private async Task DispatchUpdateAsync(
+        Host host,
+        HostWorkerUpdateSelection selection,
+        HostWorkerUpdateAvailability availability,
+        bool isPendingDrain,
+        CancellationToken ct)
+    {
+        host.UpdateStatus = "Queued";
+        host.UpdateMessage = isPendingDrain
+            ? $"Drained; queued update to {HostWorkerUpdateSelector.FormatVersionWithCommit(availability.Release!.Version, availability.Release.CommitSha)} from {selection.Source.ToDisplayName()}."
+            : $"Queued update to {HostWorkerUpdateSelector.FormatVersionWithCommit(availability.Release!.Version, availability.Release.CommitSha)} from {selection.Source.ToDisplayName()}.";
+        host.LatestAvailableVersion = availability.Release.Version;
+        host.LatestAvailableCommitSha = availability.Release.CommitSha;
+        host.LastUpdateStartedAt = DateTime.UtcNow;
+        if (isPendingDrain)
+            host.PendingHostWorkerUpdateDispatchedAt = DateTime.UtcNow;
+        await _store.Update(host);
+
+        await _dispatcher.DispatchApplyHostWorkerUpdateAsync(host.Id, CreateUpdateCommand(selection, availability));
+    }
+
+    private static HostWorkerUpdateCommand CreateUpdateCommand(
+        HostWorkerUpdateSelection selection,
+        HostWorkerUpdateAvailability availability)
+        => new()
         {
-            TargetVersion = availability.Release.Version,
+            TargetVersion = availability.Release!.Version,
             AssetName = availability.Asset?.Name ?? "",
             AssetUrl = availability.Asset?.DownloadUrl ?? "",
             Sha256 = availability.Asset?.Sha256 ?? "",
             ContainerImage = availability.ContainerImage,
             TargetCommitSha = availability.Release.CommitSha,
             Force = selection.Force
-        });
+        };
+
+    private async Task<IReadOnlyList<RunnerInstance>> GetActiveHostRunnersAsync(string hostId)
+        => (await _store.Query<RunnerInstance>().ToList())
+            .Where(instance => string.Equals(instance.HostId, hostId, StringComparison.OrdinalIgnoreCase)
+                               && instance.Status is RunnerInstanceStatus.Pending
+                                  or RunnerInstanceStatus.Starting
+                                  or RunnerInstanceStatus.Running
+                                  or RunnerInstanceStatus.Stopping)
+            .ToList();
+
+    private async Task StopDrainableHostRunnersAsync(
+        string hostId,
+        IReadOnlyCollection<RunnerInstance> activeRunners,
+        CancellationToken ct)
+    {
+        foreach (var instance in activeRunners.Where(ShouldStopRunnerForDrain))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id);
+                await runnerGrain.MarkStopping();
+
+                await _dispatcher.DispatchStopRunnerAsync(hostId, new StopRunnerCommand
+                {
+                    InstanceId = instance.Id,
+                    InstanceHandle = instance.ContainerId ?? instance.VmName ?? instance.ProcessId?.ToString()
+                });
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to stop runner {RunnerInstanceId} while draining host {HostId}", instance.Id, hostId);
+            }
+        }
+    }
+
+    internal static bool ShouldStopRunnerForDrain(RunnerInstance instance)
+    {
+        if (instance.Status is not (RunnerInstanceStatus.Pending or RunnerInstanceStatus.Starting or RunnerInstanceStatus.Running))
+            return false;
+
+        if (string.Equals(instance.ProvisioningMode, "dynamic", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(instance.ProvisioningMode, "webhook", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrWhiteSpace(instance.JobId);
+        }
+
+        return true;
+    }
+
+    private static bool HasPendingUpdate(Host host)
+        => !string.IsNullOrWhiteSpace(host.PendingHostWorkerUpdateSource);
+
+    private static HostWorkerUpdateSelection CreatePendingSelection(Host host)
+    {
+        if (!HostWorkerUpdateSourceKinds.TryParse(host.PendingHostWorkerUpdateSource, out var source))
+            throw new InvalidOperationException($"Unsupported pending HostWorker update source '{host.PendingHostWorkerUpdateSource}'.");
+
+        return new HostWorkerUpdateSelection(
+            source,
+            host.PendingHostWorkerUpdateVersion,
+            Force: false,
+            AllowNonUpgrade: host.PendingHostWorkerUpdateAllowNonUpgrade,
+            PublicBaseUrl: host.PendingHostWorkerUpdatePublicBaseUrl);
+    }
+
+    private async Task FailPendingDrainedUpdateAsync(Host host, string message, CancellationToken ct)
+    {
+        await SetHostDrainingAsync(host, false);
+        ClearPendingUpdate(host);
+        host.UpdateStatus = "Failed";
+        host.UpdateMessage = message;
+        host.LastUpdateCompletedAt = DateTime.UtcNow;
+        await _store.Update(host);
+    }
+
+    private async Task SetHostDrainingAsync(Host host, bool isDraining)
+    {
+        host.IsDraining = isDraining;
+        var hostGrain = _grainFactory.GetGrain<IHostGrain>(host.Id);
+        await hostGrain.SetDraining(isDraining);
+    }
+
+    private static void ClearPendingUpdate(Host host)
+    {
+        host.IsDraining = false;
+        host.PendingHostWorkerUpdateSource = null;
+        host.PendingHostWorkerUpdateVersion = null;
+        host.PendingHostWorkerUpdateAllowNonUpgrade = false;
+        host.PendingHostWorkerUpdatePublicBaseUrl = null;
+        host.PendingHostWorkerUpdateQueuedAt = null;
+        host.PendingHostWorkerUpdateDispatchedAt = null;
     }
 
     public async Task<IReadOnlyList<HostWorkerUpdateVersion>> GetAvailableVersionsAsync(
