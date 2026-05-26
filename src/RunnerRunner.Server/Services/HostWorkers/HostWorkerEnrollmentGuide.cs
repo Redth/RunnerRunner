@@ -202,7 +202,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         return $"{prefix}-{suffix}";
     }
 
-    public static HostWorkerEnrollmentTarget GetTargetForHost(Host host)
+    public static HostWorkerEnrollmentTarget GetTargetForHost(RunnerRunner.Core.Models.Host host)
     {
         if (host.IsContainerized)
         {
