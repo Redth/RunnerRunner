@@ -367,7 +367,12 @@
                 runnerLogsTcs = new TaskCompletionSource<string>();
                 try
                 {
-                    await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = tailLines });
+                    await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, new GetRunnerLogsCommand
+                    {
+                        InstanceHandle = handle,
+                        RunnerInstanceId = runner.Id,
+                        TailLines = tailLines
+                    });
                 }
                 catch (InvalidOperationException ex)
                 {

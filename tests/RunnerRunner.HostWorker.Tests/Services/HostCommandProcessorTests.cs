@@ -196,20 +196,63 @@ public class HostCommandProcessorTests
         Assert.Contains("Unsupported or malformed", rejected.Error);
     }
 
+    [Fact]
+    public async Task GetRunnerLogs_PublishesLogFrameForRunnerInstanceId()
+    {
+        using var directory = HostWorkerTestDirectory.Create("command-runner-logs");
+        var runnerBasePath = Path.Combine(directory.Path, "runners");
+        var instanceDir = Path.Combine(runnerBasePath, "instances", "rr-native");
+        Directory.CreateDirectory(instanceDir);
+        await File.WriteAllTextAsync(Path.Combine(instanceDir, "rr-instance.json"), """{"InstanceId":"inst-1","RunnerName":"runner-1"}""");
+        await File.WriteAllTextAsync(Path.Combine(instanceDir, "runner.log"), "native runner failed\n");
+        using var processor = CreateProcessor(directory, out var sink, out _, runnerBasePath: runnerBasePath);
+
+        await processor.ProcessCommandAsync(CreateCommand("cmd-runner-logs", new HostCommandEnvelope
+        {
+            Kind = HostCommandKind.GetRunnerLogs,
+            GetRunnerLogs = new GetRunnerLogsCommand
+            {
+                InstanceHandle = "pid-123",
+                RunnerInstanceId = "inst-1",
+                TailLines = 25
+            }
+        }), CancellationToken.None);
+
+        var frame = sink.Published
+            .Where(message => message.Kind == HostWorkerMessageKinds.LogFrame)
+            .Select(HostWorkerProtocol.DeserializePayload<HostWorkerLogFrame>)
+            .Single(frame => frame.StreamKind == "runner.output");
+        Assert.Equal("runner.output", frame.StreamKind);
+        Assert.Equal("runner.pid-123", frame.StreamId);
+        Assert.Equal("inst-1", frame.RunnerInstanceId);
+        Assert.Equal("Runner", frame.SourceType);
+        Assert.Contains("native runner failed", frame.Text);
+
+        var logs = SinglePayload<RunnerLogsEvent>(sink, HostWorkerMessageKinds.RunnerLogs);
+        Assert.Equal("pid-123", logs.InstanceHandle);
+        Assert.Equal("inst-1", logs.RunnerInstanceId);
+        Assert.Contains("native runner failed", logs.Logs);
+    }
+
     private static HostCommandProcessor CreateProcessor(
         HostWorkerTestDirectory directory,
         out FakeHostWorkerEventSink sink,
         out RunnerLifecycleManager lifecycle,
         FakeRunnerBackend? dockerBackend = null,
         FakeRunnerBackend? tartBackend = null,
-        FakeRunnerBackend? nativeBackend = null)
+        FakeRunnerBackend? nativeBackend = null,
+        string? runnerBasePath = null)
     {
+        var configValues = new Dictionary<string, string?>
+        {
+            ["HostWorker:DataRoot"] = directory.Path,
+            ["HostWorker:ResourceUsageTimeoutSeconds"] = "1"
+        };
+        if (!string.IsNullOrWhiteSpace(runnerBasePath))
+            configValues["Runner:BasePath"] = runnerBasePath;
+
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["HostWorker:DataRoot"] = directory.Path,
-                ["HostWorker:ResourceUsageTimeoutSeconds"] = "1"
-            })
+            .AddInMemoryCollection(configValues)
             .Build();
         var identity = new HostWorkerIdentity("host-1", "test-host", HostPlatform.Linux, "x64");
         var paths = new HostWorkerPaths(configuration);
