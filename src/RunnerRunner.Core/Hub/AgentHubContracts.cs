@@ -559,6 +559,8 @@ public class GetRunnerLogsCommand
     public required string InstanceHandle { get; set; }
     [Id(1)]
     public int TailLines { get; set; } = 100;
+    [Id(2)]
+    public string? RunnerInstanceId { get; set; }
 }
 
 [GenerateSerializer]
@@ -570,6 +572,8 @@ public class RunnerLogsEvent
     public required string InstanceHandle { get; set; }
     [Id(2)]
     public string Logs { get; set; } = "";
+    [Id(3)]
+    public string? RunnerInstanceId { get; set; }
 }
 
 [GenerateSerializer]

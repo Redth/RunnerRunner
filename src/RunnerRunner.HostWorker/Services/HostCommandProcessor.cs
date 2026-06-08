@@ -540,15 +540,19 @@ internal sealed class HostCommandProcessor : BackgroundService
         }
 
         if (string.IsNullOrEmpty(logs) && _nativeBackend is NativeBackend native)
-            logs = await GetNativeRunnerLogsAsync(native, command.InstanceHandle, command.TailLines, ct);
+            logs = await GetNativeRunnerLogsAsync(native, command.InstanceHandle, command.RunnerInstanceId, command.TailLines, ct);
 
         logs = string.IsNullOrEmpty(logs) ? "(No logs available for this runner instance)" : logs;
-        await PublishLocalLogFrameAsync("runner.output", $"runner.{command.InstanceHandle}", logs, command.InstanceHandle, ct);
+        var runnerInstanceId = string.IsNullOrWhiteSpace(command.RunnerInstanceId)
+            ? command.InstanceHandle
+            : command.RunnerInstanceId;
+        await PublishLocalLogFrameAsync("runner.output", $"runner.{command.InstanceHandle}", logs, runnerInstanceId, ct);
 
         await PublishAsync(HostWorkerMessageKinds.RunnerLogs, new RunnerLogsEvent
         {
             HostId = _identity.HostId,
             InstanceHandle = command.InstanceHandle,
+            RunnerInstanceId = runnerInstanceId,
             Logs = logs
         }, ct);
     }
@@ -729,7 +733,7 @@ internal sealed class HostCommandProcessor : BackgroundService
             ErrorMessage = string.Equals(reason, "completed", StringComparison.OrdinalIgnoreCase) ? null : reason
         }, ct);
 
-    private async Task<string> GetNativeRunnerLogsAsync(NativeBackend native, string instanceHandle, int tailLines, CancellationToken ct)
+    private async Task<string> GetNativeRunnerLogsAsync(NativeBackend native, string instanceHandle, string? runnerInstanceId, int tailLines, CancellationToken ct)
     {
         var tailCount = tailLines > 0 ? tailLines : 100;
         var logLines = new List<string>();
@@ -743,11 +747,16 @@ internal sealed class HostCommandProcessor : BackgroundService
         if (!Directory.Exists(instancesDir))
             return "";
 
-        var matchingDir = Directory.GetDirectories(instancesDir)
+        var instanceDirs = Directory.GetDirectories(instancesDir);
+        var matchingDir = string.IsNullOrWhiteSpace(runnerInstanceId)
+            ? null
+            : await FindNativeInstanceDirectoryAsync(instanceDirs, runnerInstanceId, ct);
+
+        matchingDir ??= instanceDirs
             .FirstOrDefault(d => Path.GetFileName(d).Equals(instanceHandle, StringComparison.OrdinalIgnoreCase)
                                  || Path.GetFileName(d).Contains(instanceHandle, StringComparison.OrdinalIgnoreCase));
 
-        matchingDir ??= Directory.GetDirectories(instancesDir)
+        matchingDir ??= instanceDirs
             .FirstOrDefault(d => File.Exists(Path.Combine(d, "runner.log"))
                                  || Directory.Exists(Path.Combine(d, "_diag")));
 
@@ -771,6 +780,37 @@ internal sealed class HostCommandProcessor : BackgroundService
         }
 
         return logLines.Count > 0 ? string.Join("\n", logLines) : "";
+    }
+
+    private async Task<string?> FindNativeInstanceDirectoryAsync(string[] instanceDirs, string runnerInstanceId, CancellationToken ct)
+    {
+        foreach (var dir in instanceDirs)
+        {
+            var metadataPath = Path.Combine(dir, "rr-instance.json");
+            if (!File.Exists(metadataPath))
+                continue;
+
+            try
+            {
+                await using var stream = File.OpenRead(metadataPath);
+                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+                if (doc.RootElement.TryGetProperty("InstanceId", out var instanceId)
+                    && string.Equals(instanceId.GetString(), runnerInstanceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return dir;
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogDebug(ex, "Skipping unreadable native runner metadata file {MetadataPath}", metadataPath);
+            }
+            catch (IOException ex)
+            {
+                _logger.LogDebug(ex, "Skipping inaccessible native runner metadata file {MetadataPath}", metadataPath);
+            }
+        }
+
+        return null;
     }
 
     private async Task<string> GetHostLogTailAsync(int tailLines, CancellationToken ct)

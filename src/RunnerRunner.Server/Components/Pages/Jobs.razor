@@ -1257,9 +1257,14 @@ else
                 return;
             }
 
-            var handle = job.Instance.ContainerId ?? job.Instance.RunnerName;
+            var handle = GetRunnerInstanceHandle(job.Instance);
             _runnerLogsTcs = new TaskCompletionSource<string>();
-            var command = new GetRunnerLogsCommand { InstanceHandle = handle, TailLines = logTailLines };
+            var command = new GetRunnerLogsCommand
+            {
+                InstanceHandle = handle,
+                RunnerInstanceId = job.Instance.Id,
+                TailLines = logTailLines
+            };
 
             await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
 
@@ -1295,8 +1300,14 @@ else
 
     private string GetCachedRunnerLogs(string hostId, RunnerInstance instance)
     {
-        var streamId = $"runner.{instance.ContainerId ?? instance.RunnerName}";
+        var streamId = $"runner.{GetRunnerInstanceHandle(instance)}";
         return HostWorkerLogCache.GetTextTail(hostId, streamId, logTailLines);
     }
+
+    private static string GetRunnerInstanceHandle(RunnerInstance instance) =>
+        instance.ContainerId
+        ?? instance.VmName
+        ?? instance.ProcessId?.ToString()
+        ?? instance.RunnerName;
 
 }
