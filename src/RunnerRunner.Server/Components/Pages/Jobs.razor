@@ -1229,31 +1229,7 @@ else
                     return;
                 }
 
-                var lines = new List<string>
-                {
-                    $"=== Runner: {job.Instance.RunnerName} ===",
-                    $"Host: {host.Label}",
-                    $"Status: {job.Instance.Status}",
-                    ""
-                };
-
-                if (!string.IsNullOrWhiteSpace(job.Instance.StatusMessage))
-                    lines.Add($"Status message: {job.Instance.StatusMessage}");
-                if (!string.IsNullOrWhiteSpace(job.Instance.ErrorMessage))
-                    lines.Add($"Error: {job.Instance.ErrorMessage}");
-
-                lines.Add("");
-                lines.Add("Live log streaming is unavailable because this HostWorker is offline.");
-
-                if (host.Platform == HostPlatform.Linux)
-                {
-                    lines.Add("");
-                    lines.Add("Manual log access:");
-                    var cid = job.Instance.ContainerId ?? job.Instance.RunnerName;
-                    lines.Add($"  ssh root@{host.Name} 'docker logs {cid} 2>&1 | tail -200'");
-                }
-
-                logContent = string.Join("\n", lines);
+                logContent = BuildLiveTailUnavailableMessage(host, job.Instance, "this HostWorker is offline");
                 return;
             }
 
@@ -1266,7 +1242,18 @@ else
                 TailLines = logTailLines
             };
 
-            await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
+            try
+            {
+                await HostCommandDispatcher.DispatchGetRunnerLogsAsync(host.Id, command);
+            }
+            catch (InvalidOperationException ex)
+            {
+                var cached = GetCachedRunnerLogs(host.Id, job.Instance);
+                logContent = !string.IsNullOrWhiteSpace(cached)
+                    ? cached
+                    : BuildLiveTailUnavailableMessage(host, job.Instance, ex.Message);
+                return;
+            }
 
             var completedTask = await Task.WhenAny(_runnerLogsTcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
             if (completedTask == _runnerLogsTcs.Task)
@@ -1304,10 +1291,42 @@ else
         return HostWorkerLogCache.GetTextTail(hostId, streamId, logTailLines);
     }
 
+    private static string BuildLiveTailUnavailableMessage(Host host, RunnerInstance instance, string reason)
+    {
+        var lines = new List<string>
+        {
+            $"=== Runner: {instance.RunnerName} ===",
+            $"Host: {host.Label}",
+            $"Status: {instance.Status}",
+            ""
+        };
+
+        if (!string.IsNullOrWhiteSpace(instance.StatusMessage))
+            lines.Add($"Status message: {instance.StatusMessage}");
+        if (!string.IsNullOrWhiteSpace(instance.ErrorMessage))
+            lines.Add($"Error: {instance.ErrorMessage}");
+
+        lines.Add("");
+        lines.Add($"Live log streaming is unavailable because {TrimTerminalPunctuation(reason)}.");
+
+        if (host.Platform == HostPlatform.Linux)
+        {
+            lines.Add("");
+            lines.Add("Manual log access:");
+            var cid = instance.ContainerId ?? instance.RunnerName;
+            lines.Add($"  ssh root@{host.Name} 'docker logs {cid} 2>&1 | tail -200'");
+        }
+
+        return string.Join("\n", lines);
+    }
+
     private static string GetRunnerInstanceHandle(RunnerInstance instance) =>
         instance.ContainerId
         ?? instance.VmName
         ?? instance.ProcessId?.ToString()
         ?? instance.RunnerName;
+
+    private static string TrimTerminalPunctuation(string value) =>
+        value.Trim().TrimEnd('.', '!', '?');
 
 }
