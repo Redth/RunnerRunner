@@ -7,6 +7,7 @@ internal sealed class RecordingHostCommandDispatcher : IHostCommandDispatcher
 {
     private readonly object _gate = new();
     private readonly List<DispatchedHostCommand> _commands = [];
+    private readonly HashSet<string> _disconnectedHosts = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<DispatchedHostCommand> Commands
     {
@@ -24,6 +25,23 @@ internal sealed class RecordingHostCommandDispatcher : IHostCommandDispatcher
             throw new InvalidOperationException($"Expected one {kind} command, found {matches.Length}.");
 
         return (TCommand)matches[0].Command;
+    }
+
+    public bool CanDispatchToHost(string hostId)
+    {
+        lock (_gate)
+            return !_disconnectedHosts.Contains(hostId);
+    }
+
+    public void SetHostConnected(string hostId, bool connected)
+    {
+        lock (_gate)
+        {
+            if (connected)
+                _disconnectedHosts.Remove(hostId);
+            else
+                _disconnectedHosts.Add(hostId);
+        }
     }
 
     public Task DispatchDeployRunnerAsync(string hostId, DeployRunnerCommand command)

@@ -4,6 +4,7 @@ namespace RunnerRunner.Server.Services;
 
 public interface IHostCommandDispatcher
 {
+    bool CanDispatchToHost(string hostId);
     Task DispatchDeployRunnerAsync(string hostId, DeployRunnerCommand command);
     Task DispatchStopRunnerAsync(string hostId, StopRunnerCommand command);
     Task DispatchCleanupOrphanAsync(string hostId, CleanupOrphanCommand command);
