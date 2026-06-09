@@ -51,6 +51,25 @@ public class GrpcHostCommandDispatcherTests
     }
 
     [Fact]
+    public async Task CanDispatchToHost_ReturnsCurrentConnectionState()
+    {
+        var registry = new HostWorkerConnectionRegistry();
+        using var tasks = new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance);
+        var dispatcher = new GrpcHostCommandDispatcher(registry, tasks, NullLogger<GrpcHostCommandDispatcher>.Instance);
+
+        Assert.False(dispatcher.CanDispatchToHost("host-1"));
+
+        await using (registry.Register("host-1", "worker-name"))
+        {
+            Assert.True(dispatcher.CanDispatchToHost("host-1"));
+            Assert.True(dispatcher.CanDispatchToHost("worker-name"));
+        }
+
+        Assert.False(dispatcher.CanDispatchToHost("host-1"));
+        Assert.False(dispatcher.CanDispatchToHost("worker-name"));
+    }
+
+    [Fact]
     public async Task DispatchPullImageAsync_TracksTaskAndSendsTaskId()
     {
         var registry = new HostWorkerConnectionRegistry();

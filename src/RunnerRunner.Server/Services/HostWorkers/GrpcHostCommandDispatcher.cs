@@ -19,6 +19,9 @@ public sealed class GrpcHostCommandDispatcher : IHostCommandDispatcher
         _logger = logger;
     }
 
+    public bool CanDispatchToHost(string hostId)
+        => _registry.IsConnected(hostId);
+
     public Task DispatchDeployRunnerAsync(string hostId, DeployRunnerCommand command)
         => DispatchAsync(hostId, HostCommandKind.DeployRunner, new HostCommandEnvelope
         {

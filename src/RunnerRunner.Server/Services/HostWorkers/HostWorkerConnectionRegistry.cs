@@ -36,6 +36,9 @@ public sealed class HostWorkerConnectionRegistry
         await connection.SendAsync(message, cancellationToken);
     }
 
+    public bool IsConnected(string hostId)
+        => _connections.ContainsKey(hostId);
+
     public bool IsCurrent(string hostId, HostWorkerConnection connection)
         => _connections.TryGetValue(hostId, out var current) && ReferenceEquals(current, connection);
 

@@ -170,9 +170,67 @@ public sealed class FakeFleetEndToEndTests
         Assert.Contains(failedProjection.StatusHistory, h => h.Status == RunnerInstanceStatus.Failed);
     }
 
-    private DynamicProvisioningService CreateDynamicProvisioningService()
+    [Fact]
+    public async Task GitHubWebhookFleet_WaitsForDisconnectedHostBeforeGeneratingJitConfig()
     {
-        var api = new FakeProviderHttpApi(_ => FakeProviderHttpApi.JsonResponse("{}"));
+        await ClearFleetDocumentsAsync();
+        var id = OrleansTestIds.Create("fleet-disconnected");
+        var hostId = $"{id}-host";
+        var profileId = $"{id}-profile";
+        var ruleId = $"{id}-rule";
+        var credentialId = $"{id}-credential";
+        var secret = $"{id}-secret";
+        var repo = "octo/fleet";
+        var labels = new[] { "self-hosted", "linux", "fleet-docker" };
+        var jobId = NextJobId();
+        var api = new FakeProviderHttpApi();
+        var service = CreateDynamicProvisioningService(api);
+        await CreateHostAsync(hostId, HostPlatform.Linux, ExecutionBackend.Docker);
+        var profile = await CreateProfileAsync(
+            profileId,
+            "github-docker",
+            RunnerProvider.GitHubActions,
+            HostPlatform.Linux,
+            ExecutionBackend.Docker,
+            labels);
+        profile.ProviderCredentialId = credentialId;
+        await _store.Update(profile);
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(profile);
+        await _store.Insert(new ProviderCredential
+        {
+            Id = credentialId,
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubToken = "fake-token",
+            GitHubOrg = "octo",
+            GitHubRepo = repo
+        });
+        await CreateWebhookRuleAsync(ruleId, "github docker", RunnerProvider.GitHubActions, secret, repo, profileId, labels, hostId);
+        _fixture.HostCommands.SetHostConnected(hostId, connected: false);
+
+        try
+        {
+            var queued = await ProcessWebhookAsync("github", "queued", jobId, repo, labels, secret);
+
+            await service.ProcessQueuedWebhookEventOnceAsync(queued.EventId!, profileId);
+
+            var queuedEvent = await _store.Get<WebhookEvent>(queued.EventId!);
+            Assert.NotNull(queuedEvent);
+            Assert.Equal("pending_host_match", queuedEvent.Status);
+            Assert.Contains("waiting for it to reconnect", queuedEvent.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(queuedEvent.InstanceId);
+            Assert.DoesNotContain(_fixture.HostCommands.Commands, command => command.HostId == hostId && command.Kind == HostCommandKind.DeployRunner);
+            Assert.Empty(api.Requests);
+        }
+        finally
+        {
+            _fixture.HostCommands.SetHostConnected(hostId, connected: true);
+        }
+    }
+
+    private DynamicProvisioningService CreateDynamicProvisioningService(FakeProviderHttpApi? api = null)
+    {
+        api ??= new FakeProviderHttpApi(_ => FakeProviderHttpApi.JsonResponse("{}"));
         var auth = new GitHubAuthenticationService(api, NullLogger<GitHubAuthenticationService>.Instance);
         var jit = new JitConfigService(NullLogger<JitConfigService>.Instance, api, auth);
         var cleanup = _fixture.Cluster.GetSiloServiceProvider(null!).GetRequiredService<RunnerRegistrationCleanupService>();

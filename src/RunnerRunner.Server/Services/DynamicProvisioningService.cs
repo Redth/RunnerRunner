@@ -705,6 +705,19 @@ public class DynamicProvisioningService : BackgroundService
                 return QueueProcessingOutcome.Blocked;
             }
 
+            if (!_hostCommands.CanDispatchToHost(hostSelection.Host.Id))
+            {
+                await ScheduleRetryAsync(
+                    store,
+                    currentEvent,
+                    BuildHostWorkerDisconnectedReason(hostSelection.Host),
+                    now,
+                    status: "pending_host_match",
+                    countAttempt: false,
+                    delay: _retrySweepInterval);
+                return QueueProcessingOutcome.Blocked;
+            }
+
             await UpdateEventProgressAsync(
                 store,
                 currentEvent,
@@ -864,12 +877,28 @@ public class DynamicProvisioningService : BackgroundService
             }
             catch (Exception ex)
             {
+                var hostWorkerDisconnected = IsHostWorkerDisconnectedError(ex);
                 await runnerGrain.MarkFailed($"Failed to dispatch dynamic deploy command: {ex.Message}");
+                if (credential != null)
+                    await _runnerRegistrationCleanupService.TryRemoveRunnerAsync(store, BuildCleanupRunnerInstance(
+                        instanceId,
+                        hostSelection.Host.Id,
+                        profile.Id,
+                        runnerName,
+                        currentEvent,
+                        currentEvent.BindingId,
+                        appliedTagOverride,
+                        matchedRunnerDefinition?.Id), CancellationToken.None);
                 await ScheduleRetryAsync(
                     store,
                     currentEvent,
-                    $"Failed to dispatch dynamic deploy command: {ex.Message}",
-                    now);
+                    hostWorkerDisconnected
+                        ? BuildHostWorkerDisconnectedReason(hostSelection.Host)
+                        : $"Failed to dispatch dynamic deploy command: {ex.Message}",
+                    now,
+                    status: hostWorkerDisconnected ? "pending_host_match" : "pending",
+                    countAttempt: !hostWorkerDisconnected,
+                    delay: hostWorkerDisconnected ? _retrySweepInterval : null);
                 return QueueProcessingOutcome.Blocked;
             }
 
@@ -1058,6 +1087,36 @@ public class DynamicProvisioningService : BackgroundService
 
     private static string? GetGitHubRunnerUrl(ProviderCredential credential)
         => GitHubCredentialResolver.GetRunnerUrl(credential);
+
+    private static string BuildHostWorkerDisconnectedReason(Host host)
+        => $"HostWorker '{host.Label}' is not connected; waiting for it to reconnect before generating a runner JIT config.";
+
+    private static bool IsHostWorkerDisconnectedError(Exception ex)
+        => ex is InvalidOperationException && ex.Message.Contains("is not connected", StringComparison.OrdinalIgnoreCase);
+
+    private static RunnerInstance BuildCleanupRunnerInstance(
+        string instanceId,
+        string hostId,
+        string profileId,
+        string runnerName,
+        WebhookEvent evt,
+        string? provisioningRuleId,
+        string? imageTagOverride,
+        string? runnerDefinitionId)
+        => new()
+        {
+            Id = instanceId,
+            HostId = hostId,
+            ProfileId = profileId,
+            RunnerName = runnerName,
+            ProvisioningMode = "dynamic",
+            JobId = evt.JobId,
+            WebhookEventId = evt.Id,
+            ProvisioningRuleId = provisioningRuleId,
+            ImageTagOverride = imageTagOverride,
+            RunnerDefinitionId = runnerDefinitionId,
+            ManagedByRunnerRunner = true
+        };
 
     private async Task<Dictionary<string, string>> ComposeEnvironmentVariablesAsync(
         IDocumentStore store, RunnerProfile profile, Host host, ProviderCredential? credential)
