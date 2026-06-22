@@ -207,12 +207,35 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             };
         }
 
+        List<RunnerInstance> lifecycleInstances = action is "in_progress" or "completed"
+            ? (await store.Query<RunnerInstance>().ToList())
+                .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
+                .ToList()
+            : [];
+
+        if (action is "in_progress" or "completed")
+        {
+            var ignoredLifecycle = await TryIgnoreUnmatchedLifecycleEventAsync(
+                store,
+                matchedRule,
+                providerName,
+                action,
+                jobId,
+                runId,
+                repo,
+                githubInstallationId,
+                workflowName,
+                labels,
+                lifecycleInstances);
+
+            if (ignoredLifecycle != null)
+                return ignoredLifecycle;
+        }
+
         // Handle "in_progress"
         if (action == "in_progress")
         {
-            var instances = (await store.Query<RunnerInstance>().ToList())
-                .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
-                .ToList();
+            var instances = lifecycleInstances;
 
             string? instanceId = null;
             foreach (var inst in instances)
@@ -421,6 +444,75 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
             Message = $"Action '{action}' ignored"
         };
     }
+
+    private async Task<WebhookProcessResult?> TryIgnoreUnmatchedLifecycleEventAsync(
+        IDocumentStore store,
+        ProvisioningRule matchedRule,
+        string providerName,
+        string action,
+        string jobId,
+        string runId,
+        string repo,
+        string? githubInstallationId,
+        string workflowName,
+        List<string> labels,
+        IReadOnlyCollection<RunnerInstance> dynamicInstances)
+    {
+        if (dynamicInstances.Count > 0)
+            return null;
+
+        var relatedEvents = (await store.Query<WebhookEvent>().ToList())
+            .Where(e => string.Equals(e.Provider, providerName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(e.Repository, repo, StringComparison.OrdinalIgnoreCase)
+                && e.JobId == jobId)
+            .ToList();
+
+        if (relatedEvents.Any(IsActionableQueuedEvent))
+            return null;
+
+        var probe = new WebhookEvent
+        {
+            BindingId = matchedRule.Id,
+            Provider = providerName,
+            Action = action,
+            JobId = jobId,
+            RunId = runId,
+            Repository = repo,
+            GitHubInstallationId = githubInstallationId,
+            WorkflowName = workflowName,
+            Labels = labels
+        };
+        var (_, profile, _, reason) = await ResolveProvisioningMatchAsync(store, probe, null);
+        if (profile != null)
+            return null;
+
+        var status = matchedRule.IsMissingRunnerTargetRequest(labels)
+            ? WebhookEvent.StatusIgnoredTarget
+            : "ignored";
+        var message = string.IsNullOrWhiteSpace(reason)
+            ? $"No RunnerRunner-managed queued job matched workflow_job action '{action}'"
+            : reason;
+
+        _logger.LogDebug(
+            "Ignoring non-actionable workflow_job {Action} for {Repo} job {JobId}: {Message}",
+            action,
+            repo,
+            jobId,
+            message);
+
+        return new WebhookProcessResult
+        {
+            Success = true,
+            Status = status,
+            Message = message
+        };
+    }
+
+    private static bool IsActionableQueuedEvent(WebhookEvent evt) =>
+        string.Equals(evt.Action, "queued", StringComparison.OrdinalIgnoreCase)
+        && (!string.IsNullOrWhiteSpace(evt.MatchedProfileId)
+            || !string.IsNullOrWhiteSpace(evt.InstanceId)
+            || evt.Status is "provisioned" or "matching" or "preparing" or "dispatching");
 
     internal static bool ValidateHmac(string body, string secret, string? signatureHeader, string provider) =>
         ValidateHmac(Encoding.UTF8.GetBytes(body), secret, signatureHeader, provider);

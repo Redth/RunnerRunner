@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,8 +9,15 @@ namespace RunnerRunner.Server.Services;
 
 public class GitHubAuthenticationService
 {
+    private sealed record CachedInstallationToken(string Token, DateTimeOffset ExpiresAt);
+
+    private static readonly TimeSpan TokenRefreshSkew = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultTokenLifetime = TimeSpan.FromMinutes(50);
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GitHubAuthenticationService> _logger;
+    private readonly ConcurrentDictionary<string, CachedInstallationToken> _installationTokens = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _installationTokenGate = new(1, 1);
 
     public GitHubAuthenticationService(
         IHttpClientFactory httpClientFactory,
@@ -83,8 +91,36 @@ public class GitHubAuthenticationService
         var resolvedInstallationId = ResolveGitHubAppInstallationId(credential, installationId, repository)
             ?? throw new InvalidOperationException($"GitHub App credential '{credential.Name}' does not have an installation ID.");
 
-        var appJwt = CreateAppJwt(credential);
         var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
+        var cacheKey = BuildInstallationTokenCacheKey(apiUrl, credential.GitHubAppId, resolvedInstallationId);
+        var now = DateTimeOffset.UtcNow;
+        if (_installationTokens.TryGetValue(cacheKey, out var cached) && IsUsable(cached, now))
+            return cached.Token;
+
+        await _installationTokenGate.WaitAsync(ct);
+        try
+        {
+            now = DateTimeOffset.UtcNow;
+            if (_installationTokens.TryGetValue(cacheKey, out cached) && IsUsable(cached, now))
+                return cached.Token;
+
+            var token = await RequestInstallationTokenAsync(credential, apiUrl, resolvedInstallationId, ct);
+            _installationTokens[cacheKey] = token;
+            return token.Token;
+        }
+        finally
+        {
+            _installationTokenGate.Release();
+        }
+    }
+
+    private async Task<CachedInstallationToken> RequestInstallationTokenAsync(
+        ProviderCredential credential,
+        string apiUrl,
+        string resolvedInstallationId,
+        CancellationToken ct)
+    {
+        var appJwt = CreateAppJwt(credential);
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"{apiUrl}/app/installations/{resolvedInstallationId}/access_tokens");
@@ -100,14 +136,26 @@ public class GitHubAuthenticationService
         var token = json.RootElement.GetProperty("token").GetString();
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException("GitHub App installation token response did not include a token.");
+        var expiresAt = json.RootElement.TryGetProperty("expires_at", out var expiresAtElement)
+            && expiresAtElement.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(expiresAtElement.GetString(), out var parsedExpiresAt)
+                ? parsedExpiresAt
+                : DateTimeOffset.UtcNow.Add(DefaultTokenLifetime);
 
         _logger.LogDebug(
-            "Generated GitHub App installation token for credential {CredentialName} installation {InstallationId}",
+            "Generated GitHub App installation token for credential {CredentialName} installation {InstallationId} (expires {ExpiresAt})",
             credential.Name,
-            resolvedInstallationId);
+            resolvedInstallationId,
+            expiresAt);
 
-        return token;
+        return new CachedInstallationToken(token, expiresAt);
     }
+
+    private static bool IsUsable(CachedInstallationToken token, DateTimeOffset now) =>
+        token.ExpiresAt > now.Add(TokenRefreshSkew);
+
+    private static string BuildInstallationTokenCacheKey(string apiUrl, string? appId, string installationId) =>
+        $"{apiUrl.TrimEnd('/')}|{appId?.Trim()}|{installationId.Trim()}";
 
     private static string CreateAppJwt(ProviderCredential credential)
     {

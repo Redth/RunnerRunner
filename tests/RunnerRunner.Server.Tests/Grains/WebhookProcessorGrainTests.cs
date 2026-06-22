@@ -455,6 +455,7 @@ public sealed class WebhookProcessorGrainTests
         var id = OrleansTestIds.Create("github-completed");
         var secret = $"{id}-secret";
         var jobId = NextJobId();
+        var profileId = $"{id}-profile";
         var rule = new ProvisioningRule
         {
             Id = $"{id}-rule",
@@ -462,9 +463,24 @@ public sealed class WebhookProcessorGrainTests
             Type = ProvisioningType.Webhook,
             Provider = RunnerProvider.GitHubActions,
             WebhookSecret = secret,
-            AllowedOrgs = ["octo-org"]
+            AllowedOrgs = ["octo-org"],
+            LabelMappings =
+            [
+                new LabelProfileMapping
+                {
+                    RequiredLabels = ["self-hosted", "linux"],
+                    ProfileId = profileId
+                }
+            ]
         };
         await _store.Insert(rule);
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(new RunnerProfile
+        {
+            Id = profileId,
+            Name = "linux profile",
+            Provider = RunnerProvider.GitHubActions,
+            ExecutionBackend = ExecutionBackend.Docker
+        });
         var body = BuildWorkflowJobPayload(
             action: "completed",
             jobId: jobId,
@@ -482,6 +498,47 @@ public sealed class WebhookProcessorGrainTests
         Assert.Equal("completed", webhookEvent.Action);
         Assert.Equal("completed", webhookEvent.Status);
         Assert.Equal("octo-org/another-repo", webhookEvent.Repository);
+    }
+
+    [Fact]
+    public async Task ProcessWebhook_GitHubCompleted_IgnoresMissingRunnerTargetWithoutQueuedWork()
+    {
+        var id = OrleansTestIds.Create("github-completed-ignored");
+        var secret = $"{id}-secret";
+        var jobId = NextJobId();
+        var rule = new ProvisioningRule
+        {
+            Id = $"{id}-rule",
+            Name = "targeted rule",
+            Type = ProvisioningType.Webhook,
+            Provider = RunnerProvider.GitHubActions,
+            WebhookSecret = secret,
+            AllowedOrgs = ["octo-org"],
+            RunnerDefinitions =
+            [
+                new RunnerDefinition
+                {
+                    Id = $"{id}-linux",
+                    Name = "Linux",
+                    TargetKey = "rr-linux",
+                    RequiredHostPlatform = HostPlatform.Linux,
+                    ExecutionBackend = ExecutionBackend.Docker
+                }
+            ]
+        };
+        await _store.Insert(rule);
+        var body = BuildWorkflowJobPayload(
+            action: "completed",
+            jobId: jobId,
+            runId: jobId + 1,
+            repository: "octo-org/another-repo",
+            labels: ["ubuntu-latest"]);
+
+        var result = await Processor().ProcessWebhook("github", body, BodyBytes(body), SignGitHub(body, secret));
+
+        Assert.True(result.Success);
+        Assert.Equal(WebhookEvent.StatusIgnoredTarget, result.Status);
+        Assert.Empty(await EventsForJob(jobId));
     }
 
     [Fact]
