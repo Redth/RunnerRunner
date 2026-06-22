@@ -12,27 +12,30 @@ public static class DocumentStoreSetup
         this IServiceCollection services,
         string connectionString)
     {
-        services.AddPostgreSqlDocumentStore(opts =>
+        var options = new DocumentStoreOptions
         {
-            opts.DatabaseProvider = new PostgreSqlDatabaseProvider(connectionString);
+            DatabaseProvider = new PostgreSqlDatabaseProvider(connectionString)
+        };
 
-            // Give each entity type its own table for cleaner organization
-            opts.MapTypeToTable<HostModel>("hosts");
-            opts.MapTypeToTable<RunnerProfile>("runner_profiles");
-            opts.MapTypeToTable<RunnerInstance>("runner_instances");
-            opts.MapTypeToTable<RunnerAssignment>("runner_assignments");
-            opts.MapTypeToTable<EnvironmentVariableSet>("env_var_sets");
-            opts.MapTypeToTable<RunnerAgentVersion>("runner_agent_versions");
-            opts.MapTypeToTable<ProviderCredential>("provider_credentials");
-            opts.MapTypeToTable<RegistryCredential>("registry_credentials");
-            opts.MapTypeToTable<AgentImage>("agent_images");
-            opts.MapTypeToTable<AuditLogEntry>("audit_log");
-            opts.MapTypeToTable<WebhookEvent>("webhook_events");
-            opts.MapTypeToTable<WebhookBinding>("webhook_bindings");
-            opts.MapTypeToTable<ProvisioningRule>("provisioning_rules");
-            opts.MapTypeToTable<RunnerInitStepDefinition>("runner_init_steps");
-            opts.MapTypeToTable<RunnerRunnerAuthSettings>("auth_settings");
-        });
+        // Give each entity type its own table for cleaner organization
+        options.MapTypeToTable<HostModel>("hosts");
+        options.MapTypeToTable<RunnerProfile>("runner_profiles");
+        options.MapTypeToTable<RunnerInstance>("runner_instances");
+        options.MapTypeToTable<RunnerAssignment>("runner_assignments");
+        options.MapTypeToTable<EnvironmentVariableSet>("env_var_sets");
+        options.MapTypeToTable<RunnerAgentVersion>("runner_agent_versions");
+        options.MapTypeToTable<ProviderCredential>("provider_credentials");
+        options.MapTypeToTable<RegistryCredential>("registry_credentials");
+        options.MapTypeToTable<AgentImage>("agent_images");
+        options.MapTypeToTable<AuditLogEntry>("audit_log");
+        options.MapTypeToTable<WebhookEvent>("webhook_events");
+        options.MapTypeToTable<WebhookBinding>("webhook_bindings");
+        options.MapTypeToTable<ProvisioningRule>("provisioning_rules");
+        options.MapTypeToTable<RunnerInitStepDefinition>("runner_init_steps");
+        options.MapTypeToTable<RunnerRunnerAuthSettings>("auth_settings");
+
+        services.AddSingleton(options);
+        services.AddSingleton<IDocumentStore, ResilientDocumentStore>();
 
         return services;
     }
