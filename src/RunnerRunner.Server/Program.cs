@@ -194,6 +194,7 @@ builder.Services.AddSingleton<HostWorkerUpdateService>();
 builder.Services.AddSingleton<HostWorkerEventProcessor>();
 builder.Services.AddSingleton<HostWorkerEnrollmentGuideBuilder>();
 builder.Services.AddSingleton<HostWorkerSshSetupService>();
+builder.Services.AddSingleton<HostWorkerSshCredentialService>();
 builder.Services.AddSingleton<LongRunningTaskService>();
 builder.Services.AddScoped<SettingsBackupService>();
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();

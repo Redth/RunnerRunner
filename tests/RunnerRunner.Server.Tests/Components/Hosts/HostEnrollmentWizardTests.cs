@@ -1,4 +1,5 @@
 using Bunit;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -108,5 +109,7 @@ public class HostEnrollmentWizardTests
         context.Services.AddSingleton(new HostWorkerEnrollmentGuideBuilder(configuration));
         context.Services.AddSingleton(updateService);
         context.Services.AddSingleton(new HostWorkerSshSetupService(NullLogger<HostWorkerSshSetupService>.Instance));
+        context.Services.AddDataProtection();
+        context.Services.AddSingleton<HostWorkerSshCredentialService>();
     }
 }

@@ -8,6 +8,7 @@
 @using RunnerHost = RunnerRunner.Core.Models.Host
 @inject IDocumentStore Store
 @inject LongRunningTaskService Tasks
+@inject GitHubApiUsageTracker GitHubUsageTracker
 @rendermode InteractiveServer
 @implements IDisposable
 
@@ -152,6 +153,62 @@
                             <small>@GetIgnoredWebhookRejectionSummary()</small>
                         </span>
                         <span class="badge bg-info">Info</span>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="dashboard-card">
+        <div class="dashboard-card-header">
+            <div>
+                <h2><i class="bi bi-github"></i> GitHub API usage</h2>
+                <p>In-memory REST and GraphQL counters captured by the server process.</p>
+            </div>
+            <a class="btn btn-outline-secondary btn-sm dashboard-header-action" href="/github-api-usage">
+                <i class="bi bi-arrow-right-circle"></i>
+                <span>Details</span>
+            </a>
+        </div>
+
+        <div class="dashboard-system-grid mb-3">
+            <div>
+                <span class="badge bg-primary">@githubApiTotalRequests</span>
+                <strong>Total requests</strong>
+                <small>@githubApiRestRequests REST · @githubApiGraphQlRequests GraphQL</small>
+            </div>
+            <div>
+                <span class="badge @GetGitHubApiIssueBadgeClass()">@githubApiFailureCount</span>
+                <strong>Failures / limits</strong>
+                <small>@githubApiRateLimitedCount rate limited · @FormatGitHubApiRemaining()</small>
+            </div>
+            <div>
+                <span class="badge bg-secondary">@githubApiEndpointCount</span>
+                <strong>Endpoint groups</strong>
+                <small>Since @FormatLocalTime(githubApiStartedAt)</small>
+            </div>
+        </div>
+
+        @if (!topGitHubApiUsage.Any())
+        {
+            <div class="dashboard-empty-state">
+                <i class="bi bi-activity"></i>
+                <strong>No GitHub API calls observed</strong>
+                <span>Tracked server-side GitHub REST/GraphQL calls will appear here after the process makes one.</span>
+            </div>
+        }
+        else
+        {
+            <div class="dashboard-mini-list">
+                @foreach (var usage in topGitHubApiUsage)
+                {
+                    <div class="dashboard-mini-row @GetGitHubApiUsageTone(usage)">
+                        <span class="dashboard-mini-icon"><i class="bi @GetGitHubApiUsageIcon(usage)"></i></span>
+                        <span>
+                            <strong>@usage.Category</strong>
+                            <small>@usage.Method @usage.Endpoint · @usage.Scope · @usage.RequestCount request@(usage.RequestCount == 1 ? "" : "s") · last @FormatRelative(usage.LastObservedAt)</small>
+                        </span>
+                        <span class="badge @GetGitHubApiUsageBadgeClass(usage)">@FormatGitHubApiUsageStatus(usage)</span>
                     </div>
                 }
             </div>
@@ -321,6 +378,14 @@
     private int queuedJobCount;
     private int stuckJobCount;
     private int runningTaskCount;
+    private long githubApiTotalRequests;
+    private long githubApiRestRequests;
+    private long githubApiGraphQlRequests;
+    private long githubApiFailureCount;
+    private long githubApiRateLimitedCount;
+    private int githubApiEndpointCount;
+    private DateTimeOffset githubApiStartedAt;
+    private GitHubRateLimitSnapshot? githubApiMostConstrainedRateLimit;
 
     private List<RunnerHost> hosts = [];
     private List<RunnerInstance> runnerInstances = [];
@@ -331,6 +396,7 @@
     private List<WebhookIssueGroup> recentWebhookIssues = [];
     private List<RunnerHost> hostsWithUpdates = [];
     private List<DashboardAttentionItem> attentionItems = [];
+    private List<GitHubApiUsageSummary> topGitHubApiUsage = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -414,6 +480,22 @@
             .OrderBy(t => t.StartedAt)
             .ToList();
         runningTaskCount = runningTasks.Count;
+
+        var githubUsage = GitHubUsageTracker.GetSnapshot();
+        githubApiTotalRequests = githubUsage.TotalRequests;
+        githubApiRestRequests = githubUsage.RestRequests;
+        githubApiGraphQlRequests = githubUsage.GraphQLRequests;
+        githubApiFailureCount = githubUsage.FailedRequests;
+        githubApiRateLimitedCount = githubUsage.RateLimitedRequests;
+        githubApiEndpointCount = githubUsage.Summaries.Count;
+        githubApiStartedAt = githubUsage.StartedAt;
+        githubApiMostConstrainedRateLimit = githubUsage.MostConstrainedRateLimit;
+        topGitHubApiUsage = githubUsage.Summaries
+            .OrderByDescending(s => s.RateLimitedCount)
+            .ThenByDescending(s => s.FailureCount)
+            .ThenByDescending(s => s.RequestCount)
+            .Take(5)
+            .ToList();
 
         attentionItems = BuildAttentionItems(now);
     }
@@ -647,6 +729,44 @@
 
     private static string GetStatTone(int count, bool warnWhenPositive) =>
         warnWhenPositive && count > 0 ? "warn" : "good";
+
+    private string FormatGitHubApiRemaining()
+    {
+        if (githubApiMostConstrainedRateLimit?.Remaining is not int remaining)
+            return "rate limit n/a";
+
+        var limit = githubApiMostConstrainedRateLimit.Limit is int value ? $"/{value}" : "";
+        var resource = string.IsNullOrWhiteSpace(githubApiMostConstrainedRateLimit.Resource)
+            ? ""
+            : $" {githubApiMostConstrainedRateLimit.Resource}";
+        return $"{remaining}{limit}{resource} remaining";
+    }
+
+    private string GetGitHubApiIssueBadgeClass() =>
+        githubApiRateLimitedCount > 0 ? "bg-danger" :
+        githubApiFailureCount > 0 ? "bg-warning" :
+        "bg-success";
+
+    private static string GetGitHubApiUsageTone(GitHubApiUsageSummary usage) =>
+        usage.RateLimitedCount > 0 ? "danger" :
+        usage.FailureCount > 0 ? "warn" :
+        "info";
+
+    private static string GetGitHubApiUsageIcon(GitHubApiUsageSummary usage) =>
+        usage.Kind == GitHubApiRequestKind.GraphQL ? "bi-diagram-3" : "bi-github";
+
+    private static string GetGitHubApiUsageBadgeClass(GitHubApiUsageSummary usage) =>
+        usage.RateLimitedCount > 0 ? "bg-danger" :
+        usage.FailureCount > 0 ? "bg-warning" :
+        "bg-secondary";
+
+    private static string FormatGitHubApiUsageStatus(GitHubApiUsageSummary usage) =>
+        usage.RateLimitedCount > 0 ? "Limited" :
+        usage.FailureCount > 0 ? "Failing" :
+        usage.LastStatusCode?.ToString() ?? "Error";
+
+    private static string FormatLocalTime(DateTimeOffset value) =>
+        value.ToLocalTime().ToString("MM/dd HH:mm");
 
     private static string FormatRelative(DateTime? value) =>
         value.HasValue ? FormatRelative(value.Value) : "never";

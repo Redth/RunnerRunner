@@ -248,6 +248,8 @@ public class HostWorkerRuntimeInfo
     public string? ContainerId { get; set; }
     [Id(2)]
     public string? ContainerImage { get; set; }
+    [Id(3)]
+    public List<string> NetworkAddresses { get; set; } = [];
 }
 
 [GenerateSerializer]

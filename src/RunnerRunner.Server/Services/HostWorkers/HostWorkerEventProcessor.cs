@@ -42,7 +42,7 @@ public sealed class HostWorkerEventProcessor
         string? enrollmentToken,
         CancellationToken ct)
     {
-        var host = await ResolveOrCreateHostAsync(agentInfo, labels, enrollmentToken, ct);
+        var host = await ResolveOrCreateHostAsync(agentInfo, connectionId, labels, enrollmentToken, ct);
         var hostId = host.Id;
 
         var hostGrain = _grainFactory.GetGrain<IHostGrain>(hostId);
@@ -164,6 +164,7 @@ public sealed class HostWorkerEventProcessor
 
     private async Task<Host> ResolveOrCreateHostAsync(
         AgentInfo agentInfo,
+        string connectionId,
         IReadOnlyDictionary<string, string> labels,
         string? enrollmentToken,
         CancellationToken ct)
@@ -203,6 +204,7 @@ public sealed class HostWorkerEventProcessor
         host.IsContainerized = agentInfo.Runtime?.IsContainer ?? false;
         host.ContainerId = agentInfo.Runtime?.ContainerId;
         host.ContainerImage = agentInfo.Runtime?.ContainerImage;
+        HostConnectionMetadata.Apply(host, connectionId, agentInfo.Runtime?.NetworkAddresses);
         host.Capabilities = agentInfo.Capabilities;
         host.IsApproved = true;
         host.EnrolledAt ??= DateTime.UtcNow;

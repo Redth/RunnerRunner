@@ -4,6 +4,7 @@ using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Services;
+using RunnerRunner.Server.Services.HostWorkers;
 using System.Collections.Concurrent;
 using Host = RunnerRunner.Core.Models.Host;
 
@@ -87,6 +88,8 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             "Agent registered: {AgentName} ({AgentId}) - {Platform} {Architecture}",
             agentInfo.Name, agentInfo.AgentId, agentInfo.Platform, agentInfo.Architecture);
 
+        var remoteEndpoint = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString();
+
         // Upsert host record in the document store
         var existingHosts = (await _store.Query<Host>().ToList()).Where(h => h.Name == agentInfo.Name).ToList();
         if (existingHosts.Count != 0)
@@ -100,6 +103,7 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
             host.IsContainerized = agentInfo.Runtime?.IsContainer ?? false;
             host.ContainerId = agentInfo.Runtime?.ContainerId;
             host.ContainerImage = agentInfo.Runtime?.ContainerImage;
+            HostConnectionMetadata.Apply(host, remoteEndpoint, agentInfo.Runtime?.NetworkAddresses);
             host.Capabilities = agentInfo.Capabilities;
             host.LastHeartbeat = DateTime.UtcNow;
             host.IsApproved = true;
@@ -123,6 +127,7 @@ public class AgentHub : Hub<IAgentHubClient>, IAgentHubServer
                 LastHeartbeat = DateTime.UtcNow,
                 IsApproved = true
             };
+            HostConnectionMetadata.Apply(host, remoteEndpoint, agentInfo.Runtime?.NetworkAddresses);
             HostBackendLimitDefaults.ApplyToNewHost(host);
             await _store.Insert(host);
         }

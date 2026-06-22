@@ -23,6 +23,14 @@ public class Host
     public bool IsContainerized { get; set; }
     public string? ContainerId { get; set; }
     public string? ContainerImage { get; set; }
+    public string? LastRemoteEndpoint { get; set; }
+    public string? LastRemoteIpAddress { get; set; }
+    public List<string> ReportedIpAddresses { get; set; } = [];
+    public string? SshTargetAddress { get; set; }
+    public int SshPort { get; set; } = 22;
+    public string? SshUserName { get; set; }
+    public string? ProtectedSshPassword { get; set; }
+    public DateTime? SshSettingsUpdatedAt { get; set; }
     /// <summary>
     /// HostWorker-advertised backend and feature support, e.g. docker, tart,
     /// native, gpu, xcode16. Backend scheduling is controlled by backend

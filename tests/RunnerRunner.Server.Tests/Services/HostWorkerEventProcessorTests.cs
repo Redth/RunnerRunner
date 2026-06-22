@@ -168,6 +168,49 @@ public class HostWorkerEventProcessorTests
     }
 
     [Fact]
+    public async Task WorkerConnectedAsync_StoresConnectionMetadata()
+    {
+        var token = HostEnrollmentToken.Create();
+        var store = TestDocumentStore.Create();
+        await store.Insert(new Host
+        {
+            Name = "pending-host",
+            EnrollmentTokenHash = HostEnrollmentToken.Hash(token),
+            EnrollmentTokenCreatedAt = DateTime.UtcNow
+        });
+        var processor = CreateProcessor(store);
+
+        var hostId = await processor.WorkerConnectedAsync(
+            new AgentInfo
+            {
+                AgentId = "worker-1",
+                Name = "mac-mini",
+                Platform = HostPlatform.MacOS,
+                Architecture = "arm64",
+                Runtime = new HostWorkerRuntimeInfo
+                {
+                    NetworkAddresses =
+                    [
+                        "192.168.1.21",
+                        "::ffff:10.0.0.9",
+                        "192.168.1.21"
+                    ]
+                }
+            },
+            "ipv4:192.168.1.99:53210",
+            new Dictionary<string, string>(),
+            token,
+            CancellationToken.None);
+
+        var host = await store.Get<Host>(hostId);
+
+        Assert.NotNull(host);
+        Assert.Equal("ipv4:192.168.1.99:53210", host.LastRemoteEndpoint);
+        Assert.Equal("192.168.1.99", host.LastRemoteIpAddress);
+        Assert.Equal(["192.168.1.21", "10.0.0.9"], host.ReportedIpAddresses);
+    }
+
+    [Fact]
     public async Task WorkerConnectedAsync_MarksRestartingUpdateCurrentWhenCommitMatches()
     {
         const string commitSha = "3bf419d5a5a9f21f24f69dfb44b13639a4137448";

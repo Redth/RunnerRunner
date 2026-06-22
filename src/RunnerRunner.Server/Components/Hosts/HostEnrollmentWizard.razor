@@ -6,6 +6,7 @@
 @inject HostWorkerEnrollmentGuideBuilder GuideBuilder
 @inject HostWorkerUpdateService HostWorkerUpdateService
 @inject HostWorkerSshSetupService SshSetup
+@inject HostWorkerSshCredentialService SshCredentials
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 
@@ -146,6 +147,8 @@
     private string sshPassword = "";
     private string sshKeyPath = "";
     private string sshKeyPassphrase = "";
+    private bool rememberSshSettings;
+    private bool rememberSshPassword;
     private bool autoSetupRunning;
     private string? autoSetupError;
     private HostWorkerSshSetupResult? autoSetupResult;
@@ -246,6 +249,11 @@
                 target = HostWorkerEnrollmentGuideBuilder.GetTargetForHost(UpdateHost);
                 hostName = UpdateHost.Label;
                 hostId = UpdateHost.WorkerId ?? UpdateHost.Id;
+                sshTarget = HostConnectionMetadata.ResolveSshTargetAddress(UpdateHost) ?? "";
+                sshPort = UpdateHost.SshPort is > 0 and <= 65535 ? UpdateHost.SshPort : 22;
+                sshUser = UpdateHost.SshUserName ?? "";
+                rememberSshSettings = true;
+                rememberSshPassword = !string.IsNullOrWhiteSpace(UpdateHost.ProtectedSshPassword);
                 manualUpdateSource = UpdateSource;
                 manualUpdateVersion = UpdateVersion;
                 await LoadManualUpdateVersionsAsync();
@@ -296,6 +304,8 @@
         sshPassword = "";
         sshKeyPath = "";
         sshKeyPassphrase = "";
+        rememberSshSettings = false;
+        rememberSshPassword = false;
         autoSetupRunning = false;
         autoSetupError = null;
         autoSetupResult = null;
@@ -525,6 +535,10 @@
                                 <div class="mb-2">
                                     <label class="form-label">Target address</label>
                                     <input class="form-control form-control-sm" @bind="sshTarget" @bind:event="oninput" placeholder="192.168.2.20 or host.example.com" />
+                                    @if (IsUpdateMode && UpdateHost != null)
+                                    {
+                                        <div class="form-text">@GetSshTargetHint(UpdateHost)</div>
+                                    }
                                 </div>
                                 <div class="row g-2">
                                     <div class="col-5">
@@ -550,7 +564,11 @@
                                 {
                                     <div class="mt-2">
                                         <label class="form-label">SSH password</label>
-                                        <input type="password" class="form-control form-control-sm" @bind="sshPassword" @bind:event="oninput" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
+                                        <input type="password" class="form-control form-control-sm" @bind="sshPassword" @bind:event="oninput" placeholder="@GetSshPasswordPlaceholder()" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
+                                        @if (HasSavedSshPassword)
+                                        {
+                                            <div class="form-text">Leave blank to use the saved encrypted password.</div>
+                                        }
                                     </div>
                                 }
                                 else
@@ -564,6 +582,20 @@
                                         <label class="form-label">Key passphrase</label>
                                         <input type="password" class="form-control form-control-sm" @bind="sshKeyPassphrase" @bind:event="oninput" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                                     </div>
+                                }
+                                @if (IsUpdateMode)
+                                {
+                                    <div class="form-check mt-3">
+                                        <input id="remember-ssh-settings" class="form-check-input" type="checkbox" @bind="rememberSshSettings" />
+                                        <label class="form-check-label" for="remember-ssh-settings">Remember host, port, and user for this HostWorker</label>
+                                    </div>
+                                    @if (sshUsePassword)
+                                    {
+                                        <div class="form-check mt-2">
+                                            <input id="remember-ssh-password" class="form-check-input" type="checkbox" @bind="rememberSshPassword" disabled="@(!rememberSshSettings)" />
+                                            <label class="form-check-label" for="remember-ssh-password">Remember password encrypted with server data protection</label>
+                                        </div>
+                                    }
                                 }
                                 <button type="button" class="btn btn-primary btn-sm mt-3 w-100" @onclick="RunAutoSetup" disabled="@autoSetupRunning">
                                     <i class="bi bi-terminal"></i> @AutoSetupButtonText
@@ -867,6 +899,10 @@
 
     private async Task MoveToWaitStep()
     {
+        var persistError = await PersistSshRecoverySettingsAsync();
+        if (!string.IsNullOrWhiteSpace(persistError))
+            wizardError = persistError;
+
         step = 3;
         manualOperationStartedAt = DateTime.UtcNow.AddSeconds(-2);
         await CheckEnrollmentOnce();
@@ -884,12 +920,13 @@
         autoSetupResult = null;
         try
         {
+            var sshPasswordForRun = sshUsePassword ? ResolveSshPasswordForRun() : null;
             autoSetupResult = await SshSetup.RunAsync(
                 new HostWorkerSshSetupRequest(
                     sshTarget.Trim(),
                     sshPort,
                     sshUser.Trim(),
-                    sshUsePassword ? sshPassword : null,
+                    sshPasswordForRun,
                     sshUsePassword ? null : sshKeyPath.Trim(),
                     sshUsePassword ? null : sshKeyPassphrase,
                     instructions.RemoteShell,
@@ -908,6 +945,50 @@
             autoSetupRunning = false;
             sshPassword = "";
             sshKeyPassphrase = "";
+        }
+    }
+
+    private string? ResolveSshPasswordForRun()
+    {
+        if (!string.IsNullOrEmpty(sshPassword))
+            return sshPassword;
+
+        return UpdateHost == null ? null : SshCredentials.UnprotectPassword(UpdateHost);
+    }
+
+    private async Task<string?> PersistSshRecoverySettingsAsync()
+    {
+        if (!IsUpdateMode || UpdateHost == null || !rememberSshSettings)
+            return null;
+
+        try
+        {
+            var host = await Store.Get<Host>(UpdateHost.Id);
+            if (host == null)
+                return $"Unable to save SSH recovery settings: host '{UpdateHost.Label}' was not found.";
+
+            host.SshTargetAddress = string.IsNullOrWhiteSpace(sshTarget) ? null : sshTarget.Trim();
+            host.SshPort = sshPort is > 0 and <= 65535 ? sshPort : 22;
+            host.SshUserName = string.IsNullOrWhiteSpace(sshUser) ? null : sshUser.Trim();
+            if (sshUsePassword && rememberSshPassword)
+            {
+                if (!string.IsNullOrEmpty(sshPassword))
+                    host.ProtectedSshPassword = SshCredentials.ProtectPassword(sshPassword);
+            }
+            else
+            {
+                host.ProtectedSshPassword = null;
+            }
+
+            host.SshSettingsUpdatedAt = DateTime.UtcNow;
+            host.UpdatedAt = DateTime.UtcNow;
+            await Store.Update(host);
+            await OnChanged.InvokeAsync();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"Unable to save SSH recovery settings: {ex.Message}";
         }
     }
 
@@ -1067,6 +1148,26 @@
         AgentStatus.Offline => "bg-secondary",
         _ => "bg-secondary"
     };
+
+    private bool HasSavedSshPassword =>
+        IsUpdateMode && UpdateHost != null && !string.IsNullOrWhiteSpace(UpdateHost.ProtectedSshPassword);
+
+    private string GetSshPasswordPlaceholder() =>
+        HasSavedSshPassword ? "Saved password" : "";
+
+    private static string GetSshTargetHint(Host host)
+    {
+        if (!string.IsNullOrWhiteSpace(host.SshTargetAddress))
+            return "Using the remembered SSH target for this host.";
+
+        if (!string.IsNullOrWhiteSpace(host.LastRemoteIpAddress))
+            return $"Auto-filled from the last HostWorker connection: {host.LastRemoteIpAddress}.";
+
+        if (host.ReportedIpAddresses.Count > 0)
+            return $"Auto-filled from host-reported addresses: {string.Join(", ", host.ReportedIpAddresses.Take(3))}.";
+
+        return "The HostWorker has not reported a usable address yet.";
+    }
 
     private sealed record WizardStep(int Number, string Title);
     private sealed record TargetChoice(
