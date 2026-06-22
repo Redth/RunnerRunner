@@ -94,7 +94,13 @@ builder.Services.AddSignalR();
 builder.Services.AddGrpc();
 
 // HTTP client for provider APIs
+builder.Services.AddSingleton<GitHubApiUsageTracker>();
+builder.Services.AddTransient<GitHubApiUsageHandler>();
 builder.Services.AddHttpClient();
+builder.Services.ConfigureHttpClientDefaults(http =>
+{
+    http.AddHttpMessageHandler<GitHubApiUsageHandler>();
+});
 builder.Services.AddMemoryCache();
 
 // Orleans silo (co-hosted with Blazor server)

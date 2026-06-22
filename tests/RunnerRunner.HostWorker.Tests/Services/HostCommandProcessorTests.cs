@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using RunnerRunner.Agent.Backends;
 using RunnerRunner.Agent.Services;
 using RunnerRunner.Core.HostWorkers;
 using RunnerRunner.Core.Hub;
@@ -205,7 +206,12 @@ public class HostCommandProcessorTests
         Directory.CreateDirectory(instanceDir);
         await File.WriteAllTextAsync(Path.Combine(instanceDir, "rr-instance.json"), """{"InstanceId":"inst-1","RunnerName":"runner-1"}""");
         await File.WriteAllTextAsync(Path.Combine(instanceDir, "runner.log"), "native runner failed\n");
-        using var processor = CreateProcessor(directory, out var sink, out _, runnerBasePath: runnerBasePath);
+        using var processor = CreateProcessor(
+            directory,
+            out var sink,
+            out _,
+            nativeBackend: new NativeBackend(NullLogger<NativeBackend>.Instance),
+            runnerBasePath: runnerBasePath);
 
         await processor.ProcessCommandAsync(CreateCommand("cmd-runner-logs", new HostCommandEnvelope
         {
@@ -240,7 +246,7 @@ public class HostCommandProcessorTests
         out RunnerLifecycleManager lifecycle,
         FakeRunnerBackend? dockerBackend = null,
         FakeRunnerBackend? tartBackend = null,
-        FakeRunnerBackend? nativeBackend = null,
+        IRunnerBackend? nativeBackend = null,
         string? runnerBasePath = null)
     {
         var configValues = new Dictionary<string, string?>

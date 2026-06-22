@@ -470,19 +470,20 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         if (relatedEvents.Any(IsActionableQueuedEvent))
             return null;
 
-        var probe = new WebhookEvent
+        RunnerProfile? profile = null;
+        string reason;
+        try
         {
-            BindingId = matchedRule.Id,
-            Provider = providerName,
-            Action = action,
-            JobId = jobId,
-            RunId = runId,
-            Repository = repo,
-            GitHubInstallationId = githubInstallationId,
-            WorkflowName = workflowName,
-            Labels = labels
-        };
-        var (_, profile, _, reason) = await ResolveProvisioningMatchAsync(store, probe, null);
+            (_, profile) = await ProvisioningRuleRunnerResolver.ResolveProfileAsync(store, matchedRule, labels);
+            reason = matchedRule.RunnerDefinitions.Count > 0
+                ? matchedRule.BuildNoRunnerTargetMatchReason(labels)
+                : $"No current label mapping matches labels [{string.Join(", ", labels)}]";
+        }
+        catch (InvalidOperationException ex)
+        {
+            reason = ex.Message;
+        }
+
         if (profile != null)
             return null;
 

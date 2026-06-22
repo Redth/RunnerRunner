@@ -474,13 +474,15 @@ public sealed class WebhookProcessorGrainTests
             ]
         };
         await _store.Insert(rule);
-        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(new RunnerProfile
+        var profile = new RunnerProfile
         {
             Id = profileId,
             Name = "linux profile",
             Provider = RunnerProvider.GitHubActions,
             ExecutionBackend = ExecutionBackend.Docker
-        });
+        };
+        await _store.Insert(profile);
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(profile);
         var body = BuildWorkflowJobPayload(
             action: "completed",
             jobId: jobId,
@@ -523,6 +525,14 @@ public sealed class WebhookProcessorGrainTests
                     TargetKey = "rr-linux",
                     RequiredHostPlatform = HostPlatform.Linux,
                     ExecutionBackend = ExecutionBackend.Docker
+                },
+                new RunnerDefinition
+                {
+                    Id = $"{id}-macos",
+                    Name = "macOS",
+                    TargetKey = "rr-macos",
+                    RequiredHostPlatform = HostPlatform.MacOS,
+                    ExecutionBackend = ExecutionBackend.Tart
                 }
             ]
         };

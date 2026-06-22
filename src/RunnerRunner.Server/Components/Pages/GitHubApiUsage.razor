@@ -1,0 +1,183 @@
+@page "/github-api-usage"
+@attribute [Authorize(Policy = RunnerRunnerPolicies.CanView)]
+@rendermode InteractiveServer
+@using RunnerRunner.Server.Services
+@inject GitHubApiUsageTracker UsageTracker
+
+<PageTitle>GitHub API Usage - RunnerRunner</PageTitle>
+<SectionContent SectionName="page-header">
+    <div class="page-header">
+        <h1><i class="bi bi-activity"></i> GitHub API Usage</h1>
+        <span class="page-desc">In-process REST and GraphQL request counters from server-side GitHub API calls.</span>
+    </div>
+</SectionContent>
+
+@if (snapshot == null)
+{
+    <div class="alert alert-info">Loading GitHub API usage...</div>
+}
+else
+{
+    <div class="rr-filter-panel mb-3">
+        <div class="rr-filter-header">
+            <div class="rr-filter-panel-title">
+                <i class="bi bi-info-circle"></i>
+                <span>Tracking scope</span>
+            </div>
+            <button class="btn btn-sm rr-filter-btn rr-filter-btn-refresh" @onclick="Refresh">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+        </div>
+        <div class="small text-muted">
+            Counts are in-memory since @FormatDateTime(snapshot.StartedAt). They include server requests to <code>api.github.com</code>,
+            GitHub Enterprise <code>/api/v3</code>, and GraphQL endpoints made through <code>IHttpClientFactory</code>.
+            HostWorker and in-runner bootstrap downloads are called out separately below because they happen outside the server process.
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6 col-xl-2">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Total requests</div>
+                    <div class="h4 mb-0">@snapshot.TotalRequests</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-2">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">REST</div>
+                    <div class="h4 mb-0">@snapshot.RestRequests</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-2">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">GraphQL</div>
+                    <div class="h4 mb-0">@snapshot.GraphQLRequests</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-2">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Failures</div>
+                    <div class="h4 mb-0">@snapshot.FailedRequests</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-2">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Rate limited</div>
+                    <div class="h4 mb-0">@snapshot.RateLimitedRequests</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-sm-6 col-xl-2">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Lowest remaining</div>
+                    <div class="h4 mb-0">@FormatRemaining(snapshot.MostConstrainedRateLimit)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title"><i class="bi bi-diagram-3 me-2"></i>Direct HostWorker / runner calls</h5>
+            <div class="small text-muted">
+                HostWorkers do not call GitHub Actions job or runner-management APIs directly. They can download RunnerRunner update assets from GitHub release URLs.
+                The embedded Agent can call GitHub release APIs only when it has to resolve a latest runner package version at startup; normal JIT provisioning and cleanup API calls are made by the server.
+            </div>
+        </div>
+    </div>
+
+    @if (snapshot.Summaries.Count == 0)
+    {
+        <div class="alert alert-secondary">No GitHub API or GraphQL requests have been observed since the server started.</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th>Last seen</th>
+                        <th>Kind</th>
+                        <th>Category</th>
+                        <th>Scope</th>
+                        <th>Method</th>
+                        <th>Endpoint</th>
+                        <th class="text-end">Requests</th>
+                        <th class="text-end">304</th>
+                        <th class="text-end">Failures</th>
+                        <th class="text-end">Rate limited</th>
+                        <th>Last status</th>
+                        <th>Rate limit</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in snapshot.Summaries.OrderByDescending(s => s.RequestCount).ThenBy(s => s.Endpoint))
+                    {
+                        <tr>
+                            <td class="text-nowrap">@FormatDateTime(row.LastObservedAt)</td>
+                            <td><span class="badge bg-secondary">@row.Kind</span></td>
+                            <td>@row.Category</td>
+                            <td><code>@row.Scope</code></td>
+                            <td><code>@row.Method</code></td>
+                            <td><code>@row.Endpoint</code></td>
+                            <td class="text-end">@row.RequestCount</td>
+                            <td class="text-end">@row.NotModifiedCount</td>
+                            <td class="text-end">@row.FailureCount</td>
+                            <td class="text-end">@row.RateLimitedCount</td>
+                            <td>@FormatStatus(row.LastStatusCode)</td>
+                            <td>@FormatRateLimit(row.LastRateLimit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    private GitHubApiUsageSnapshot? snapshot;
+
+    protected override void OnInitialized() => Refresh();
+
+    private void Refresh()
+    {
+        snapshot = UsageTracker.GetSnapshot();
+    }
+
+    private static string FormatDateTime(DateTimeOffset value) =>
+        value.ToLocalTime().ToString("MM/dd/yyyy HH:mm:ss");
+
+    private static string FormatRemaining(GitHubRateLimitSnapshot? rateLimit) =>
+        rateLimit?.Remaining is int remaining
+            ? rateLimit.Limit is int limit ? $"{remaining}/{limit}" : remaining.ToString()
+            : "n/a";
+
+    private static string FormatStatus(int? statusCode) =>
+        statusCode.HasValue ? statusCode.Value.ToString() : "error";
+
+    private static string FormatRateLimit(GitHubRateLimitSnapshot rateLimit)
+    {
+        if (rateLimit.Remaining == null && rateLimit.Limit == null && rateLimit.Used == null)
+            return "n/a";
+
+        var usage = FormatRemaining(rateLimit);
+        var reset = rateLimit.ResetAt.HasValue
+            ? $" reset {FormatDateTime(rateLimit.ResetAt.Value)}"
+            : "";
+        var resource = string.IsNullOrWhiteSpace(rateLimit.Resource)
+            ? ""
+            : $" {rateLimit.Resource}";
+
+        return $"{usage}{resource}{reset}";
+    }
+}
