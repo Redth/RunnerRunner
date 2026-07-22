@@ -39,8 +39,11 @@ if (builder.Configuration.GetValue<bool>("REVERSE_PROXY_ENABLED"))
     builder.Services.Configure<ForwardedHeadersOptions>(options =>
     {
         options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-        options.KnownIPNetworks.Clear();
-        options.KnownProxies.Clear();
+        // Only trust proxies on the Docker bridge network and local LAN
+        options.KnownIPNetworks.Add(new System.Net.IPNetwork(
+            System.Net.IPAddress.Parse("172.16.0.0"), 12));
+        options.KnownIPNetworks.Add(new System.Net.IPNetwork(
+            System.Net.IPAddress.Parse("192.168.0.0"), 16));
         options.RequireHeaderSymmetry = false;
     });
 }
