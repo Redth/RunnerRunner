@@ -22,6 +22,7 @@ public static class RunnerRunnerAuthEndpoints
         auth.MapGet("/oidc", StartOidcAsync).AllowAnonymous();
         auth.MapGet("/oidc-complete", CompleteOidcAsync).AllowAnonymous();
         auth.MapPost("/refresh-access", RefreshAccessAsync);
+        auth.MapPost("/change-password", ChangePasswordAsync);
 
         return endpoints;
     }
@@ -342,6 +343,43 @@ public static class RunnerRunnerAuthEndpoints
             return "/";
 
         return returnUrl;
+    }
+
+    private static async Task<IResult> ChangePasswordAsync(
+        HttpContext httpContext,
+        IAntiforgery antiforgery,
+        UserManager<RunnerRunnerUser> userManager,
+        SignInManager<RunnerRunnerUser> signInManager,
+        AuditService auditService)
+    {
+        await antiforgery.ValidateRequestAsync(httpContext);
+        var form = await httpContext.Request.ReadFormAsync();
+        var currentPassword = form["currentPassword"].ToString();
+        var newPassword = form["newPassword"].ToString();
+        var confirmPassword = form["confirmPassword"].ToString();
+
+        if (httpContext.User.Identity?.IsAuthenticated != true)
+            return Results.LocalRedirect("/auth/login");
+
+        var user = await userManager.GetUserAsync(httpContext.User);
+        if (user is null)
+            return Results.LocalRedirect("/auth/login");
+
+        if (newPassword != confirmPassword)
+            return Results.LocalRedirect("/account/change-password?error=mismatch");
+
+        var result = await userManager.ChangePasswordAsync(user, currentPassword, newPassword);
+        if (!result.Succeeded)
+        {
+            var error = result.Errors.FirstOrDefault()?.Description ?? "Password change failed.";
+            await auditService.LogAsync("PasswordChangeFailed", "User", user.Id, $"user={user.UserName}");
+            return Results.LocalRedirect($"/account/change-password?error={Uri.EscapeDataString(error)}");
+        }
+
+        await signInManager.RefreshSignInAsync(user);
+        await auditService.LogAsync("PasswordChanged", "User", user.Id, $"user={user.UserName}");
+
+        return Results.LocalRedirect("/account/change-password?success=true");
     }
 
     internal sealed record OidcUserResolution(
