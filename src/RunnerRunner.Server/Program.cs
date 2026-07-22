@@ -8,6 +8,7 @@ using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -28,6 +29,15 @@ builder.WebHost.ConfigureKestrel(options =>
     {
         listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
     });
+});
+
+// Trust reverse proxy (NPM) so Blazor/HTTPS redirect/cookies work correctly
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+    options.RequireHeaderSymmetry = false;
 });
 
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
@@ -243,6 +253,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseForwardedHeaders();
 app.UseHttpsRedirection();
 
 app.UseAuthentication();
