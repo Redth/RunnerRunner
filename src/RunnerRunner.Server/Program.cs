@@ -31,14 +31,19 @@ builder.WebHost.ConfigureKestrel(options =>
     });
 });
 
-// Trust reverse proxy (NPM) so Blazor/HTTPS redirect/cookies work correctly
-builder.Services.Configure<ForwardedHeadersOptions>(options =>
+// When running behind a reverse proxy (NPM/Traefik/Caddy), enable forwarded headers
+// so that HTTPS redirect, cookies, and Blazor WebSocket URLs are correct.
+// Set REVERSE_PROXY_ENABLED=true in the container environment.
+if (builder.Configuration.GetValue<bool>("REVERSE_PROXY_ENABLED"))
 {
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownNetworks.Clear();
-    options.KnownProxies.Clear();
-    options.RequireHeaderSymmetry = false;
-});
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+        options.RequireHeaderSymmetry = false;
+    });
+}
 
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
 builder.AddServiceDefaults();
