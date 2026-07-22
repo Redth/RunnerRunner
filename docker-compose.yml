@@ -50,10 +50,6 @@ services:
       - Logging__Console__FormatterName=${LOGGING_CONSOLE_FORMATTER_NAME:-simple}
       - Logging__Console__IncludeScopes=${LOGGING_CONSOLE_INCLUDE_SCOPES:-false}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-    labels:
-      - "npm.proxy.domain=ci.example.com"
-      - "npm.proxy.port=4779"
-      - "npm.proxy.ssl.force=true"
     depends_on:
       postgres:
         condition: service_healthy
