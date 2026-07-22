@@ -8,6 +8,7 @@ using RunnerRunner.Server.Webhooks;
 using RunnerRunner.Core.Interfaces;
 using Orleans.Dashboard;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -29,6 +30,20 @@ builder.WebHost.ConfigureKestrel(options =>
         listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
     });
 });
+
+// When running behind a reverse proxy (NPM/Traefik/Caddy), enable forwarded headers
+// so that HTTPS redirect, cookies, and Blazor WebSocket URLs are correct.
+// Set REVERSE_PROXY_ENABLED=true in the container environment.
+if (builder.Configuration.GetValue<bool>("REVERSE_PROXY_ENABLED"))
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        options.RequireHeaderSymmetry = false;
+    });
+}
 
 // Aspire service defaults (OpenTelemetry, health checks, service discovery)
 builder.AddServiceDefaults();
@@ -243,6 +258,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseForwardedHeaders();
 app.UseHttpsRedirection();
 
 app.UseAuthentication();
