@@ -181,6 +181,38 @@ public class DynamicProvisioningServiceTests
         Assert.Equal(string.Empty, reason);
     }
 
+    [Fact]
+    public void ShouldRetryProvisionedEvent_ReturnsFalseWhenBoundToActiveInstanceFromAnotherEvent()
+    {
+        // A duplicate "queued" event (webhook redelivery, GitHub poll backfill) can get
+        // bound to an instance that a different event originally created. That's not
+        // staleness — treating it as such caused the event to be endlessly reset to
+        // "pending" and reprocessed, which could spawn a second runner for the same job.
+        var evt = new WebhookEvent
+        {
+            Id = "evt-duplicate",
+            Action = "queued",
+            Status = "provisioned",
+            JobId = "job-1",
+            InstanceId = "inst-1"
+        };
+
+        var linkedInstance = new RunnerInstance
+        {
+            Id = "inst-1",
+            RunnerName = "dynamic-runner",
+            ProvisioningMode = "dynamic",
+            JobId = "job-1",
+            WebhookEventId = "evt-original",
+            Status = RunnerInstanceStatus.Running
+        };
+
+        var shouldRetry = DynamicProvisioningService.ShouldRetryProvisionedEvent(evt, linkedInstance, out var reason);
+
+        Assert.False(shouldRetry);
+        Assert.Equal(string.Empty, reason);
+    }
+
     public static IEnumerable<object[]> StaleProvisionedRunnerLinks()
     {
         yield return
@@ -230,28 +262,6 @@ public class DynamicProvisioningServiceTests
                 Status = RunnerInstanceStatus.Running
             },
             "not linked"
-        ];
-
-        yield return
-        [
-            new WebhookEvent
-            {
-                Id = "evt-wrong-event",
-                Action = "queued",
-                Status = "provisioned",
-                JobId = "job-1",
-                InstanceId = "inst-1"
-            },
-            new RunnerInstance
-            {
-                Id = "inst-1",
-                RunnerName = "dynamic-runner",
-                ProvisioningMode = "dynamic",
-                JobId = "job-1",
-                WebhookEventId = "evt-other",
-                Status = RunnerInstanceStatus.Running
-            },
-            "different webhook event"
         ];
 
         yield return
