@@ -10,6 +10,15 @@ namespace RunnerRunner.Server.Services;
 /// </summary>
 public class ReconciliationService : IHostedService, IDisposable
 {
+    // HostWorker sends a reconciliation report every 30s (see HostCommandProcessor), listing
+    // only processes/containers that have actually launched. A Starting/Pending instance whose
+    // deploy is merely slow (host under load, large runner package extraction, etc.) looks
+    // identical to a failed one until it's had a real chance to finish — so give it the same
+    // grace window as RunnerInstanceGrain's own "Deploy timeout" (2 minutes) before treating a
+    // missing report as evidence of failure. Without this, a deploy that legitimately takes
+    // longer than 30s gets marked stale and replaced on every single sweep.
+    private static readonly TimeSpan DeployGracePeriod = TimeSpan.FromMinutes(2);
+
     private readonly ILogger<ReconciliationService> _logger;
     private readonly IServiceProvider _services;
     private readonly IHostCommandDispatcher _hostCommands;
@@ -78,6 +87,10 @@ public class ReconciliationService : IHostedService, IDisposable
 
                 if (matchedRunner == null)
                 {
+                    if (instance.Status != RunnerInstanceStatus.Running
+                        && DateTime.UtcNow - instance.CreatedAt < DeployGracePeriod)
+                        continue;
+
                     var newStatus = instance.Status == RunnerInstanceStatus.Running
                         ? RunnerInstanceStatus.Crashed
                         : RunnerInstanceStatus.Stopped;
