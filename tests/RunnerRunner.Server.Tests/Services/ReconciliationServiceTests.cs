@@ -7,6 +7,53 @@ namespace RunnerRunner.Server.Tests.Services;
 
 public class ReconciliationServiceTests
 {
+    private static readonly DateTime Now = new(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void IsWithinDeployGracePeriod_PendingInstanceUnderTwoMinutes_IsWithinGrace()
+    {
+        var referenceTime = Now.AddSeconds(-90);
+
+        Assert.True(ReconciliationService.IsWithinDeployGracePeriod(RunnerInstanceStatus.Pending, referenceTime, Now));
+    }
+
+    [Fact]
+    public void IsWithinDeployGracePeriod_PendingInstanceOverTwoMinutes_IsNotWithinGrace()
+    {
+        var referenceTime = Now.AddMinutes(-3);
+
+        Assert.False(ReconciliationService.IsWithinDeployGracePeriod(RunnerInstanceStatus.Pending, referenceTime, Now));
+    }
+
+    [Fact]
+    public void IsWithinDeployGracePeriod_StartingInstanceUnderFiveMinutes_IsWithinGrace()
+    {
+        // Regression: a native macOS deploy was observed live taking ~3.5 minutes under host
+        // load. A Starting instance at that age must still be within grace, or reconciliation
+        // spawns a duplicate runner for a deploy that was never actually dead.
+        var referenceTime = Now.AddMinutes(-3.5);
+
+        Assert.True(ReconciliationService.IsWithinDeployGracePeriod(RunnerInstanceStatus.Starting, referenceTime, Now));
+    }
+
+    [Fact]
+    public void IsWithinDeployGracePeriod_StartingInstanceOverFiveMinutes_IsNotWithinGrace()
+    {
+        var referenceTime = Now.AddMinutes(-6);
+
+        Assert.False(ReconciliationService.IsWithinDeployGracePeriod(RunnerInstanceStatus.Starting, referenceTime, Now));
+    }
+
+    [Fact]
+    public void IsWithinDeployGracePeriod_RunningInstance_NeverWithinGrace()
+    {
+        // A runner that was confirmed Running and then vanished from the host report has
+        // genuinely crashed — no grace period should apply, regardless of age.
+        var referenceTime = Now.AddSeconds(-1);
+
+        Assert.False(ReconciliationService.IsWithinDeployGracePeriod(RunnerInstanceStatus.Running, referenceTime, Now));
+    }
+
     [Fact]
     public void MatchesRunner_ReturnsTrue_ForVmNameMatch()
     {

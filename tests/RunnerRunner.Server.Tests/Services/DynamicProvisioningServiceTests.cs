@@ -285,6 +285,31 @@ public class DynamicProvisioningServiceTests
             },
             "no longer active"
         ];
+
+        // Regression guard: terminal status must still be caught even when WebhookEventId
+        // also mismatches, so a future attempt to "restore" the removed mismatch check
+        // doesn't accidentally become the only thing catching this case.
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-terminal-and-mismatched",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1",
+                InstanceId = "inst-1"
+            },
+            new RunnerInstance
+            {
+                Id = "inst-1",
+                RunnerName = "dynamic-runner",
+                ProvisioningMode = "dynamic",
+                JobId = "job-1",
+                WebhookEventId = "evt-some-other-event",
+                Status = RunnerInstanceStatus.Crashed
+            },
+            "no longer active"
+        ];
     }
 
     [Theory]

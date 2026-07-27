@@ -730,7 +730,7 @@ public class DynamicProvisioningService : BackgroundService
             // runnerName also becomes a Docker container name downstream, which only allows
             // [a-zA-Z0-9][a-zA-Z0-9_.-]* — an unsanitized name there fails container creation
             // instantly on every attempt, since profile names don't change between retries.
-            var runnerNamePrefix = RunnerMetadataBuilder.SanitizeLabel(profile.Name) ?? "runner";
+            var runnerNamePrefix = RunnerMetadataBuilder.SanitizeRunnerNameComponent(profile.Name) ?? "runner";
             var runnerName = $"{runnerNamePrefix}-jit-{shortGuid}";
 
             _logger.LogInformation(

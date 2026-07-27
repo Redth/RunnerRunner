@@ -197,10 +197,13 @@ public class OrchestrationEngine : BackgroundService
             }
         }
 
-        // Generate unique runner name
+        // Generate unique runner name. Profile names are free-text (may contain
+        // spaces/symbols), but runnerName also becomes a Docker container name / Tart
+        // VM name downstream — sanitize before use.
         var instanceId = Guid.NewGuid().ToString();
         var suffix = Guid.NewGuid().ToString("N")[..8];
-        var runnerName = $"{profile.Name}-{suffix}";
+        var runnerNamePrefix = RunnerMetadataBuilder.SanitizeRunnerNameComponent(profile.Name) ?? "runner";
+        var runnerName = $"{runnerNamePrefix}-{suffix}";
         var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
         await runnerGrain.Initialize(assignment.HostId, profile.Id, runnerName, "static");
 

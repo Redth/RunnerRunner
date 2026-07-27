@@ -14,10 +14,18 @@ public class ReconciliationService : IHostedService, IDisposable
     // only processes/containers that have actually launched. A Starting/Pending instance whose
     // deploy is merely slow (host under load, large runner package extraction, etc.) looks
     // identical to a failed one until it's had a real chance to finish — so give it the same
-    // grace window as RunnerInstanceGrain's own "Deploy timeout" (2 minutes) before treating a
-    // missing report as evidence of failure. Without this, a deploy that legitimately takes
-    // longer than 30s gets marked stale and replaced on every single sweep.
-    private static readonly TimeSpan DeployGracePeriod = TimeSpan.FromMinutes(2);
+    // grace window RunnerInstanceGrain's own timers already allow before treating a missing
+    // report as evidence of failure. Without this, a deploy that legitimately takes longer than
+    // 30s gets marked stale and replaced on every single sweep.
+    //
+    // The two states get different windows because they're governed by different grain timers:
+    // Pending -> StartPendingTimer (2 min); Starting -> StartRegistrationTimer (5 min). Dynamic
+    // runners move from Pending to Starting almost immediately after Initialize (well before the
+    // deploy command is even dispatched), so in practice nearly all deploy latency is spent in
+    // Starting — a 2-minute grace period there is shorter than a real-world slow deploy can take
+    // (observed live: ~3.5 minutes for a native macOS runner under host load).
+    private static readonly TimeSpan PendingDeployGracePeriod = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan StartingDeployGracePeriod = TimeSpan.FromMinutes(5);
 
     private readonly ILogger<ReconciliationService> _logger;
     private readonly IServiceProvider _services;
@@ -87,8 +95,7 @@ public class ReconciliationService : IHostedService, IDisposable
 
                 if (matchedRunner == null)
                 {
-                    if (instance.Status != RunnerInstanceStatus.Running
-                        && DateTime.UtcNow - instance.CreatedAt < DeployGracePeriod)
+                    if (IsWithinDeployGracePeriod(instance.Status, instance.DeployedAt ?? instance.CreatedAt, DateTime.UtcNow))
                         continue;
 
                     var newStatus = instance.Status == RunnerInstanceStatus.Running
@@ -174,6 +181,25 @@ public class ReconciliationService : IHostedService, IDisposable
         {
             _logger.LogError(ex, "Error processing reconciliation report from {Host}", report.HostId);
         }
+    }
+
+    /// <summary>
+    /// True if an instance in <paramref name="status"/>, deployed/created at <paramref name="referenceTime"/>,
+    /// should still be given the benefit of the doubt for not appearing in a reconciliation report as of
+    /// <paramref name="nowUtc"/>. Only Pending/Starting get a grace window (matching RunnerInstanceGrain's own
+    /// PendingTimer/RegistrationTimer) — Running never does, since a runner that was confirmed running and then
+    /// disappeared has genuinely crashed, not merely deployed slowly.
+    /// </summary>
+    internal static bool IsWithinDeployGracePeriod(RunnerInstanceStatus status, DateTime referenceTime, DateTime nowUtc)
+    {
+        var gracePeriod = status switch
+        {
+            RunnerInstanceStatus.Pending => PendingDeployGracePeriod,
+            RunnerInstanceStatus.Starting => StartingDeployGracePeriod,
+            _ => TimeSpan.Zero
+        };
+
+        return nowUtc - referenceTime < gracePeriod;
     }
 
     internal static bool MatchesRunner(RunnerInstance instance, DiscoveredRunnerInfo runner)
