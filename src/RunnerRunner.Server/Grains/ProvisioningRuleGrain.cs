@@ -421,7 +421,10 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
 
         var instanceId = Guid.NewGuid().ToString();
         var runnerGrain = GrainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
-        var runnerName = $"{_state.State.Config.Name}-{instanceId[..8]}";
+        // Rule names are free-text (may contain spaces/symbols), but runnerName also becomes
+        // a Docker container name / Tart VM name downstream — sanitize before use.
+        var runnerNamePrefix = RunnerMetadataBuilder.SanitizeRunnerNameComponent(_state.State.Config.Name) ?? "runner";
+        var runnerName = $"{runnerNamePrefix}-{instanceId[..8]}";
 
         var provisioningMode = _state.State.Config.Type == ProvisioningType.Webhook ? "dynamic" : "static";
         var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host, credential);

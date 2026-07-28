@@ -106,8 +106,26 @@ public static class RunnerMetadataBuilder
     /// rules: keep alphanumerics + <c>-</c>, <c>_</c>, <c>.</c>; replace other
     /// chars with <c>-</c>; collapse consecutive dashes; trim to 256 chars.
     /// Returns <c>null</c> for empty/whitespace input.
+    /// Unicode letters/digits are allowed here — GitHub's label rules permit them.
+    /// For names that become Docker container names, Tart VM names, or file-system
+    /// paths downstream, use <see cref="SanitizeRunnerNameComponent"/> instead, which
+    /// is ASCII-only.
     /// </summary>
     public static string? SanitizeLabel(string? value)
+        => Sanitize(value, static c => char.IsLetterOrDigit(c));
+
+    /// <summary>
+    /// Sanitizes <paramref name="value"/> for use as a runner-name component that
+    /// becomes a Docker container name (<c>[a-zA-Z0-9][a-zA-Z0-9_.-]*</c>), Tart VM
+    /// name, or file-system path segment downstream. ASCII-only — ASCII digits/letters
+    /// plus <c>-</c>, <c>_</c>, <c>.</c>; everything else (including non-ASCII letters,
+    /// which <see cref="SanitizeLabel"/> would keep) collapses to <c>-</c>. Returns
+    /// <c>null</c> for empty/whitespace input, or input that sanitizes to nothing.
+    /// </summary>
+    public static string? SanitizeRunnerNameComponent(string? value)
+        => Sanitize(value, static c => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'));
+
+    private static string? Sanitize(string? value, Func<char, bool> isAllowedAlnum)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;
@@ -118,7 +136,7 @@ public static class RunnerMetadataBuilder
 
         foreach (var c in value)
         {
-            if (char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.')
+            if (isAllowedAlnum(c) || c == '-' || c == '_' || c == '.')
             {
                 chars[write++] = c;
                 lastDash = c == '-';

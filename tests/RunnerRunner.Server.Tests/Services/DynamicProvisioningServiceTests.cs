@@ -181,6 +181,38 @@ public class DynamicProvisioningServiceTests
         Assert.Equal(string.Empty, reason);
     }
 
+    [Fact]
+    public void ShouldRetryProvisionedEvent_ReturnsFalseWhenBoundToActiveInstanceFromAnotherEvent()
+    {
+        // A duplicate "queued" event (webhook redelivery, GitHub poll backfill) can get
+        // bound to an instance that a different event originally created. That's not
+        // staleness — treating it as such caused the event to be endlessly reset to
+        // "pending" and reprocessed, which could spawn a second runner for the same job.
+        var evt = new WebhookEvent
+        {
+            Id = "evt-duplicate",
+            Action = "queued",
+            Status = "provisioned",
+            JobId = "job-1",
+            InstanceId = "inst-1"
+        };
+
+        var linkedInstance = new RunnerInstance
+        {
+            Id = "inst-1",
+            RunnerName = "dynamic-runner",
+            ProvisioningMode = "dynamic",
+            JobId = "job-1",
+            WebhookEventId = "evt-original",
+            Status = RunnerInstanceStatus.Running
+        };
+
+        var shouldRetry = DynamicProvisioningService.ShouldRetryProvisionedEvent(evt, linkedInstance, out var reason);
+
+        Assert.False(shouldRetry);
+        Assert.Equal(string.Empty, reason);
+    }
+
     public static IEnumerable<object[]> StaleProvisionedRunnerLinks()
     {
         yield return
@@ -236,28 +268,6 @@ public class DynamicProvisioningServiceTests
         [
             new WebhookEvent
             {
-                Id = "evt-wrong-event",
-                Action = "queued",
-                Status = "provisioned",
-                JobId = "job-1",
-                InstanceId = "inst-1"
-            },
-            new RunnerInstance
-            {
-                Id = "inst-1",
-                RunnerName = "dynamic-runner",
-                ProvisioningMode = "dynamic",
-                JobId = "job-1",
-                WebhookEventId = "evt-other",
-                Status = RunnerInstanceStatus.Running
-            },
-            "different webhook event"
-        ];
-
-        yield return
-        [
-            new WebhookEvent
-            {
                 Id = "evt-terminal-runner",
                 Action = "queued",
                 Status = "provisioned",
@@ -272,6 +282,31 @@ public class DynamicProvisioningServiceTests
                 JobId = "job-1",
                 WebhookEventId = "evt-terminal-runner",
                 Status = RunnerInstanceStatus.Failed
+            },
+            "no longer active"
+        ];
+
+        // Regression guard: terminal status must still be caught even when WebhookEventId
+        // also mismatches, so a future attempt to "restore" the removed mismatch check
+        // doesn't accidentally become the only thing catching this case.
+        yield return
+        [
+            new WebhookEvent
+            {
+                Id = "evt-terminal-and-mismatched",
+                Action = "queued",
+                Status = "provisioned",
+                JobId = "job-1",
+                InstanceId = "inst-1"
+            },
+            new RunnerInstance
+            {
+                Id = "inst-1",
+                RunnerName = "dynamic-runner",
+                ProvisioningMode = "dynamic",
+                JobId = "job-1",
+                WebhookEventId = "evt-some-other-event",
+                Status = RunnerInstanceStatus.Crashed
             },
             "no longer active"
         ];

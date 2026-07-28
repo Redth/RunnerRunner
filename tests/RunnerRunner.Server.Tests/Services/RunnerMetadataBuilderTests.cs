@@ -32,6 +32,24 @@ public class RunnerMetadataBuilderTests
         Assert.Equal(256, actual!.Length);
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("simple", "simple")]
+    [InlineData("Linux Docker", "Linux-Docker")]
+    // Docker container names are ASCII-only ([a-zA-Z0-9][a-zA-Z0-9_.-]*) — unlike
+    // SanitizeLabel (which allows any Unicode letter/digit for GitHub's more permissive
+    // label rules), non-ASCII letters must collapse here too, or a profile name like this
+    // would still produce an invalid Docker container name.
+    [InlineData("Ubuntu Läufer", "Ubuntu-L-ufer")]
+    [InlineData("日本語ランナー", null)]
+    public void SanitizeRunnerNameComponent_IsAsciiOnly(string? input, string? expected)
+    {
+        var actual = RunnerMetadataBuilder.SanitizeRunnerNameComponent(input);
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void BuildMetadataEnv_IncludesDockerImageBits()
     {
