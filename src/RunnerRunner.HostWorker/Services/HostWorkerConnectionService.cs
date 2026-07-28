@@ -243,9 +243,17 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
             ["arch"] = _identity.Architecture.ToLowerInvariant()
         };
 
+        // Host.Capabilities (server-side) is reconstructed from these "true"-valued labels
+        // (HostGrain.ApplyProjection) — every detected capability must round-trip through here,
+        // not just "docker", or static-provisioning's backend-availability check
+        // (ProvisioningRuleGrain.ProvisionRunner: host.Capabilities.Any(c => c == backendName))
+        // can never match "native"/"tart" even though DetectCapabilities() always includes
+        // "native" and includes "tart" on macOS hosts with Tart installed.
+        foreach (var capability in capabilities)
+            labels[capability] = "true";
+
         if (capabilities.Contains("docker", StringComparer.OrdinalIgnoreCase))
         {
-            labels["docker"] = "true";
             labels["docker_os"] = ResolveDockerOs(
                 _identity.Platform,
                 _configuration["HostWorker:DockerOs"] ?? _configuration["Docker:OSType"]);
