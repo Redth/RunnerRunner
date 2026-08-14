@@ -80,6 +80,10 @@ public sealed record HostWorkerEnrollmentCommandBlock(
     string Language,
     string Command);
 
+public sealed record HostWorkerEnrollmentLink(
+    string Title,
+    string Url);
+
 public sealed record HostWorkerEnrollmentInstructions(
     HostWorkerEnrollmentTarget Target,
     HostPlatform HostPlatform,
@@ -89,7 +93,8 @@ public sealed record HostWorkerEnrollmentInstructions(
     IReadOnlyList<HostWorkerEnrollmentCommandBlock> CommandBlocks,
     string RemoteSetupScript,
     HostWorkerEnrollmentRemoteShell RemoteShell,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    IReadOnlyList<HostWorkerEnrollmentLink>? SetupLinks = null);
 
 public sealed class HostWorkerEnrollmentGuideBuilder
 {
@@ -182,7 +187,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             HostWorkerEnrollmentTarget.MacOSDocker => "macOS host - Docker Linux workers",
             HostWorkerEnrollmentTarget.WindowsService => "Windows host - native service",
             HostWorkerEnrollmentTarget.WindowsDockerWindows => "Windows host - Windows containers",
-            HostWorkerEnrollmentTarget.WindowsDockerLinux => "Windows host - WSL/Linux Docker",
+            HostWorkerEnrollmentTarget.WindowsDockerLinux => "Windows host - WSL2 Linux containers",
             _ => target.ToString()
         };
 
@@ -196,7 +201,7 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             HostWorkerEnrollmentTarget.MacOSDocker => "mac-docker",
             HostWorkerEnrollmentTarget.WindowsService => "windows",
             HostWorkerEnrollmentTarget.WindowsDockerWindows => "windows-docker",
-            HostWorkerEnrollmentTarget.WindowsDockerLinux => "windows-linux-docker",
+            HostWorkerEnrollmentTarget.WindowsDockerLinux => "windows-wsl2",
             _ => "host"
         };
         return $"{prefix}-{suffix}";
@@ -457,6 +462,43 @@ public sealed class HostWorkerEnrollmentGuideBuilder
         HostWorkerEnrollmentRequest request,
         HostWorkerEnrollmentOptions options)
     {
+        var prepareWsl = """
+        wsl --update
+        wsl --set-default-version 2
+        wsl --list --verbose
+
+        # If no Linux distribution is listed, run this separately and restart if prompted:
+        # wsl --install -d Ubuntu
+        """;
+
+        var preflight = """
+        set -e
+
+        case "$(uname -r)" in
+          *microsoft*|*Microsoft*|*WSL*) ;;
+          *)
+            echo "This setup is intended to run inside a WSL2 distribution." >&2
+            exit 1
+            ;;
+        esac
+
+        case "$(uname -m)" in
+          x86_64|amd64|aarch64|arm64) ;;
+          *)
+            echo "Unsupported WSL architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        docker version
+        if [ "$(docker info --format '{{.OSType}}')" != "linux" ]; then
+          echo "Docker must be using its Linux engine." >&2
+          exit 1
+        fi
+
+        echo "WSL2 is ready: $(uname -m), Docker $(docker info --format '{{.Architecture}}')"
+        """;
+
         var command = $$"""
         docker rm -f runnerrunner-host-worker 2>/dev/null || true
         docker run -d \
@@ -479,22 +521,44 @@ public sealed class HostWorkerEnrollmentGuideBuilder
             HostWorkerEnrollmentTarget.WindowsDockerLinux,
             HostPlatform.Linux,
             GetTargetDisplayName(HostWorkerEnrollmentTarget.WindowsDockerLinux),
-            "Run the Linux HostWorker image from WSL or Docker Desktop's Linux engine. This contributes Linux container runner capacity from a Windows machine.",
+            "Run the multi-architecture Linux HostWorker inside WSL2. The host registers as Linux and provides native x64 or ARM64 Linux container runners from a Windows machine.",
             [
-                "Run this inside WSL or a Linux shell with Docker access.",
-                "Docker Desktop is using Linux containers.",
-                "The target can reach the advertised HostWorker gRPC URL."
+                "Windows 10 version 2004 or later, or Windows 11, with a WSL2 Linux distribution.",
+                "Choose one Docker setup: enable Docker Desktop's WSL integration and Linux engine, or install Docker Engine directly inside the WSL distribution.",
+                "Run the Linux commands inside the WSL2 distribution where Docker is available.",
+                "The WSL2 distribution can reach the advertised HostWorker gRPC URL."
             ],
             [
                 new(
-                    "Run the Linux HostWorker container from WSL",
-                    "Run this in WSL or another Linux shell on the Windows host.",
+                    "Prepare WSL2 from Windows",
+                    "Run in an elevated PowerShell window. Install Ubuntu only when a distribution is not already listed, then launch it once to create the Linux user.",
+                    "powershell",
+                    NormalizeCommand(prepareWsl)),
+                new(
+                    "Verify WSL2 and the Linux Docker engine",
+                    "Run inside the WSL2 distribution before starting the HostWorker.",
+                    "bash",
+                    NormalizeCommand(preflight)),
+                new(
+                    "Start the Linux HostWorker from WSL2",
+                    "Run inside the WSL2 distribution. Docker selects the matching linux/amd64 or linux/arm64 HostWorker image automatically.",
                     "bash",
                     NormalizeCommand(command))
             ],
             NormalizeCommand(command.Replace("docker logs -f runnerrunner-host-worker", "docker ps --filter name=runnerrunner-host-worker && docker logs --tail=80 runnerrunner-host-worker")),
             HostWorkerEnrollmentRemoteShell.Bash,
-            BuildNotes(request));
+            BuildNotes(request)
+                .Concat([
+                    "This worker appears in RunnerRunner as Linux, not Windows. Select Linux for runner profiles assigned to it.",
+                    "On Windows on Arm, WSL2 reports ARM64 and RunnerRunner downloads ARM64 runner agents automatically.",
+                    "Runner workload images must publish a linux/arm64 variant to run natively on Windows on Arm. Image architecture support is independent of the HostWorker image."
+                ])
+                .ToList(),
+            [
+                new("Install WSL", "https://learn.microsoft.com/windows/wsl/install"),
+                new("Docker Desktop WSL2 backend", "https://docs.docker.com/desktop/features/wsl/"),
+                new("Install Docker Engine on Ubuntu", "https://docs.docker.com/engine/install/ubuntu/")
+            ]);
     }
 
     private static IReadOnlyList<string> BuildNotes(HostWorkerEnrollmentRequest request)

@@ -69,6 +69,26 @@ public class HostEnrollmentWizardTests
         });
     }
 
+    [Fact]
+    public void SelectWsl2Target_ExplainsLinuxAndArm64Behavior()
+    {
+        using var context = new BunitContext();
+        var store = TestDocumentStore.Create();
+        AddServices(context, store);
+
+        var cut = context.Render<HostEnrollmentWizard>(parameters => parameters
+            .Add(p => p.IsOpen, true)
+            .Add(p => p.OnChanged, EventCallback.Factory.Create(this, () => { })));
+
+        cut.FindAll("button.enrollment-target-card")
+            .Single(button => button.TextContent.Contains("Windows + WSL2"))
+            .Click();
+
+        var callout = cut.Find(".wsl2-enrollment-callout");
+        Assert.Contains("appear as Linux", callout.TextContent);
+        Assert.Contains("select ARM64 automatically", callout.TextContent);
+    }
+
     private static IReadOnlyList<Host> ReadHosts(IDocumentStore store)
         => store.Query<Host>().ToList().GetAwaiter().GetResult();
 
