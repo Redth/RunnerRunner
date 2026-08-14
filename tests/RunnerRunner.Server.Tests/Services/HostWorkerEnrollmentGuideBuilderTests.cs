@@ -125,6 +125,30 @@ public sealed class HostWorkerEnrollmentGuideBuilderTests
     }
 
     [Fact]
+    public void BuildWindowsDockerLinux_ProvidesWsl2AndArm64Onboarding()
+    {
+        var builder = CreateBuilder();
+
+        var instructions = builder.Build(new HostWorkerEnrollmentRequest(
+            HostWorkerEnrollmentTarget.WindowsDockerLinux,
+            "http://runner.example.com:4780",
+            "token-123",
+            "windows-wsl2-1",
+            "Windows WSL2 1",
+            new HostWorkerEnrollmentProxy(null, null, null)));
+
+        Assert.Equal(HostPlatform.Linux, instructions.HostPlatform);
+        Assert.Equal(3, instructions.CommandBlocks.Count);
+        Assert.Contains("wsl --set-default-version 2", instructions.CommandBlocks[0].Command);
+        Assert.Contains("wsl --install -d Ubuntu", instructions.CommandBlocks[0].Command);
+        Assert.Contains("docker info --format '{{.OSType}}'", instructions.CommandBlocks[1].Command);
+        Assert.Contains("ghcr.io/redth/runnerrunner-hostworker:latest", instructions.CommandBlocks[2].Command);
+        Assert.Contains(instructions.Notes, note => note.Contains("downloads ARM64 runner agents automatically"));
+        Assert.Contains(instructions.SetupLinks!, link => link.Title == "Install WSL");
+        Assert.Contains(instructions.SetupLinks!, link => link.Title == "Docker Desktop WSL2 backend");
+    }
+
+    [Fact]
     public void BuildManualUpdate_ForMacOSNative_PreservesExistingConfig()
     {
         var builder = CreateBuilder();

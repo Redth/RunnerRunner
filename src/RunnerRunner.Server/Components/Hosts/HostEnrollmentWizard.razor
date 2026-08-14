@@ -120,7 +120,7 @@
         new(HostWorkerEnrollmentTarget.MacOSDocker, "macOS", "Docker Linux worker", "Use Docker Desktop to provide Linux container runner capacity.", "bi-box"),
         new(HostWorkerEnrollmentTarget.WindowsService, "Windows", "Native service", "Best for native Windows work and Windows Docker runners.", "bi-windows"),
         new(HostWorkerEnrollmentTarget.WindowsDockerWindows, "Windows", "Windows container", "Run the HostWorker itself as a Windows container.", "bi-box"),
-        new(HostWorkerEnrollmentTarget.WindowsDockerLinux, "Windows", "WSL/Linux Docker", "Run the Linux worker from WSL or Docker Desktop's Linux engine.", "bi-terminal")
+        new(HostWorkerEnrollmentTarget.WindowsDockerLinux, "Windows + WSL2", "Linux Docker runners", "Recommended on Windows on Arm. Provides native x64 or ARM64 Linux runners.", "bi-terminal")
     ];
 
     private bool wasOpen;
@@ -326,6 +326,20 @@
                             </button>
                         }
                     </div>
+
+                    @if (target == HostWorkerEnrollmentTarget.WindowsDockerLinux)
+                    {
+                        <div class="alert alert-info mt-3 mb-0 wsl2-enrollment-callout">
+                            <div class="d-flex gap-2">
+                                <i class="bi bi-info-circle-fill"></i>
+                                <div>
+                                    <strong>WSL2 supplies Linux runner capacity.</strong>
+                                    The HostWorker and its runners execute inside WSL2 and appear as <code>Linux</code>.
+                                    On Windows on Arm, the multi-architecture image and runner bootstrap select ARM64 automatically.
+                                </div>
+                            </div>
+                        </div>
+                    }
 
                     <div class="row g-3 mt-2">
                         <div class="col-md-6">
@@ -590,6 +604,21 @@
                             }
                         </div>
                     </div>
+
+                    @if (instructions.SetupLinks is { Count: > 0 })
+                    {
+                        <div class="card mb-3">
+                            <div class="card-body">
+                                <h6><i class="bi bi-book me-1"></i>Setup resources</h6>
+                                <ul class="small mb-0">
+                                    @foreach (var link in instructions.SetupLinks)
+                                    {
+                                        <li><a href="@link.Url" target="_blank" rel="noopener noreferrer">@link.Title</a></li>
+                                    }
+                                </ul>
+                            </div>
+                        </div>
+                    }
 
                     <div class="card">
                         <div class="card-body">

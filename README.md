@@ -242,16 +242,34 @@ docker run -d `
   ghcr.io/redth/runnerrunner-hostworker-windows:latest
 ```
 
-Use Docker for Linux containers by running the Linux HostWorker container against Docker Desktop's Linux engine from WSL:
+For Linux containers on Windows, choose **Windows + WSL2 / Linux Docker runners** in the enrollment wizard. This path works with either Docker Desktop's WSL2 integration or Docker Engine installed directly in the WSL distribution. Do not run both Docker setups in the same distribution.
+
+The HostWorker registers as a `Linux` host and the published image supports both `linux/amd64` and `linux/arm64`. On Windows on Arm, WSL2 reports ARM64 and RunnerRunner downloads ARM64 runner agents automatically. Runner workload images must also publish a `linux/arm64` variant to run natively.
+
+Prepare WSL2 from an elevated PowerShell window:
+
+```powershell
+wsl --update
+wsl --set-default-version 2
+wsl --list --verbose
+
+# Install Ubuntu if no distribution is listed, then restart if prompted:
+wsl --install -d Ubuntu
+```
+
+Enable Docker Desktop's WSL integration for the distribution and select Linux containers, or install [Docker Engine inside Ubuntu](https://docs.docker.com/engine/install/ubuntu/). Then run the generated enrollment command inside WSL2:
 
 ```bash
+docker info --format '{{.OSType}}/{{.Architecture}}'
+# linux/amd64 or linux/arm64
+
 docker run -d \
   --name runnerrunner-host-worker \
   --restart unless-stopped \
   -e HostWorker__ServerUrl='http://runner.example.com:4780' \
   -e HostWorker__EnrollmentToken='<host-token-from-hosts-page>' \
-  -e HostWorker__HostId='windows-linux-docker-01' \
-  -e HostWorker__HostName='windows-linux-docker-01' \
+  -e HostWorker__HostId='windows-wsl2-01' \
+  -e HostWorker__HostName='windows-wsl2-01' \
   -e HostWorker__Platform='Linux' \
   -e HostWorker__DataRoot='/var/lib/runnerrunner' \
   -e DOTNET_ENVIRONMENT='Production' \
