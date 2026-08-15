@@ -419,6 +419,80 @@ public class CapacityPlanningServiceTests
     }
 
     [Fact]
+    public void AnalyzeHostSelection_UsesWebhookLabelsToNarrowMatchingHosts()
+    {
+        var x64Host = new Host
+        {
+            Name = "linux-x64",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            MaxDockerContainers = 2,
+            Capabilities = ["docker"]
+        };
+        var arm64Host = new Host
+        {
+            Name = "linux-arm64",
+            Platform = HostPlatform.Linux,
+            Architecture = "arm64",
+            MaxDockerContainers = 2,
+            Capabilities = ["docker"]
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-docker",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker,
+            Labels = ["self-hosted", "linux"]
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [x64Host, arm64Host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [],
+            requestedRunnerLabels: ["self-hosted", "linux", "ARM64"]);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.NotNull(analysis.SelectedHost);
+        Assert.Equal(arm64Host.Id, analysis.SelectedHost!.Id);
+        Assert.All(analysis.Candidates, candidate => Assert.Equal(arm64Host.Id, candidate.HostId));
+    }
+
+    [Fact]
+    public void AnalyzeHostSelection_RejectsHostsMissingAnyWebhookLabel()
+    {
+        var host = new Host
+        {
+            Name = "linux-x64",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            MaxDockerContainers = 2,
+            Capabilities = ["docker"]
+        };
+        var profile = new RunnerProfile
+        {
+            Name = "linux-docker",
+            RequiredHostPlatform = HostPlatform.Linux,
+            ExecutionBackend = ExecutionBackend.Docker,
+            Labels = ["self-hosted", "linux"]
+        };
+
+        var analysis = CapacityPlanningService.AnalyzeHostSelection(
+            profile,
+            null,
+            [host],
+            new Dictionary<string, RunnerProfile> { [profile.Id] = profile },
+            [],
+            requestedRunnerLabels: ["self-hosted", "linux", "ARM64"]);
+
+        Assert.False(analysis.CapacityBlocked);
+        Assert.Equal(CapacityBlockerKind.Matching, analysis.BlockedBy);
+        Assert.Null(analysis.SelectedHost);
+        Assert.Contains("ARM64", analysis.Reason);
+    }
+
+    [Fact]
     public void BuildSnapshot_UsesRunnerDefinitionHostRoutingForCapacity()
     {
         var defaultHost = new Host

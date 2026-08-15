@@ -292,7 +292,8 @@ public sealed class CapacityPlanningService
         IReadOnlyCollection<Host> hosts,
         IReadOnlyDictionary<string, RunnerProfile> profilesById,
         IReadOnlyCollection<RunnerInstance> instances,
-        bool requireDispatchReadiness = false)
+        bool requireDispatchReadiness = false,
+        IReadOnlyCollection<string>? requestedRunnerLabels = null)
     {
         var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
         var matchingHosts = hosts
@@ -300,16 +301,20 @@ public sealed class CapacityPlanningService
                 HostCanProvideRunnerPlatform(host, profile)
                 && MatchesRuleHostRequirements(host, rule)
                 && MatchesProfileHostRequirements(host, profile)
+                && MatchesRequestedRunnerLabels(host, profile, requestedRunnerLabels)
                 && GetBackendLimit(host, profile.ExecutionBackend) > 0)
             .ToList();
 
         if (matchingHosts.Count == 0)
         {
+            var requestedLabelsDetail = requestedRunnerLabels is { Count: > 0 }
+                ? $" and all requested runner labels [{string.Join(", ", requestedRunnerLabels)}]"
+                : "";
             return new HostSelectionAnalysis
             {
                 CapacityBlocked = false,
                 BlockedBy = CapacityBlockerKind.Matching,
-                Reason = $"No host matches target platform '{profile.RequiredHostPlatform}', backend '{backendName}' capacity, and the rule target filters"
+                Reason = $"No host matches target platform '{profile.RequiredHostPlatform}', backend '{backendName}' capacity, the rule target filters{requestedLabelsDetail}"
             };
         }
 
@@ -672,7 +677,13 @@ public sealed class CapacityPlanningService
             }
         }
 
-        var hostAnalysis = AnalyzeHostSelection(profile, rule, hosts, profilesById, instances);
+        var hostAnalysis = AnalyzeHostSelection(
+            profile,
+            rule,
+            hosts,
+            profilesById,
+            instances,
+            requestedRunnerLabels: evt.Labels);
         var detail = hostAnalysis.Candidates
             .Take(3)
             .Select(candidate =>
@@ -905,6 +916,31 @@ public sealed class CapacityPlanningService
 
         return expectedDockerOs == null
             || string.Equals(dockerOs, expectedDockerOs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesRequestedRunnerLabels(
+        Host host,
+        RunnerProfile profile,
+        IReadOnlyCollection<string>? requestedRunnerLabels)
+    {
+        if (requestedRunnerLabels is not { Count: > 0 })
+            return true;
+
+        var supportedLabels = GetEffectiveHostCapabilities(host);
+        supportedLabels.Add("self-hosted");
+        supportedLabels.Add(profile.RequiredHostPlatform.ToString());
+        supportedLabels.Add(profile.ExecutionBackend.ToString());
+
+        foreach (var label in profile.Labels)
+        {
+            if (!string.IsNullOrWhiteSpace(label))
+                supportedLabels.Add(label.Trim());
+        }
+
+        return requestedRunnerLabels
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label.Trim())
+            .All(supportedLabels.Contains);
     }
 
     private static string? GetExpectedDockerOs(HostPlatform platform) =>
