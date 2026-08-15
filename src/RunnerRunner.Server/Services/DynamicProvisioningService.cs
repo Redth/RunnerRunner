@@ -689,7 +689,13 @@ public class DynamicProvisioningService : BackgroundService
             var hosts = (await store.Query<Host>().ToList()).ToList();
             var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
             var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
-            var hostSelection = await SelectHostAsync(store, profile, rule, hosts, instances);
+            var hostSelection = await SelectHostAsync(
+                store,
+                profile,
+                rule,
+                hosts,
+                instances,
+                currentEvent.Labels);
 
             if (hostSelection.Host == null)
             {
@@ -1374,7 +1380,8 @@ public class DynamicProvisioningService : BackgroundService
         RunnerProfile profile,
         ProvisioningRule? rule,
         List<Host> hosts,
-        List<RunnerInstance> instances)
+        List<RunnerInstance> instances,
+        IReadOnlyCollection<string> requestedRunnerLabels)
     {
         var profilesById = (await store.Query<RunnerProfile>().ToList())
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
@@ -1386,7 +1393,8 @@ public class DynamicProvisioningService : BackgroundService
             hosts,
             profilesById,
             instances,
-            requireDispatchReadiness: true);
+            requireDispatchReadiness: true,
+            requestedRunnerLabels);
 
         if (analysis.SelectedHost != null)
             return new HostSelectionResult(analysis.SelectedHost, null, false);
