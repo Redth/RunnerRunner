@@ -398,8 +398,11 @@
 
     private string BuildLogOutput(ObservedLogQueryResult result, string? directTail)
     {
+        if (selectedSourceId != "all" && !string.IsNullOrWhiteSpace(directTail))
+            return directTail;
+
         if (result.Entries.Count == 0)
-            return string.IsNullOrWhiteSpace(directTail) ? BuildEmptyMessage() : directTail;
+            return BuildEmptyMessage();
 
         if (selectedSourceId != "all")
             return string.Join('\n', result.Entries.Select(FormatEntry));

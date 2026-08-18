@@ -197,7 +197,7 @@ public class HostCommandProcessorTests
     }
 
     [Fact]
-    public async Task GetRunnerLogs_PublishesLogFrameForRunnerInstanceId()
+    public async Task GetRunnerLogs_ReturnsSnapshotWithoutRepublishingItAsLogFrame()
     {
         using var directory = HostWorkerTestDirectory.Create("command-runner-logs");
         var runnerBasePath = Path.Combine(directory.Path, "runners");
@@ -220,18 +220,41 @@ public class HostCommandProcessorTests
             }
         }), CancellationToken.None);
 
-        var frame = sink.Published
+        var frames = sink.Published
             .Where(message => message.Kind == HostWorkerMessageKinds.LogFrame)
             .Select(HostWorkerProtocol.DeserializePayload<HostWorkerLogFrame>)
-            .Single(frame => frame.StreamKind == "runner.output");
-        Assert.Equal("runner.output", frame.StreamKind);
-        Assert.Equal("runner.pid-123", frame.StreamId);
-        Assert.Equal("inst-1", frame.RunnerInstanceId);
-        Assert.Equal("Runner", frame.SourceType);
+            .ToArray();
+        Assert.DoesNotContain(frames, frame => frame.StreamKind == "runner.output");
 
         var logs = SinglePayload<RunnerLogsEvent>(sink, HostWorkerMessageKinds.RunnerLogs);
         Assert.Equal("pid-123", logs.InstanceHandle);
         Assert.Equal("inst-1", logs.RunnerInstanceId);
+        Assert.Equal("(No logs available for this runner instance)", logs.Logs);
+    }
+
+    [Fact]
+    public async Task GetHostLogs_ReturnsSnapshotWithoutRepublishingItAsLogFrame()
+    {
+        using var directory = HostWorkerTestDirectory.Create("command-host-logs");
+        using var processor = CreateProcessor(directory, out var sink, out _);
+
+        await processor.ProcessCommandAsync(CreateCommand("cmd-host-logs", new HostCommandEnvelope
+        {
+            Kind = HostCommandKind.GetHostLogs,
+            GetHostLogs = new GetHostLogsCommand
+            {
+                TailLines = 25
+            }
+        }), CancellationToken.None);
+
+        var frames = sink.Published
+            .Where(message => message.Kind == HostWorkerMessageKinds.LogFrame)
+            .Select(HostWorkerProtocol.DeserializePayload<HostWorkerLogFrame>)
+            .ToArray();
+        Assert.DoesNotContain(frames, frame => frame.StreamKind == "worker.process");
+
+        var logs = SinglePayload<HostLogsEvent>(sink, HostWorkerMessageKinds.HostLogs);
+        Assert.Contains("No readable HostWorker log file was found", logs.Logs);
     }
 
     private static HostCommandProcessor CreateProcessor(
