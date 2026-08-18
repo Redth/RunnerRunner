@@ -93,6 +93,15 @@ public class NativeBackend : IRunnerBackend
         request.EnvironmentVariables["RR_INSTANCE_ID"] = request.InstanceId;
         request.EnvironmentVariables["RR_RUNNER_NAME"] = request.RunnerName;
 
+        // actions/runner (and the Azure DevOps agent) refuse to start as root unless explicitly
+        // allowed. Native-backend instances are single-purpose, ephemeral sandboxes — often
+        // root-only containers with no other user configured — so allow it automatically instead
+        // of failing identically on every single attempt.
+        if (!OperatingSystem.IsWindows() && Environment.UserName == "root")
+        {
+            request.EnvironmentVariables["RUNNER_ALLOW_RUNASROOT"] = "1";
+        }
+
         // Install the job-started banner hook if the server requested it.
         // actions/runner picks this up via ACTIONS_RUNNER_HOOK_JOB_STARTED.
         if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))

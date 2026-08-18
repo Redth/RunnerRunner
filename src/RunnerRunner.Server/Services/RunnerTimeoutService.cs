@@ -24,6 +24,15 @@ public class RunnerTimeoutService : BackgroundService
     private static readonly TimeSpan IgnoredWebhookRetention = TimeSpan.FromDays(2);
     private static readonly TimeSpan RetryAfterRunnerFailureDelay = TimeSpan.FromSeconds(10);
 
+    // "pending" (WebhookEvent.ScheduleRetry's default status) is one of the open-ended queue
+    // statuses that WebhookEvent.EnsureLifecycleWindow/ScheduleRetry deliberately never expire
+    // (they're for legitimate no-fixed-SLA waits like FIFO/capacity ordering). Requeuing a linked
+    // event through that same "pending" status after a runner-launch failure inherits that
+    // no-expiry behavior, so a deterministically-broken host/image (e.g. a runner that exits
+    // immediately on every attempt) gets respawned every ~10s forever instead of ever giving up.
+    // Cap consecutive runner-launch failures for one event instead of relying on ExpiresAt.
+    private const int MaxConsecutiveRunnerFailureRetries = 5;
+
     private readonly ILogger<RunnerTimeoutService> _logger;
     private readonly IServiceProvider _services;
     private readonly IHostCommandDispatcher _hostCommands;
@@ -320,6 +329,17 @@ public class RunnerTimeoutService : BackgroundService
             || linkedEvent.IsTerminal)
             return false;
 
+        if (linkedEvent.RetryCount >= MaxConsecutiveRunnerFailureRetries)
+        {
+            linkedEvent.Status = "timed_out";
+            linkedEvent.Error = $"Runner failed to start the queued job {MaxConsecutiveRunnerFailureRetries} times in a row: {reason}";
+            linkedEvent.ResolvedAt = now;
+            linkedEvent.UpdatedAt = now;
+            linkedEvent.NextRetryAt = null;
+            linkedEvent.ExpiresAt = null;
+            return true;
+        }
+
         linkedEvent.ResolvedAt = null;
         linkedEvent.InstanceId = null;
         linkedEvent.ScheduleRetry(
@@ -327,7 +347,7 @@ public class RunnerTimeoutService : BackgroundService
             now,
             RetryAfterRunnerFailureDelay,
             status: "pending",
-            countAttempt: false);
+            countAttempt: true);
         return true;
     }
 
