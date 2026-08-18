@@ -503,7 +503,6 @@ internal sealed class HostCommandProcessor : BackgroundService
     private async Task HandleGetHostLogsAsync(GetHostLogsCommand command, CancellationToken ct)
     {
         var logs = await GetHostLogTailAsync(command.TailLines, ct);
-        await PublishLocalLogFrameAsync("worker.process", "worker.process", logs, null, ct);
 
         await PublishAsync(HostWorkerMessageKinds.HostLogs, new HostLogsEvent
         {
@@ -546,7 +545,6 @@ internal sealed class HostCommandProcessor : BackgroundService
         var runnerInstanceId = string.IsNullOrWhiteSpace(command.RunnerInstanceId)
             ? command.InstanceHandle
             : command.RunnerInstanceId;
-        await PublishLocalLogFrameAsync("runner.output", $"runner.{command.InstanceHandle}", logs, runnerInstanceId, ct);
 
         await PublishAsync(HostWorkerMessageKinds.RunnerLogs, new RunnerLogsEvent
         {
