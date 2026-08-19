@@ -73,6 +73,11 @@ public class HostWorkerConnectionServiceTests
         Assert.Equal("arm64", hello.Labels["arch"]);
         Assert.Equal("true", hello.Labels["docker"]);
         Assert.Equal("linux", hello.Labels["docker_os"]);
+        // Host.Capabilities (server-side) is reconstructed from "true"-valued labels
+        // (HostGrain.ApplyProjection), so every detected capability — not just docker —
+        // must appear here too, or static-provisioning's backend-availability check can
+        // never match "native"/"tart" even though every host detects "native".
+        Assert.Equal("true", hello.Labels["native"]);
         Assert.Contains("native", hello.Agent.Capabilities);
         Assert.Contains("docker", hello.Agent.Capabilities);
         Assert.NotNull(hello.Agent.Runtime);
