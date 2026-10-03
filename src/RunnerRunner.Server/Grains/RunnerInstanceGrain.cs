@@ -234,6 +234,26 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         await SyncToDocumentDb();
     }
 
+    public async Task SetJobClaim(string? jobId, string reason)
+    {
+        var normalized = string.IsNullOrWhiteSpace(jobId) ? null : jobId;
+        if (string.Equals(_state.State.JobId, normalized, StringComparison.Ordinal))
+            return;
+
+        _logger.LogWarning(
+            "Instance {InstanceId} ({RunnerName}) job claim {OldJobId} -> {NewJobId}: {Reason}",
+            this.GetPrimaryKeyString(), _state.State.RunnerName,
+            _state.State.JobId ?? "none", normalized ?? "released", reason);
+
+        // A release records when we stopped knowing what this runner is doing; a rebind
+        // means we know again, so the marker is cleared.
+        _state.State.ClaimReleasedAt = normalized == null ? DateTime.UtcNow : null;
+        _state.State.JobId = normalized;
+
+        await _state.WriteStateAsync();
+        await SyncToDocumentDb();
+    }
+
     public async Task DeployLocally(DeployRunnerCommand command)
     {
         _logger.LogInformation(
@@ -464,6 +484,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         instance.WebhookEventId = _state.State.WebhookEventId;
         instance.JitConfig = _state.State.JitConfig;
         instance.JobId = _state.State.JobId;
+        instance.ClaimReleasedAt = _state.State.ClaimReleasedAt;
         instance.ManagedByRunnerRunner = true;
         instance.CreatedAt = _state.State.CreatedAt;
         instance.DeployedAt = _state.State.DeployedAt;

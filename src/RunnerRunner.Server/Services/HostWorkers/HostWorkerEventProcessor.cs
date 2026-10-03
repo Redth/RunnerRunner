@@ -288,11 +288,29 @@ public sealed class HostWorkerEventProcessor
 
     private static void ApplyResourceUsage(Host host, HostResourceUsage? resourceUsage, DateTime observedAt)
     {
-        if (resourceUsage?.RunningTartVmCount is int runningTartVmCount)
+        if (resourceUsage == null)
+            return;
+
+        var observed = false;
+
+        if (resourceUsage.RunningTartVmCount is int runningTartVmCount)
         {
             host.ObservedRunningTartVMs = Math.Max(0, runningTartVmCount);
-            host.ObservedResourceUsageAt = observedAt;
+            observed = true;
         }
+
+        if (resourceUsage.FreeDiskBytes is long freeDiskBytes)
+        {
+            host.ObservedFreeDiskBytes = Math.Max(0, freeDiskBytes);
+            host.ObservedTotalDiskBytes = resourceUsage.TotalDiskBytes is long totalDiskBytes
+                ? Math.Max(0, totalDiskBytes)
+                : host.ObservedTotalDiskBytes;
+            host.ObservedDiskUsageAt = observedAt;
+            observed = true;
+        }
+
+        if (observed)
+            host.ObservedResourceUsageAt = observedAt;
     }
 
     private async Task RunnerStartedAsync(RunnerStartedEvent evt)

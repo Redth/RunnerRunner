@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using RunnerRunner.Core.Models;
 using Shiny.DocumentDb;
 using Host = RunnerRunner.Core.Models.Host;
@@ -293,7 +294,9 @@ public sealed class CapacityPlanningService
         IReadOnlyDictionary<string, RunnerProfile> profilesById,
         IReadOnlyCollection<RunnerInstance> instances,
         bool requireDispatchReadiness = false,
-        IReadOnlyCollection<string>? requestedRunnerLabels = null)
+        IReadOnlyCollection<string>? requestedRunnerLabels = null,
+        double minimumFreeDiskGb = 0,
+        DateTime? asOf = null)
     {
         var backendName = profile.ExecutionBackend.ToString().ToLowerInvariant();
         var matchingHosts = hosts
@@ -347,6 +350,12 @@ public sealed class CapacityPlanningService
                     canRunNow = false;
                     blockedBy = CapacityBlockerKind.Host;
                     detail = $"Host {backendName} slots full: {backendUsage.Summary}";
+                }
+                else if (IsBelowMinimumFreeDisk(host, minimumFreeDiskGb, asOf ?? DateTime.UtcNow, out var lowDiskDetail))
+                {
+                    canRunNow = false;
+                    blockedBy = CapacityBlockerKind.Host;
+                    detail = lowDiskDetail;
                 }
 
                 return new HostCandidateView
@@ -705,6 +714,64 @@ public sealed class CapacityPlanningService
             Summary = hostAnalysis.Reason,
             Details = detail
         };
+    }
+
+    /// <summary>
+    /// Free-space floor, in GB, below which a host stops accepting new jobs. Disabled by default:
+    /// a sensible floor depends on the workload (an Xcode build host needs far more headroom than
+    /// a small Linux container host), and enabling it blindly on upgrade could make a host that is
+    /// legitimately tight on space permanently unschedulable.
+    /// Set <c>DynamicProvisioning:MinimumFreeDiskGb</c> to enable it.
+    /// </summary>
+    public const double DefaultMinimumFreeDiskGb = 0;
+
+    /// <summary>Suggested floor for macOS/Xcode build hosts, used by the dashboard's warning badge.</summary>
+    public const double SuggestedMacBuildHostFreeDiskGb = 30;
+
+    /// <summary>
+    /// Disk readings older than this are treated as unknown so a host is never
+    /// held back by a stale measurement taken before a prune ran.
+    /// </summary>
+    public static readonly TimeSpan DiskObservationFreshness = TimeSpan.FromMinutes(10);
+
+    private const double BytesPerGb = 1024d * 1024d * 1024d;
+
+    /// <summary>Reads the configured free-space floor, falling back to the default.</summary>
+    public static double ResolveMinimumFreeDiskGb(IConfiguration? configuration)
+        => Math.Max(0, configuration?.GetValue("DynamicProvisioning:MinimumFreeDiskGb", DefaultMinimumFreeDiskGb)
+            ?? DefaultMinimumFreeDiskGb);
+
+    /// <summary>
+    /// Returns true when a host has reported a fresh free-space reading below the configured floor.
+    /// Fails open: a disabled threshold, a host that never reports disk usage (older HostWorker
+    /// builds), or a stale reading all leave the host eligible rather than silently unschedulable.
+    /// </summary>
+    public static bool IsBelowMinimumFreeDisk(
+        Host host,
+        double minimumFreeDiskGb,
+        DateTime asOf,
+        out string detail)
+    {
+        detail = "";
+
+        if (minimumFreeDiskGb <= 0)
+            return false;
+
+        if (host.ObservedFreeDiskBytes is not long freeBytes)
+            return false;
+
+        // Deliberately the disk-specific timestamp: a heartbeat carrying only Tart usage must not
+        // make an old disk reading look fresh.
+        if (host.ObservedDiskUsageAt is not DateTime observedAt
+            || asOf - observedAt > DiskObservationFreshness)
+            return false;
+
+        var freeGb = freeBytes / BytesPerGb;
+        if (freeGb >= minimumFreeDiskGb)
+            return false;
+
+        detail = $"Host is low on disk: {freeGb:n1} GB free, minimum {minimumFreeDiskGb:n0} GB";
+        return true;
     }
 
     public static bool MatchesRuleHostRequirements(Host host, ProvisioningRule? rule)

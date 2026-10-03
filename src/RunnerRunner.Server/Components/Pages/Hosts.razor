@@ -17,6 +17,7 @@
 @inject HostWorkerUpdateService HostWorkerUpdateService
 @inject HostWorkerEnrollmentGuideBuilder GuideBuilder
 @inject ILogger<Hosts> Logger
+@inject IConfiguration Configuration
 
 <PageTitle>Hosts - RunnerRunner</PageTitle>
 <SectionContent SectionName="page-header">
@@ -430,6 +431,13 @@
                             <i class="bi bi-heart-pulse-fill"></i>
                             <span>@FormatHeartbeat(host.LastHeartbeat)</span>
                         </span>
+                        @if (FormatFreeDisk(host) is string freeDisk)
+                        {
+                            <span class="host-heartbeat @(IsLowOnDisk(host) ? "text-danger" : "")" title="Free disk space reported by the HostWorker">
+                                <i class="bi bi-hdd"></i>
+                                <span>@freeDisk</span>
+                            </span>
+                        }
                     </div>
                 </td>
                 <td>
@@ -848,6 +856,9 @@
         MaxTartVMs = host.MaxTartVMs,
         MaxNativeProcesses = host.MaxNativeProcesses,
         ObservedRunningTartVMs = host.ObservedRunningTartVMs,
+        ObservedFreeDiskBytes = host.ObservedFreeDiskBytes,
+        ObservedTotalDiskBytes = host.ObservedTotalDiskBytes,
+        ObservedDiskUsageAt = host.ObservedDiskUsageAt,
         ObservedResourceUsageAt = host.ObservedResourceUsageAt,
         GroupId = host.GroupId,
         CreatedAt = host.CreatedAt,
@@ -1375,6 +1386,29 @@
         return counter.IsDisabled
             ? $"{label}: disabled"
             : $"{label}: {counter.Used} of {counter.Limit} used, {counter.Remaining} available";
+    }
+
+    private static string? FormatFreeDisk(Host host)
+    {
+        if (host.ObservedFreeDiskBytes is not long freeBytes)
+            return null;
+
+        var freeGb = freeBytes / (1024d * 1024d * 1024d);
+        return host.ObservedTotalDiskBytes is long totalBytes && totalBytes > 0
+            ? $"{freeGb:n0} / {totalBytes / (1024d * 1024d * 1024d):n0} GB free"
+            : $"{freeGb:n0} GB free";
+    }
+
+    private bool IsLowOnDisk(Host host)
+    {
+        // Fall back to the suggested build-host floor purely so the dashboard can still warn
+        // when the dispatch gate itself is disabled.
+        var configured = CapacityPlanningService.ResolveMinimumFreeDiskGb(Configuration);
+        var threshold = configured > 0
+            ? configured
+            : CapacityPlanningService.SuggestedMacBuildHostFreeDiskGb;
+
+        return CapacityPlanningService.IsBelowMinimumFreeDisk(host, threshold, DateTime.UtcNow, out _);
     }
 
     private static string FormatHeartbeat(DateTime? heartbeat)

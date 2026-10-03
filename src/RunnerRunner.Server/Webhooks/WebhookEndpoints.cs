@@ -15,7 +15,7 @@ public static class WebhookEndpoints
     /// Parameters: (WebhookEvent, profileId)
     /// </summary>
     public static event Action<WebhookEvent, string>? OnJobQueued;
-    public static event Action<string, string>? OnJobCompleted; // jobId, conclusion
+    public static event Action<string, string, string>? OnJobCompleted; // jobId, conclusion, runnerName
 
     public static IEndpointRouteBuilder MapWebhookEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -94,7 +94,16 @@ public static class WebhookEndpoints
                 if (json.TryGetProperty("workflow_job", out var wfJob2) &&
                     wfJob2.TryGetProperty("conclusion", out var conclusionProp))
                     conclusion = conclusionProp.GetString() ?? "";
-                OnJobCompleted?.Invoke(jobId, conclusion);
+
+                // The runner that actually executed this job, which is not necessarily
+                // the one it was provisioned for. Cleanup must target this runner.
+                var completedRunnerName = "";
+                if (json.TryGetProperty("workflow_job", out var wfJob3) &&
+                    wfJob3.TryGetProperty("runner_name", out var runnerNameProp) &&
+                    runnerNameProp.ValueKind == JsonValueKind.String)
+                    completedRunnerName = runnerNameProp.GetString() ?? "";
+
+                OnJobCompleted?.Invoke(jobId, conclusion, completedRunnerName);
             }
             catch (Exception ex)
             {

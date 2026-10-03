@@ -116,7 +116,7 @@ public class DockerBackend : IRunnerBackend
         string? hookScriptFileName = null;
         string? hookContainerScriptPath = null;
         bool hookIsWindows = false;
-        if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
+        if (Services.JobHookScriptBuilder.IsHookNeeded(request.EnvironmentVariables))
         {
             // Peek at the image to decide bash-vs-powershell; fall back to
             // Linux (bash) if the inspect fails or there's no image yet.

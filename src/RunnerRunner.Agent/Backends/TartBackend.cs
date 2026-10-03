@@ -233,7 +233,7 @@ public class TartBackend : IRunnerBackend
         // Install the job-started banner hook in the guest if requested.
         // Tart VMs are always macOS (bash), so we write the bash script to
         // /tmp inside the guest and point the runner at it via env var.
-        if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
+        if (Services.JobHookScriptBuilder.IsHookNeeded(request.EnvironmentVariables))
         {
             const string guestPath = "/tmp/rr-job-started.sh";
             var script = Services.JobHookScriptBuilder.BuildBashScript();

@@ -54,6 +54,15 @@ public interface IRunnerInstanceGrain : IGrainWithStringKey
     Task MarkCrashed(string reason);
     Task UpdateHealth(string? statusMessage = null);
     Task UpdateStatusMessage(string message);
+
+    /// <summary>
+    /// Records the job the provider actually assigned to this runner, or releases the
+    /// claim when the provider gave that job to someone else. The grain owns JobId and
+    /// projects it over the document on every sync, so callers must go through here
+    /// rather than editing the document directly or the change is silently reverted.
+    /// </summary>
+    Task SetJobClaim(string? jobId, string reason);
+
     Task DeployLocally(DeployRunnerCommand command);
 }
 

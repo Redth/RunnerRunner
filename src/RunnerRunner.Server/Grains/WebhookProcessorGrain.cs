@@ -74,6 +74,9 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         var imageTagOverrideRejectedReason = magic.ImageTagOverrideRejectedReason;
         var workflowName = workflowJob.TryGetProperty("workflow_name", out var wn)
             ? wn.GetString() ?? "" : "";
+        var runnerName = workflowJob.TryGetProperty("runner_name", out var rnEl)
+            && rnEl.ValueKind == System.Text.Json.JsonValueKind.String
+            ? rnEl.GetString() ?? "" : "";
         var repo = json.GetProperty("repository").GetProperty("full_name").GetString() ?? "";
         var githubInstallationId = ExtractGitHubInstallationId(provider, json);
 
@@ -210,9 +213,66 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
         // Handle "in_progress"
         if (action == "in_progress")
         {
-            var instances = (await store.Query<RunnerInstance>().ToList())
-                .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
+            var allDynamic = (await store.Query<RunnerInstance>().ToList())
+                .Where(i => i.ProvisioningMode == "dynamic")
                 .ToList();
+
+            // GitHub does not pin a JIT runner to the job it was minted for: any queued
+            // job whose labels match can claim it. runner_name is the only authoritative
+            // statement of which runner is executing this job, so it must win over the
+            // provisioning-time binding -- not merely fill in when that binding is absent.
+            //
+            // When two jobs swap runners, both instances still exist and both still name
+            // their original job, so a presence check finds a match and keeps the wrong
+            // one. Completion of the first job then force-stops the runner that is
+            // mid-build on the second, which GitHub reports ten minutes later as
+            // "the self-hosted runner lost communication with the server".
+            var actual = string.IsNullOrWhiteSpace(runnerName)
+                ? null
+                : allDynamic.FirstOrDefault(i =>
+                    string.Equals(i.RunnerName, runnerName, StringComparison.OrdinalIgnoreCase));
+
+            List<RunnerInstance> instances;
+            if (actual != null)
+            {
+                if (!string.Equals(actual.JobId, jobId, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning(
+                        "Runner {RunnerName} was provisioned for job {ProvisionedJobId} but GitHub assigned it job {JobId}; rebinding the instance record",
+                        runnerName, actual.JobId, jobId);
+
+                    actual.JobId = jobId;
+                    actual.ClaimReleasedAt = null;
+                    await store.Update(actual);
+                    await GrainFactory.GetGrain<IRunnerInstanceGrain>(actual.Id)
+                        .SetJobClaim(jobId, $"provider assigned job {jobId} to {runnerName}");
+                }
+
+                // Any other instance still claiming this job would be force-stopped by
+                // completion cleanup while it runs a different job. Release the claim;
+                // that instance is rebound by its own in_progress webhook.
+                foreach (var stale in allDynamic.Where(i =>
+                    i.Id != actual.Id && string.Equals(i.JobId, jobId, StringComparison.Ordinal)))
+                {
+                    _logger.LogWarning(
+                        "Instance {InstanceId} ({StaleRunner}) still claims job {JobId}, which is actually running on {RunnerName}; clearing the stale claim",
+                        stale.Id, stale.RunnerName, jobId, runnerName);
+
+                    stale.JobId = null;
+                    stale.ClaimReleasedAt = DateTime.UtcNow;
+                    await store.Update(stale);
+                    await GrainFactory.GetGrain<IRunnerInstanceGrain>(stale.Id)
+                        .SetJobClaim(null, $"job {jobId} is running on {runnerName}");
+                }
+
+                instances = new List<RunnerInstance> { actual };
+            }
+            else
+            {
+                instances = allDynamic
+                    .Where(i => string.Equals(i.JobId, jobId, StringComparison.Ordinal))
+                    .ToList();
+            }
 
             string? instanceId = null;
             foreach (var inst in instances)
@@ -234,6 +294,7 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 WorkflowName = workflowName,
                 Labels = labels,
                 Status = "in_progress",
+                AssignedRunnerName = string.IsNullOrWhiteSpace(runnerName) ? null : runnerName,
                 MatchedProfileId = instances.FirstOrDefault()?.ProfileId,
                 InstanceId = instanceId
             });
@@ -252,6 +313,11 @@ public class WebhookProcessorGrain : Grain, IWebhookProcessorGrain
                 .ToList();
             foreach (var queued in queuedEvents)
             {
+                // Stamp the runner the provider actually chose. RunnerTimeoutService uses
+                // this queued event to decide whether a runner may be stopped, and the
+                // provisioning-time job claim is not trustworthy evidence of that.
+                if (!string.IsNullOrWhiteSpace(runnerName))
+                    queued.AssignedRunnerName = runnerName;
                 queued.MarkResolved("in_progress", now, instanceId ?? queued.InstanceId);
                 await store.Update(queued);
             }

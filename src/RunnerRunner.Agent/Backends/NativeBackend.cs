@@ -19,6 +19,13 @@ public class NativeBackend : IRunnerBackend
     private const int RunnerDirectoryHashBytes = 8;
     private const string InstanceMetadataFileName = "rr-instance.json";
 
+    /// <summary>
+    /// Fallback locale for runner processes when the host service manager supplies none.
+    /// Override per host with RR_DEFAULT_LOCALE (set it empty to disable the fallback).
+    /// </summary>
+    private static readonly string DefaultLocale =
+        Environment.GetEnvironmentVariable("RR_DEFAULT_LOCALE") ?? "C.UTF-8";
+
     private readonly ILogger<NativeBackend> _logger;
     private readonly Dictionary<string, ManagedNativeRunner> _runners = new();
 
@@ -102,9 +109,11 @@ public class NativeBackend : IRunnerBackend
             request.EnvironmentVariables["RUNNER_ALLOW_RUNASROOT"] = "1";
         }
 
+        ApplyDefaultLocale(request.EnvironmentVariables);
+
         // Install the job-started banner hook if the server requested it.
         // actions/runner picks this up via ACTIONS_RUNNER_HOOK_JOB_STARTED.
-        if (Services.JobHookScriptBuilder.IsHookRequested(request.EnvironmentVariables))
+        if (Services.JobHookScriptBuilder.IsHookNeeded(request.EnvironmentVariables))
         {
             var hookPath = OperatingSystem.IsWindows()
                 ? Services.JobHookScriptBuilder.WritePowerShellScript(instanceDir)
@@ -758,6 +767,36 @@ public class NativeBackend : IRunnerBackend
             ?? throw new InvalidOperationException($"Failed to start {script}");
 
         return process;
+    }
+
+    /// <summary>
+    /// Ensures the runner process starts in a UTF-8 locale.
+    /// </summary>
+    /// <remarks>
+    /// Native runners inherit the host worker's environment, and service managers
+    /// (launchd, systemd) start it without any LANG/LC_* set. That leaves the C/POSIX
+    /// locale, where Ruby picks US-ASCII as its default external encoding and any
+    /// non-ASCII byte from an upstream API raises "invalid byte sequence in US-ASCII"
+    /// instead of the real message — turning a legible error into a spurious flake.
+    ///
+    /// "C.UTF-8" is used rather than a regional locale because it is the only UTF-8
+    /// locale guaranteed present on both macOS and minimal Linux images; "en_US.UTF-8"
+    /// is absent from slim containers and makes libc emit "cannot change locale" noise.
+    ///
+    /// An explicitly configured LC_ALL or LANG always wins, so a profile or job can
+    /// still choose a regional locale.
+    /// </remarks>
+    internal static void ApplyDefaultLocale(Dictionary<string, string> env)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        if (string.IsNullOrWhiteSpace(DefaultLocale)) return;
+
+        if (HasValue("LC_ALL") || HasValue("LANG")) return;
+
+        env["LANG"] = DefaultLocale;
+
+        bool HasValue(string key) =>
+            env.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v);
     }
 
     private static string FindExecutable(string dir, string name)

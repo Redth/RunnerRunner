@@ -466,7 +466,10 @@ public sealed class HostWorkerUpdateService
         if (string.Equals(instance.ProvisioningMode, "dynamic", StringComparison.OrdinalIgnoreCase)
             || string.Equals(instance.ProvisioningMode, "webhook", StringComparison.OrdinalIgnoreCase))
         {
-            return string.IsNullOrWhiteSpace(instance.JobId);
+            // A missing claim means idle only if we never released one. Once the claim has
+            // been released the provider gave that job to another runner, and this one may
+            // be mid-build on work we cannot name -- draining it would kill that job.
+            return string.IsNullOrWhiteSpace(instance.JobId) && instance.ClaimReleasedAt == null;
         }
 
         return true;

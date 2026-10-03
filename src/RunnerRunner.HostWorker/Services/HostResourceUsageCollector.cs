@@ -10,10 +10,12 @@ internal sealed class HostResourceUsageCollector
     private readonly ILogger<HostResourceUsageCollector> _logger;
     private readonly TartBackend _tartBackend;
     private readonly TimeSpan _timeout;
+    private readonly string _diskProbePath;
 
     public HostResourceUsageCollector(
         IConfiguration configuration,
         HostWorkerIdentity identity,
+        HostWorkerPaths paths,
         ILogger<HostResourceUsageCollector> logger,
         ILoggerFactory loggerFactory)
     {
@@ -21,9 +23,60 @@ internal sealed class HostResourceUsageCollector
         _logger = logger;
         _tartBackend = new TartBackend(loggerFactory.CreateLogger<TartBackend>());
         _timeout = TimeSpan.FromSeconds(Math.Max(1, configuration.GetValue("HostWorker:ResourceUsageTimeoutSeconds", 5)));
+        _diskProbePath = paths.DataRoot;
     }
 
     public async Task<HostResourceUsage?> CollectAsync(string reason, CancellationToken ct)
+    {
+        var usage = new HostResourceUsage();
+        var collectedAnything = false;
+
+        if (TryReadDiskSpace(out var freeBytes, out var totalBytes))
+        {
+            usage.FreeDiskBytes = freeBytes;
+            usage.TotalDiskBytes = totalBytes;
+            collectedAnything = true;
+        }
+
+        if (await TryCountRunningTartVmsAsync(reason, ct) is int runningTartVmCount)
+        {
+            usage.RunningTartVmCount = runningTartVmCount;
+            collectedAnything = true;
+        }
+
+        return collectedAnything ? usage : null;
+    }
+
+    public bool TryReadDiskSpace(out long freeBytes, out long totalBytes)
+    {
+        freeBytes = 0;
+        totalBytes = 0;
+
+        try
+        {
+            // On Unix, DriveInfo resolves the filesystem containing the given path, so probe the
+            // data root directly; "/" would report the system volume rather than the one holding
+            // the working directories. Windows needs an actual drive root.
+            var probe = OperatingSystem.IsWindows()
+                ? Path.GetPathRoot(_diskProbePath) ?? _diskProbePath
+                : _diskProbePath;
+
+            var driveInfo = new DriveInfo(probe);
+            if (!driveInfo.IsReady)
+                return false;
+
+            freeBytes = driveInfo.AvailableFreeSpace;
+            totalBytes = driveInfo.TotalSize;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to read disk space for {Path}", _diskProbePath);
+            return false;
+        }
+    }
+
+    private async Task<int?> TryCountRunningTartVmsAsync(string reason, CancellationToken ct)
     {
         if (_identity.Platform != HostPlatform.MacOS
             || !ToolExists("tart", "/opt/homebrew/bin/tart", "/usr/local/bin/tart"))
@@ -43,10 +96,7 @@ internal sealed class HostResourceUsageCollector
                 stopwatch.ElapsedMilliseconds,
                 runningTartVmCount);
 
-            return new HostResourceUsage
-            {
-                RunningTartVmCount = runningTartVmCount
-            };
+            return runningTartVmCount;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
