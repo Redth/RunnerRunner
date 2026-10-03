@@ -15,7 +15,7 @@ public class RunnerTimeoutService : BackgroundService
     private static readonly TimeSpan PendingTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan StartingTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan DynamicPickupTimeout = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan DynamicRunningTimeout = TimeSpan.FromHours(2);
+    private static readonly TimeSpan DefaultDynamicRunningTimeout = TimeSpan.FromHours(6);
     private static readonly TimeSpan StoppingTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan HealthCheckStaleTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan DynamicTerminalRetention = TimeSpan.FromMinutes(10);
@@ -37,14 +37,30 @@ public class RunnerTimeoutService : BackgroundService
     private readonly IServiceProvider _services;
     private readonly IHostCommandDispatcher _hostCommands;
 
+    /// <summary>
+    /// Backstop for dynamic runners whose completion webhook was lost. It must stay above
+    /// the longest job the pool can legitimately run: a runner that trips this is killed
+    /// and its workspace deleted, so a value below a real job's timeout destroys healthy
+    /// builds mid-step and reports it as a build failure. Crashed runners are caught far
+    /// sooner by <see cref="HealthCheckStaleTimeout"/>, so this only needs to be generous.
+    /// </summary>
+    private readonly TimeSpan _dynamicRunningTimeout;
+
     public RunnerTimeoutService(
         ILogger<RunnerTimeoutService> logger,
         IServiceProvider services,
-        IHostCommandDispatcher hostCommands)
+        IHostCommandDispatcher hostCommands,
+        IConfiguration configuration)
     {
         _logger = logger;
         _services = services;
         _hostCommands = hostCommands;
+
+        var configuredMinutes = configuration.GetValue(
+            "DynamicProvisioning:RunningTimeoutMinutes",
+            (int)DefaultDynamicRunningTimeout.TotalMinutes);
+
+        _dynamicRunningTimeout = TimeSpan.FromMinutes(Math.Max(1, configuredMinutes));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -171,48 +187,82 @@ public class RunnerTimeoutService : BackgroundService
         {
             var linkedEvent = await store.Get<WebhookEvent>(instance.WebhookEventId);
             var eventStatus = linkedEvent?.Status?.Trim();
+            var binding = ClassifyLinkedJob(instance, linkedEvent);
+
             if (eventStatus is "completed" or "timed_out" or "ignored" or WebhookEvent.StatusIgnoredScope or WebhookEvent.StatusIgnoredTarget or "rejected")
             {
-                _logger.LogWarning(
-                    "Dynamic runner {RunnerName} ({Id}) is still active after its event resolved with status {EventStatus}",
-                    instance.RunnerName, instance.Id, eventStatus);
+                // The linked event resolving only justifies stopping this runner if this
+                // runner is the one that served it. GitHub may hand a JIT runner a
+                // different job than the one it was minted for, and the webhook processor
+                // releases the stale claim when it does, so an unbound or rebound instance
+                // may be mid-build on another job. Reaping it here would kill that job,
+                // which is the failure the completion path already learned to avoid.
+                if (binding != LinkedJobBinding.Same)
+                {
+                    // Deliberately not a return: we decline this job-specific stop, but the
+                    // instance must still face the max-runtime and stale-health backstops
+                    // below. Terminal events are retained for days, so returning here would
+                    // exempt the runner from every other cleanup path for that long.
+                    _logger.LogInformation(
+                        "Dynamic runner {RunnerName} ({Id}) is not bound to resolved event job {EventJobId} (claim: {JobId}); leaving it running",
+                        instance.RunnerName, instance.Id, linkedEvent?.JobId, instance.JobId ?? "released");
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Dynamic runner {RunnerName} ({Id}) is still active after its event resolved with status {EventStatus}",
+                        instance.RunnerName, instance.Id, eventStatus);
 
-                instance.Status = RunnerInstanceStatus.Failed;
-                instance.StatusMessage = $"Dynamic runner cleanup after event resolved: {eventStatus}";
-                await store.Update(instance);
+                    instance.Status = RunnerInstanceStatus.Failed;
+                    instance.StatusMessage = $"Dynamic runner cleanup after event resolved: {eventStatus}";
+                    await store.Update(instance);
 
-                await TrySendStopRunner(store, instance);
-                await store.Remove<RunnerInstance>(instance.Id);
-                return;
+                    await TrySendStopRunner(store, instance);
+                    await store.Remove<RunnerInstance>(instance.Id);
+                    return;
+                }
             }
-
-            if (instance.StartedAt != null
+            else if (instance.StartedAt != null
                 && now - instance.StartedAt.Value > DynamicPickupTimeout
                 && !string.Equals(eventStatus, "in_progress", StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogWarning(
-                    "Dynamic runner {RunnerName} ({Id}) never picked up its queued job after {Elapsed}; recycling it",
-                    instance.RunnerName, instance.Id, now - instance.StartedAt.Value);
+                // The linked event describes the job this runner was minted for, which is
+                // not necessarily the job GitHub gave it. Recycling is only safe when the
+                // runner still holds that exact claim; if it was rebound to another job, or
+                // its claim was released because another runner took this one, the runner
+                // may be building and must not be stopped.
+                if (binding != LinkedJobBinding.Same)
+                {
+                    _logger.LogInformation(
+                        "Dynamic runner {RunnerName} ({Id}) did not pick up job {EventJobId} and no longer holds that claim (now {JobId}); leaving it running",
+                        instance.RunnerName, instance.Id, linkedEvent?.JobId, instance.JobId ?? "released");
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Dynamic runner {RunnerName} ({Id}) never picked up its queued job after {Elapsed}; recycling it",
+                        instance.RunnerName, instance.Id, now - instance.StartedAt.Value);
 
-                instance.Status = RunnerInstanceStatus.Failed;
-                instance.StatusMessage = "Dynamic runner pickup timeout — job never started on provider";
-                await store.Update(instance);
+                    instance.Status = RunnerInstanceStatus.Failed;
+                    instance.StatusMessage = "Dynamic runner pickup timeout — job never started on provider";
+                    await store.Update(instance);
 
-                await TryRequeueLinkedWebhookEvent(
-                    store,
-                    instance,
-                    now,
-                    "Runner came online but never picked up the queued job; provisioning will be retried");
-                await TrySendStopRunner(store, instance);
-                await store.Remove<RunnerInstance>(instance.Id);
-                return;
+                    await TryRequeueLinkedWebhookEvent(
+                        store,
+                        instance,
+                        now,
+                        "Runner came online but never picked up the queued job; provisioning will be retried");
+                    await TrySendStopRunner(store, instance);
+                    await store.Remove<RunnerInstance>(instance.Id);
+                    return;
+                }
             }
         }
 
         // Dynamic runner running too long without completion webhook
         if (instance.ProvisioningMode == "dynamic"
             && instance.StartedAt != null
-            && now - instance.StartedAt.Value > DynamicRunningTimeout)
+            && now - instance.StartedAt.Value > _dynamicRunningTimeout)
         {
             _logger.LogWarning(
                 "Dynamic runner {RunnerName} ({Id}) timed out after {Elapsed} with no completion webhook",
@@ -320,6 +370,61 @@ public class RunnerTimeoutService : BackgroundService
             "Re-queued webhook event {EventId} after runner failure for instance {InstanceId}",
             linkedEvent!.Id,
             instance.Id);
+    }
+
+    /// <summary>
+    /// How an instance's current job claim relates to the job its linked webhook event
+    /// describes. JIT runners are not pinned to the job they were minted for, so this
+    /// relationship is the only signal the timeout paths have about what a runner is
+    /// actually doing — and it is frequently unknowable.
+    /// </summary>
+    internal enum LinkedJobBinding
+    {
+        /// <summary>The instance still claims exactly the job the linked event describes.</summary>
+        Same,
+
+        /// <summary>GitHub handed this runner a different job; it is building something else.</summary>
+        Different,
+
+        /// <summary>
+        /// There is no usable claim to compare. This is NOT the same as idle: the webhook
+        /// processor clears an instance's claim once another runner takes its job, so an
+        /// unbound runner may be mid-build on work we cannot name.
+        /// </summary>
+        Unknown
+    }
+
+    /// <summary>
+    /// Classifies an instance against its linked event. Only <see cref="LinkedJobBinding.Same"/>
+    /// is positive evidence; every job-specific stop must require it, because treating
+    /// <see cref="LinkedJobBinding.Unknown"/> as idle is what kills live jobs.
+    /// </summary>
+    internal static LinkedJobBinding ClassifyLinkedJob(RunnerInstance instance, WebhookEvent? linkedEvent)
+    {
+        if (linkedEvent == null)
+            return LinkedJobBinding.Unknown;
+
+        // Authoritative: the provider named the runner it actually gave this job to. This
+        // also closes a race the job claim cannot -- an instance may still hold a stale
+        // claim on this job while already building a different one, simply because that
+        // job's in_progress webhook has not been delivered yet.
+        if (!string.IsNullOrWhiteSpace(linkedEvent.AssignedRunnerName))
+        {
+            return string.Equals(instance.RunnerName, linkedEvent.AssignedRunnerName, StringComparison.OrdinalIgnoreCase)
+                ? LinkedJobBinding.Same
+                : LinkedJobBinding.Different;
+        }
+
+        // Fallback for events resolved before any assignment was observed.
+        if (string.IsNullOrWhiteSpace(instance.JobId)
+            || string.IsNullOrWhiteSpace(linkedEvent.JobId))
+        {
+            return LinkedJobBinding.Unknown;
+        }
+
+        return string.Equals(instance.JobId, linkedEvent.JobId, StringComparison.OrdinalIgnoreCase)
+            ? LinkedJobBinding.Same
+            : LinkedJobBinding.Different;
     }
 
     internal static bool PrepareLinkedEventRetry(WebhookEvent? linkedEvent, DateTime now, string reason)

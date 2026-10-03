@@ -50,6 +50,7 @@ public class DynamicProvisioningService : BackgroundService
     private readonly TimeSpan _retrySweepInterval;
     private readonly TimeSpan _pendingTimeout;
     private readonly TimeSpan _githubPollInterval;
+    private readonly double _minimumFreeDiskGb;
     private DateTime _lastGitHubPollAt = DateTime.MinValue;
 
     public DynamicProvisioningService(
@@ -75,6 +76,7 @@ public class DynamicProvisioningService : BackgroundService
         _retrySweepInterval = TimeSpan.FromSeconds(Math.Max(5, _configuration.GetValue("DynamicProvisioning:PendingRetrySeconds", 15)));
         _pendingTimeout = TimeSpan.FromMinutes(Math.Max(1, _configuration.GetValue("DynamicProvisioning:PendingTimeoutMinutes", 10)));
         _githubPollInterval = TimeSpan.FromSeconds(Math.Max(30, _configuration.GetValue("DynamicProvisioning:GitHubPollSeconds", 180)));
+        _minimumFreeDiskGb = CapacityPlanningService.ResolveMinimumFreeDiskGb(_configuration);
     }
 
     public override Task StartAsync(CancellationToken cancellationToken)
@@ -219,6 +221,13 @@ public class DynamicProvisioningService : BackgroundService
                     ? conclusionProp.GetString()
                     : null;
 
+                // The provider names the runner it actually assigned. Without this the
+                // completion path falls back to matching on the provisioning-time job
+                // claim, which can stop a runner that is building something else.
+                var jobRunnerName = job.TryGetProperty("runner_name", out var runnerNameProp)
+                    ? runnerNameProp.GetString()
+                    : null;
+
                 var existingEventsForJob = (await store.Query<WebhookEvent>().ToList())
                     .Where(e => e.Provider == RunnerProvider.GitHubActions.ToString()
                         && e.Repository.Equals(repo, StringComparison.OrdinalIgnoreCase)
@@ -230,6 +239,8 @@ public class DynamicProvisioningService : BackgroundService
                     var now = DateTime.UtcNow;
                     foreach (var existingEvent in existingEventsForJob.Where(e => e.Action == "queued" && e.Status != "in_progress"))
                     {
+                        if (!string.IsNullOrWhiteSpace(jobRunnerName))
+                            existingEvent.AssignedRunnerName = jobRunnerName;
                         existingEvent.MarkResolved("in_progress", now, existingEvent.InstanceId);
                         await store.Update(existingEvent);
                     }
@@ -242,6 +253,8 @@ public class DynamicProvisioningService : BackgroundService
                     var now = DateTime.UtcNow;
                     foreach (var existingEvent in existingEventsForJob.Where(e => e.Action == "queued" && e.Status != "completed"))
                     {
+                        if (!string.IsNullOrWhiteSpace(jobRunnerName))
+                            existingEvent.AssignedRunnerName = jobRunnerName;
                         existingEvent.MarkResolved("completed", now, existingEvent.InstanceId);
                         await store.Update(existingEvent);
                     }
@@ -250,7 +263,8 @@ public class DynamicProvisioningService : BackgroundService
                         store,
                         jobId,
                         $"Job completed ({jobConclusion ?? "unknown"})",
-                        removeRecords: true);
+                        removeRecords: true,
+                        completedRunnerName: jobRunnerName);
 
                     continue;
                 }
@@ -695,7 +709,8 @@ public class DynamicProvisioningService : BackgroundService
                 rule,
                 hosts,
                 instances,
-                currentEvent.Labels);
+                currentEvent.Labels,
+                _minimumFreeDiskGb);
 
             if (hostSelection.Host == null)
             {
@@ -1163,6 +1178,10 @@ public class DynamicProvisioningService : BackgroundService
         // Expand $RR_* variable references
         ExpandVariableReferences(result);
 
+        // Declared after expansion so the recorded names map to the values the
+        // job actually receives.
+        Core.SecretEnvironment.Declare(result, selectedSets.SelectMany(s => s.SecretKeys));
+
         return result;
     }
 
@@ -1381,7 +1400,8 @@ public class DynamicProvisioningService : BackgroundService
         ProvisioningRule? rule,
         List<Host> hosts,
         List<RunnerInstance> instances,
-        IReadOnlyCollection<string> requestedRunnerLabels)
+        IReadOnlyCollection<string> requestedRunnerLabels,
+        double minimumFreeDiskGb)
     {
         var profilesById = (await store.Query<RunnerProfile>().ToList())
             .ToDictionary(p => p.Id, p => p, StringComparer.OrdinalIgnoreCase);
@@ -1394,7 +1414,8 @@ public class DynamicProvisioningService : BackgroundService
             profilesById,
             instances,
             requireDispatchReadiness: true,
-            requestedRunnerLabels);
+            requestedRunnerLabels,
+            minimumFreeDiskGb);
 
         if (analysis.SelectedHost != null)
             return new HostSelectionResult(analysis.SelectedHost, null, false);
@@ -1513,7 +1534,7 @@ public class DynamicProvisioningService : BackgroundService
         }
     }
 
-    private async void HandleJobCompleted(string jobId, string conclusion)
+    private async void HandleJobCompleted(string jobId, string conclusion, string runnerName)
     {
         try
         {
@@ -1534,7 +1555,7 @@ public class DynamicProvisioningService : BackgroundService
                 await store.Update(queuedEvent);
             }
 
-            await CleanupDynamicRunnersForJobAsync(store, jobId, $"Job completed ({conclusion})", removeRecords: true);
+            await CleanupDynamicRunnersForJobAsync(store, jobId, $"Job completed ({conclusion})", removeRecords: true, runnerName);
             TriggerQueueSweep();
         }
         catch (Exception ex)
@@ -1547,11 +1568,51 @@ public class DynamicProvisioningService : BackgroundService
         IDocumentStore store,
         string jobId,
         string reason,
-        bool removeRecords)
+        bool removeRecords,
+        string? completedRunnerName = null)
     {
-        var instances = (await store.Query<RunnerInstance>().ToList())
-            .Where(i => i.ProvisioningMode == "dynamic" && i.JobId == jobId)
+        var dynamicInstances = (await store.Query<RunnerInstance>().ToList())
+            .Where(i => i.ProvisioningMode == "dynamic")
             .ToList();
+
+        // A JIT runner is not pinned to the job it was minted for, so the instance whose
+        // JobId matches is frequently *not* the runner that ran this job -- it is an idle
+        // runner that may have just been handed a different job. Stopping it kills that
+        // job, which GitHub reports ten minutes later as "the self-hosted runner lost
+        // communication with the server". The completed webhook names the runner that
+        // actually executed this job, so prefer that over the provisioning-time binding.
+        List<RunnerInstance> instances;
+        if (!string.IsNullOrWhiteSpace(completedRunnerName))
+        {
+            instances = dynamicInstances
+                .Where(i => string.Equals(i.RunnerName, completedRunnerName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var mismatched = dynamicInstances
+                .Where(i => string.Equals(i.JobId, jobId, StringComparison.Ordinal)
+                    && !string.Equals(i.RunnerName, completedRunnerName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var spared in mismatched)
+            {
+                _logger.LogWarning(
+                    "Not stopping runner {SparedRunner}: it was provisioned for job {JobId} but {ActualRunner} ran it, so {SparedRunner} may be executing another job",
+                    spared.RunnerName, jobId, completedRunnerName, spared.RunnerName);
+
+                // Release the claim so later sweeps do not treat it as this job's runner.
+                spared.JobId = null;
+                spared.ClaimReleasedAt = DateTime.UtcNow;
+                await store.Update(spared);
+                await _grainFactory.GetGrain<IRunnerInstanceGrain>(spared.Id)
+                    .SetJobClaim(null, $"job {jobId} completed on {completedRunnerName}");
+            }
+        }
+        else
+        {
+            instances = dynamicInstances
+                .Where(i => string.Equals(i.JobId, jobId, StringComparison.Ordinal))
+                .ToList();
+        }
 
         if (!instances.Any())
         {

@@ -89,7 +89,21 @@ public class Host
     /// Used to reserve Tart capacity consumed by native jobs or other local workloads.
     /// </summary>
     public int? ObservedRunningTartVMs { get; set; }
+
+    /// <summary>
+    /// Free/total bytes last reported for the volume holding the host's working directories.
+    /// Null when the host has never reported disk telemetry, in which case disk gating is skipped.
+    /// </summary>
+    public long? ObservedFreeDiskBytes { get; set; }
+    public long? ObservedTotalDiskBytes { get; set; }
     public DateTime? ObservedResourceUsageAt { get; set; }
+
+    /// <summary>
+    /// When the disk figures above were last refreshed. Tracked separately from
+    /// <see cref="ObservedResourceUsageAt"/> so a heartbeat that reports only Tart usage cannot
+    /// make a stale disk reading look fresh and keep the host blocked (or admitted) forever.
+    /// </summary>
+    public DateTime? ObservedDiskUsageAt { get; set; }
 
     /// <summary>Host group ID for logical grouping.</summary>
     public string? GroupId { get; set; }

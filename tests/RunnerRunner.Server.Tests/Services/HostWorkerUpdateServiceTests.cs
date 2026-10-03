@@ -18,6 +18,56 @@ namespace RunnerRunner.Server.Tests.Services;
 public class HostWorkerUpdateServiceTests
 {
     [Fact]
+    public void ShouldStopRunnerForDrain_FalseWhenJobClaimWasReleased()
+    {
+        // JIT runners are not pinned to the job they were minted for, so when the provider
+        // hands that job to someone else we release this instance's claim. The runner may
+        // still be building work we cannot name, so draining it would kill a live job.
+        var released = new RunnerInstance
+        {
+            Id = "inst-1",
+            RunnerName = "Macos-jit-dbd36386",
+            ProvisioningMode = "dynamic",
+            Status = RunnerInstanceStatus.Running,
+            JobId = null,
+            ClaimReleasedAt = DateTime.UtcNow
+        };
+
+        Assert.False(HostWorkerUpdateService.ShouldStopRunnerForDrain(released));
+    }
+
+    [Fact]
+    public void ShouldStopRunnerForDrain_TrueWhenDynamicRunnerNeverHeldAClaim()
+    {
+        var idle = new RunnerInstance
+        {
+            Id = "inst-2",
+            RunnerName = "Macos-jit-idle",
+            ProvisioningMode = "dynamic",
+            Status = RunnerInstanceStatus.Running,
+            JobId = null,
+            ClaimReleasedAt = null
+        };
+
+        Assert.True(HostWorkerUpdateService.ShouldStopRunnerForDrain(idle));
+    }
+
+    [Fact]
+    public void ShouldStopRunnerForDrain_FalseWhenDynamicRunnerHoldsAJob()
+    {
+        var busy = new RunnerInstance
+        {
+            Id = "inst-3",
+            RunnerName = "Macos-jit-busy",
+            ProvisioningMode = "dynamic",
+            Status = RunnerInstanceStatus.Running,
+            JobId = "110937915464"
+        };
+
+        Assert.False(HostWorkerUpdateService.ShouldStopRunnerForDrain(busy));
+    }
+
+    [Fact]
     public async Task GetReleaseAsync_UsesStoredGitHubCredentialForRefArtifacts()
     {
         var store = TestDocumentStore.Create();

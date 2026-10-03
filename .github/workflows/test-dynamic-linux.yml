@@ -46,8 +46,10 @@ jobs:
           df -h / 2>/dev/null || echo "df not available"
 
       - name: Test Work
+        env:
+          TEST_MESSAGE: ${{ github.event.inputs.message }}
         run: |
-          echo "Message: ${{ github.event.inputs.message }}"
+          echo "Message: $TEST_MESSAGE"
           echo ""
           echo "Doing some test work..."
           sleep 5

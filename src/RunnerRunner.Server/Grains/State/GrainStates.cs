@@ -36,6 +36,9 @@ public class HostGrainState
     [Id(18)] public int? ObservedRunningTartVMs { get; set; }
     [Id(19)] public DateTime? ObservedResourceUsageAt { get; set; }
     [Id(20)] public bool IsDraining { get; set; }
+    [Id(21)] public long? ObservedFreeDiskBytes { get; set; }
+    [Id(22)] public long? ObservedTotalDiskBytes { get; set; }
+    [Id(23)] public DateTime? ObservedDiskUsageAt { get; set; }
 }
 
 [GenerateSerializer]
@@ -84,6 +87,12 @@ public class RunnerInstanceGrainState
 
     [Id(22)] public string? ImageTagOverride { get; set; }
     [Id(23)] public string? RunnerDefinitionId { get; set; }
+
+    /// <summary>
+    /// Set when this instance's job claim was released because the provider assigned that
+    /// job to a different runner. See <see cref="RunnerInstance.ClaimReleasedAt"/>.
+    /// </summary>
+    [Id(24)] public DateTime? ClaimReleasedAt { get; set; }
 }
 
 [GenerateSerializer]

@@ -50,6 +50,7 @@ public class ProfileGrain : Grain, IProfileGrain
             return new Dictionary<string, string>();
 
         var composed = new Dictionary<string, string>();
+        var declaredSecretKeys = new List<string>();
 
         if (profile.EnvironmentVariableSetIds.Count > 0)
         {
@@ -69,6 +70,8 @@ public class ProfileGrain : Grain, IProfileGrain
                 {
                     composed[kvp.Key] = kvp.Value;
                 }
+
+                declaredSecretKeys.AddRange(envSet.SecretKeys);
             }
         }
 
@@ -77,6 +80,9 @@ public class ProfileGrain : Grain, IProfileGrain
         {
             composed[kvp.Key] = kvp.Value;
         }
+
+        // Declared last so the recorded names map to the final values.
+        Core.SecretEnvironment.Declare(composed, declaredSecretKeys);
 
         _cachedEnvVars = composed;
         return composed;

@@ -26,6 +26,15 @@ public class RunnerInstance
     public string? JobId { get; set; }
 
     /// <summary>
+    /// Set when this instance's job claim was released because the provider gave that job
+    /// to a different runner. A dynamic runner with no <see cref="JobId"/> and a non-null
+    /// value here is in an unknown state, not an idle one: JIT runners are not pinned to
+    /// the job they were minted for, so it may be executing work we cannot name. Cleanup
+    /// paths that treat a missing claim as "safe to stop" must check this first.
+    /// </summary>
+    public DateTime? ClaimReleasedAt { get; set; }
+
+    /// <summary>
     /// When the webhook supplied an image tag override (via
     /// <c>rr-image-tag=</c>) and the profile opted in, this holds the tag
     /// that was applied to the deploy command. Null for static runners or

@@ -276,6 +276,9 @@ public class HostGrain : Grain, IHostGrain
         host.MaxTartVMs = _state.State.MaxTartVMs;
         host.MaxNativeProcesses = _state.State.MaxNativeProcesses;
         host.ObservedRunningTartVMs = _state.State.ObservedRunningTartVMs;
+        host.ObservedFreeDiskBytes = _state.State.ObservedFreeDiskBytes;
+        host.ObservedTotalDiskBytes = _state.State.ObservedTotalDiskBytes;
+        host.ObservedDiskUsageAt = _state.State.ObservedDiskUsageAt;
         host.ObservedResourceUsageAt = _state.State.ObservedResourceUsageAt;
         host.IsDraining = _state.State.IsDraining;
         host.GroupId = _state.State.GroupId;
@@ -285,11 +288,28 @@ public class HostGrain : Grain, IHostGrain
 
     private void ApplyResourceUsage(HostResourceUsage? resourceUsage)
     {
-        if (resourceUsage?.RunningTartVmCount is int runningTartVmCount)
+        if (resourceUsage == null)
+            return;
+
+        var observed = false;
+
+        if (resourceUsage.RunningTartVmCount is int runningTartVmCount)
         {
             _state.State.ObservedRunningTartVMs = Math.Max(0, runningTartVmCount);
-            _state.State.ObservedResourceUsageAt = DateTime.UtcNow;
+            observed = true;
         }
+
+        if (resourceUsage.FreeDiskBytes is long freeDiskBytes)
+        {
+            _state.State.ObservedFreeDiskBytes = Math.Max(0, freeDiskBytes);
+            if (resourceUsage.TotalDiskBytes is long totalDiskBytes)
+                _state.State.ObservedTotalDiskBytes = Math.Max(0, totalDiskBytes);
+            _state.State.ObservedDiskUsageAt = DateTime.UtcNow;
+            observed = true;
+        }
+
+        if (observed)
+            _state.State.ObservedResourceUsageAt = DateTime.UtcNow;
     }
 
     private int GetEffectiveRunningTartVMs()

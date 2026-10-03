@@ -92,4 +92,60 @@ public class NativeBackendTests
             Path.Combine("/Users/runner", ".runnerrunner"),
             NativeBackend.GetDefaultRunnerBasePath(isWindows: false, homePath: "/Users/runner"));
     }
+
+    // Runner processes inherit the host worker's environment, and launchd/systemd
+    // start it with no LANG, leaving Ruby tooling in US-ASCII. See ApplyDefaultLocale.
+    [Fact]
+    public void ApplyDefaultLocale_SetsUtf8LocaleWhenServiceManagerSuppliedNone()
+    {
+        var env = new Dictionary<string, string>();
+
+        NativeBackend.ApplyDefaultLocale(env);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.False(env.ContainsKey("LANG"));
+            return;
+        }
+
+        Assert.Equal("C.UTF-8", env["LANG"]);
+    }
+
+    [Fact]
+    public void ApplyDefaultLocale_DoesNotOverrideAnExplicitLang()
+    {
+        var env = new Dictionary<string, string> { ["LANG"] = "en_GB.UTF-8" };
+
+        NativeBackend.ApplyDefaultLocale(env);
+
+        Assert.Equal("en_GB.UTF-8", env["LANG"]);
+    }
+
+    [Fact]
+    public void ApplyDefaultLocale_DoesNotOverrideAnExplicitLcAll()
+    {
+        var env = new Dictionary<string, string> { ["LC_ALL"] = "ja_JP.UTF-8" };
+
+        NativeBackend.ApplyDefaultLocale(env);
+
+        Assert.False(env.ContainsKey("LANG"));
+    }
+
+    // An empty-string LANG is what a service manager leaves behind when a unit file
+    // declares the variable without a value; treat it as unset rather than honouring it.
+    [Fact]
+    public void ApplyDefaultLocale_TreatsBlankLangAsUnset()
+    {
+        var env = new Dictionary<string, string> { ["LANG"] = "" };
+
+        NativeBackend.ApplyDefaultLocale(env);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("", env["LANG"]);
+            return;
+        }
+
+        Assert.Equal("C.UTF-8", env["LANG"]);
+    }
 }

@@ -40,6 +40,14 @@ public class WebhookEvent
     public string JobId { get; set; } = "";
     public string RunId { get; set; } = "";
 
+    /// <summary>
+    /// The runner the provider actually assigned this job to, recorded from
+    /// <c>workflow_job.runner_name</c>. JIT runners are not pinned to the job they were
+    /// minted for, so this -- not the provisioning-time job claim -- is the authoritative
+    /// statement of which runner served the job. Null until the job is assigned.
+    /// </summary>
+    public string? AssignedRunnerName { get; set; }
+
     /// <summary>Full repository name, e.g. "dotnet/maui"</summary>
     public string Repository { get; set; } = "";
     public string? GitHubInstallationId { get; set; }

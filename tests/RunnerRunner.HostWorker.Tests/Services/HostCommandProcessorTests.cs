@@ -292,6 +292,7 @@ public class HostCommandProcessorTests
             new HostResourceUsageCollector(
                 configuration,
                 identity,
+                paths,
                 NullLogger<HostResourceUsageCollector>.Instance,
                 NullLoggerFactory.Instance),
             NullLogger<HostCommandProcessor>.Instance,
