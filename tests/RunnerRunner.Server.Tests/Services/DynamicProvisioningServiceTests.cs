@@ -5,6 +5,30 @@ namespace RunnerRunner.Server.Tests.Services;
 
 public class DynamicProvisioningServiceTests
 {
+    [Theory]
+    [InlineData("provisioned", 1, true)]
+    [InlineData("pending_capacity", 1, true)]
+    [InlineData("in_progress", 1, true)]
+    [InlineData("completed", 1, false)]
+    [InlineData("timed_out", 1, false)]
+    [InlineData("provisioned", 25, false)]
+    public void ShouldCheckOpenGitHubJob_CoversOpenAndInProgressEventsWithinWindow(string status, int ageHours, bool expected)
+    {
+        var now = DateTime.UtcNow;
+        var evt = new WebhookEvent
+        {
+            Provider = RunnerProvider.GitHubActions.ToString(),
+            Action = "queued",
+            Repository = "octo/repo",
+            JobId = "42",
+            Status = status,
+            ReceivedAt = now.AddHours(-ageHours)
+        };
+
+        Assert.Equal(expected, DynamicProvisioningService.ShouldCheckOpenGitHubJob(evt, "Octo/Repo", now));
+        Assert.False(DynamicProvisioningService.ShouldCheckOpenGitHubJob(evt, "octo/other", now));
+    }
+
     [Fact]
     public void BuildDynamicRunnerLabels_MergesWebhookAndProfileLabels_DistinctCaseInsensitive()
     {
