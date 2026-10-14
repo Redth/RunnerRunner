@@ -1,3 +1,4 @@
+using System.Globalization;
 using RunnerRunner.Agent.Services;
 
 namespace RunnerRunner.Agent.Tests.Services;
@@ -66,6 +67,22 @@ public class ImageManagerTests
         Assert.Equal("ghcr.io/example/macos:sonoma", layer.Id);
         Assert.Equal(45.2, snapshot.ProgressPercent);
         Assert.Equal("Downloading: 45.2%", layer.Status);
+    }
+
+    [Fact]
+    public void Parsing_IgnoresCurrentCultureDecimalSeparator()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("pt-PT");
+        try
+        {
+            Assert.Equal(45.2, ImageManager.ParseTartProgress("Downloading: 45.2%"));
+            Assert.Equal((long)(1.5 * 1024 * 1024), ImageManager.ParseDockerSize("1.5MB"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
     }
 
     [Fact]
