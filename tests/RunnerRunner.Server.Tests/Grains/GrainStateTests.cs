@@ -4,6 +4,8 @@ using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
 using RunnerRunner.Server.Tests.TestSupport;
+using Microsoft.Extensions.DependencyInjection;
+using Shiny.DocumentDb;
 
 namespace RunnerRunner.Server.Tests.Grains;
 
@@ -60,6 +62,73 @@ public sealed class GrainStateTests
         var state = await host.GetState();
         Assert.Equal(0, state.RunningDockerContainers);
         Assert.True(await host.CanAcceptRunner(ExecutionBackend.Docker));
+    }
+
+    [Fact]
+    public async Task HostGrain_Sync_KeepsOperatorEditedLimitsAndGroupFromDocument()
+    {
+        var hostId = OrleansTestIds.Create("host");
+        var hostName = $"limits-{hostId}";
+        var store = _fixture.Cluster.GetSiloServiceProvider(null!).GetRequiredService<IDocumentStore>();
+        await store.Insert(new Host { Id = hostId, Name = hostName, Platform = HostPlatform.MacOS });
+
+        var host = _grainFactory.GetGrain<IHostGrain>(hostId);
+        await host.Register(hostName, HostPlatform.MacOS, "arm64", "1.0.0");
+
+        // Operator edits the host document (Hosts page) without touching the grain.
+        var edited = await store.Get<Host>(hostId);
+        Assert.NotNull(edited);
+        edited.MaxDockerContainers = 5;
+        edited.MaxTartVMs = 0;
+        edited.MaxNativeProcesses = 1;
+        edited.GroupId = "build-farm";
+        await store.Update(edited);
+
+        // Host worker reconnects, which re-projects grain state onto the document.
+        await host.Register(hostName, HostPlatform.MacOS, "arm64", "1.0.1");
+
+        var projected = await store.Get<Host>(hostId);
+        Assert.NotNull(projected);
+        Assert.Equal(5, projected.MaxDockerContainers);
+        Assert.Equal(0, projected.MaxTartVMs);
+        Assert.Equal(1, projected.MaxNativeProcesses);
+        Assert.Equal("build-farm", projected.GroupId);
+
+        var state = await host.GetState();
+        Assert.Equal(1, state.MaxNativeProcesses);
+        Assert.Equal("build-farm", state.GroupId);
+
+        await host.IncrementRunningCount(ExecutionBackend.Native);
+        Assert.False(await host.CanAcceptRunner(ExecutionBackend.Native));
+        await host.DecrementRunningCount(ExecutionBackend.Native);
+    }
+
+    [Fact]
+    public async Task HostGrain_Register_KeepsNewHostBackendDefaultsFromDocument()
+    {
+        var hostId = OrleansTestIds.Create("host");
+        var hostName = $"defaults-{hostId}";
+        var store = _fixture.Cluster.GetSiloServiceProvider(null!).GetRequiredService<IDocumentStore>();
+
+        // Mirrors HostBackendLimitDefaults for a host that advertises tart but not docker.
+        await store.Insert(new Host
+        {
+            Id = hostId,
+            Name = hostName,
+            Platform = HostPlatform.MacOS,
+            MaxDockerContainers = 0,
+            MaxTartVMs = 3,
+            MaxNativeProcesses = 5
+        });
+
+        var host = _grainFactory.GetGrain<IHostGrain>(hostId);
+        await host.Register(hostName, HostPlatform.MacOS, "arm64", "1.0.0");
+
+        var projected = await store.Get<Host>(hostId);
+        Assert.NotNull(projected);
+        Assert.Equal(0, projected.MaxDockerContainers);
+        Assert.Equal(3, projected.MaxTartVMs);
+        Assert.False(await host.CanAcceptRunner(ExecutionBackend.Docker));
     }
 
     [Fact]

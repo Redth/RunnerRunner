@@ -226,7 +226,10 @@ public class HostGrain : Grain, IHostGrain
                 };
 
                 if (legacy != null)
+                {
                     CopyUserManagedFields(legacy, existing);
+                    await AdoptOperatorSettings(legacy);
+                }
 
                 ApplyProjection(existing);
                 await store.Insert(existing);
@@ -246,6 +249,7 @@ public class HostGrain : Grain, IHostGrain
                     await store.Remove<Core.Models.Host>(legacy.Id);
                 }
 
+                await AdoptOperatorSettings(existing);
                 ApplyProjection(existing);
                 await store.Update(existing);
             }
@@ -254,6 +258,26 @@ public class HostGrain : Grain, IHostGrain
         {
             _logger.LogWarning(ex, "Failed to sync Host to DocumentDB");
         }
+    }
+
+    /// <summary>
+    /// Backend limits and routing group are edited on the host document (Hosts page
+    /// and new-host defaults), so the document wins over grain state.
+    /// </summary>
+    private async Task AdoptOperatorSettings(Core.Models.Host host)
+    {
+        var state = _state.State;
+        if (state.MaxDockerContainers == host.MaxDockerContainers
+            && state.MaxTartVMs == host.MaxTartVMs
+            && state.MaxNativeProcesses == host.MaxNativeProcesses
+            && state.GroupId == host.GroupId)
+            return;
+
+        state.MaxDockerContainers = host.MaxDockerContainers;
+        state.MaxTartVMs = host.MaxTartVMs;
+        state.MaxNativeProcesses = host.MaxNativeProcesses;
+        state.GroupId = host.GroupId;
+        await _state.WriteStateAsync();
     }
 
     private void ApplyProjection(Core.Models.Host host)
