@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -369,7 +370,7 @@ public partial class ImageManager
         // Parse "45.2MB", "1.2GB", "500kB"
         var match = SizeRegex().Match(size);
         if (!match.Success) return 0;
-        var value = double.Parse(match.Groups[1].Value);
+        var value = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
         return match.Groups[2].Value.ToUpperInvariant().Replace("IB", "B") switch
         {
             "KB" => (long)(value * 1024),
@@ -410,7 +411,7 @@ public partial class ImageManager
     {
         // Tart outputs percentage like "  45%" or "Downloading: 45.2%"
         var match = PercentRegex().Match(line);
-        if (match.Success && double.TryParse(match.Groups[1].Value, out var pct))
+        if (match.Success && double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var pct))
             return pct;
         return null;
     }
