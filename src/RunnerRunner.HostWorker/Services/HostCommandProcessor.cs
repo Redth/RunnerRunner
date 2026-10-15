@@ -603,7 +603,12 @@ internal sealed class HostCommandProcessor : BackgroundService
                     }
                     else
                     {
-                        await PublishRunnerExitedAsync(snapshot.Runner.InstanceId, snapshot.Health.Status ?? "not running", ct);
+                        // A single-use (ephemeral/JIT) runner exiting with code 0 finished its job; that's not a crash.
+                        // Static runners exit 0 too when their registration is lost, so keep reporting those as crashed.
+                        var reason = snapshot.Runner.IsEphemeral && snapshot.Health.Status == "exited:0"
+                            ? "completed"
+                            : snapshot.Health.Status ?? "not running";
+                        await PublishRunnerExitedAsync(snapshot.Runner.InstanceId, reason, ct);
                     }
                 }
 

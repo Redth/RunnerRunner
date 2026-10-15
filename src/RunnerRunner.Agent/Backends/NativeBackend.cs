@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
@@ -27,7 +28,7 @@ public class NativeBackend : IRunnerBackend
         Environment.GetEnvironmentVariable("RR_DEFAULT_LOCALE") ?? "C.UTF-8";
 
     private readonly ILogger<NativeBackend> _logger;
-    private readonly Dictionary<string, ManagedNativeRunner> _runners = new();
+    private readonly ConcurrentDictionary<string, ManagedNativeRunner> _runners = new();
 
     public ExecutionBackend BackendType => ExecutionBackend.Native;
 
@@ -199,11 +200,17 @@ public class NativeBackend : IRunnerBackend
 
     public async Task StopRunnerAsync(string instanceHandle, CancellationToken ct = default)
     {
-        if (!_runners.TryGetValue(instanceHandle, out var runner))
+        // Claim the runner up front: the health loop (releasing a runner that exited on its own)
+        // and an explicit stop command can race, and only one of them may tear it down.
+        if (!_runners.TryRemove(instanceHandle, out var runner))
             return;
 
         _logger.LogInformation("Stopping native runner {RunnerName} (PID: {PID})",
             runner.RunnerName, instanceHandle);
+
+        // run.sh exits on SIGTERM without forwarding it, so its run-helper.sh/Runner.Listener
+        // children would outlive it (still registered with the provider). Snapshot the tree first.
+        var descendants = runner.Process.HasExited ? [] : SnapshotProcesses(GetDescendantProcessIds(runner.Process.Id));
 
         if (!runner.Process.HasExited)
         {
@@ -214,6 +221,7 @@ public class NativeBackend : IRunnerBackend
                 {
                     // Unix: send SIGTERM via kill
                     Process.Start("kill", $"-TERM {runner.Process.Id}")?.WaitForExit(1000);
+                    SignalProcesses(descendants, "TERM");
                 }
                 else
                 {
@@ -236,6 +244,7 @@ public class NativeBackend : IRunnerBackend
             }
         }
 
+        await KillSurvivingDescendantsAsync(descendants, runner.RunnerName, ct);
         runner.Process.Dispose();
 
         // Run PostExit init steps before wiping the instance dir.
@@ -273,8 +282,6 @@ public class NativeBackend : IRunnerBackend
         {
             _logger.LogWarning(ex, "Failed to clean up instance directory {Dir}", runner.InstanceDir);
         }
-
-        _runners.Remove(instanceHandle);
     }
 
     public Task<RunnerHealthStatus> GetHealthAsync(string instanceHandle, CancellationToken ct = default)
@@ -393,14 +400,17 @@ public class NativeBackend : IRunnerBackend
     {
         _logger.LogInformation("Cleaning up orphaned native runner (PID: {PID})", processId);
 
+        List<ProcessIdentity> descendants = [];
         try
         {
             var proc = Process.GetProcessById(processId);
             if (!proc.HasExited)
             {
+                descendants = SnapshotProcesses(GetDescendantProcessIds(processId));
                 if (!OperatingSystem.IsWindows())
                 {
                     Process.Start("kill", $"-TERM {processId}")?.WaitForExit(5000);
+                    SignalProcesses(descendants, "TERM");
                     await Task.Delay(3000, ct);
                 }
 
@@ -420,6 +430,8 @@ public class NativeBackend : IRunnerBackend
         {
             _logger.LogWarning(ex, "Error killing orphan process {PID}", processId);
         }
+
+        await KillSurvivingDescendantsAsync(descendants, $"orphan {processId}", ct);
 
         if (!string.IsNullOrEmpty(instanceDir) && Directory.Exists(instanceDir))
         {
@@ -718,6 +730,135 @@ public class NativeBackend : IRunnerBackend
             var output = await process.StandardOutput.ReadToEndAsync(ct);
             throw new InvalidOperationException(
                 $"Script {Path.GetFileName(script)} failed (exit {process.ExitCode}): {error}\n{output}");
+        }
+    }
+
+    /// <summary>
+    /// Returns all descendant PIDs of <paramref name="rootPid"/> (Unix only; empty on Windows,
+    /// where <see cref="Process.Kill(bool)"/> with entireProcessTree already covers the tree).
+    /// </summary>
+    internal static List<int> GetDescendantProcessIds(int rootPid)
+    {
+        var result = new List<int>();
+        if (OperatingSystem.IsWindows())
+            return result;
+
+        var pending = new Queue<int>([rootPid]);
+        while (pending.Count > 0)
+        {
+            var parent = pending.Dequeue();
+            try
+            {
+                using var pgrep = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "pgrep",
+                    Arguments = $"-P {parent}",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                });
+                if (pgrep == null)
+                    continue;
+
+                var output = pgrep.StandardOutput.ReadToEnd();
+                pgrep.WaitForExit(5000);
+                foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (int.TryParse(line, out var child) && !result.Contains(child))
+                    {
+                        result.Add(child);
+                        pending.Enqueue(child);
+                    }
+                }
+            }
+            catch
+            {
+                // pgrep unavailable — fall back to killing only the root process.
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// A PID plus its start time, so a PID recycled by the OS after the snapshot is never mistaken
+    /// for the original process.
+    /// </summary>
+    internal readonly record struct ProcessIdentity(int Pid, DateTime? StartTime);
+
+    internal static List<ProcessIdentity> SnapshotProcesses(IEnumerable<int> pids)
+    {
+        var result = new List<ProcessIdentity>();
+        foreach (var pid in pids)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                result.Add(new ProcessIdentity(pid, proc.StartTime));
+            }
+            catch
+            {
+                // Already gone.
+            }
+        }
+
+        return result;
+    }
+
+    private static void SignalProcesses(IEnumerable<ProcessIdentity> processes, string signal)
+    {
+        foreach (var process in processes)
+        {
+            if (!IsSameProcessAlive(process))
+                continue;
+
+            try
+            {
+                using var kill = Process.Start("kill", $"-{signal} {process.Pid}");
+                kill?.WaitForExit(1000);
+            }
+            catch { }
+        }
+    }
+
+    private async Task KillSurvivingDescendantsAsync(List<ProcessIdentity> descendants, string owner, CancellationToken ct)
+    {
+        if (descendants.Count == 0)
+            return;
+
+        // run.sh exits as soon as it gets SIGTERM, so this is the Runner.Listener's real grace
+        // period to cancel its job and deregister; match the root process's 30s.
+        for (var i = 0; i < 60 && descendants.Any(IsSameProcessAlive); i++)
+            await Task.Delay(500, ct);
+
+        var survivors = descendants.Where(IsSameProcessAlive).ToList();
+        if (survivors.Count == 0)
+            return;
+
+        _logger.LogWarning("Force killing {Count} leftover child process(es) of {Owner}: {Pids}",
+            survivors.Count, owner, string.Join(", ", survivors.Select(p => p.Pid)));
+        foreach (var survivor in survivors)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById(survivor.Pid);
+                if (proc.StartTime == survivor.StartTime)
+                    proc.Kill(entireProcessTree: true);
+            }
+            catch { }
+        }
+    }
+
+    private static bool IsSameProcessAlive(ProcessIdentity process)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(process.Pid);
+            return !proc.HasExited && proc.StartTime == process.StartTime;
+        }
+        catch
+        {
+            return false;
         }
     }
 

@@ -201,6 +201,28 @@ public class RunnerLifecycleManagerTests
         Assert.Single(snapshots);
         Assert.False(snapshots[0].Health.IsRunning);
         Assert.Empty(manager.RunningInstances);
+        Assert.Equal(["handle-dead"], backend.StopRequests);
+    }
+
+    [Fact]
+    public async Task CollectRunnerHealth_WhenReleasingExitedRunnerThrows_StillReturnsSnapshot()
+    {
+        var manager = new RunnerLifecycleManager(_logger);
+        var backend = new FakeRunnerBackend
+        {
+            StartHandler = _ => new RunnerInstanceInfo { InstanceHandle = "handle-done", RunnerName = "done-runner" },
+            StopAsyncHandler = (_, _) => throw new IOException("instance dir locked")
+        };
+        backend.HealthByHandle["handle-done"] = new RunnerHealthStatus { IsRunning = false, Status = "exited:0" };
+        await manager.StartRunnerAsync(
+            new DeployRunnerCommand { InstanceId = "done-1", ProfileId = "p1", RunnerName = "done-runner" },
+            backend);
+
+        var snapshot = Assert.Single(await manager.CollectRunnerHealthAsync());
+
+        Assert.Equal("exited:0", snapshot.Health.Status);
+        Assert.Empty(manager.RunningInstances);
+        Assert.Equal(["handle-done"], backend.StopRequests);
     }
 
     [Fact]
@@ -258,5 +280,43 @@ public class RunnerLifecycleManagerTests
         Assert.False(snapshot.Health.IsRunning);
         Assert.Equal("health_check_failed", snapshot.Health.Status);
         Assert.Empty(manager.RunningInstances);
+        Assert.Empty(backend.StopRequests);
+    }
+
+    [Theory]
+    [InlineData("stopped")]      // Tart: `tart ip` failing while the VM boots
+    [InlineData("not_found")]
+    [InlineData("missing")]
+    public async Task CollectRunnerHealth_WhenExitIsNotDefinitive_DoesNotReleaseRunner(string status)
+    {
+        var manager = new RunnerLifecycleManager(_logger);
+        var backend = new FakeRunnerBackend
+        {
+            StartHandler = _ => new RunnerInstanceInfo { InstanceHandle = "handle-vm", RunnerName = "vm-runner" }
+        };
+        backend.HealthByHandle["handle-vm"] = new RunnerHealthStatus { IsRunning = false, Status = status };
+        await manager.StartRunnerAsync(
+            new DeployRunnerCommand { InstanceId = "vm-1", ProfileId = "p1", RunnerName = "vm-runner" },
+            backend);
+
+        await manager.CollectRunnerHealthAsync();
+
+        Assert.Empty(backend.StopRequests);
+    }
+
+    [Theory]
+    [InlineData(true, null, true)]
+    [InlineData(false, "jit-config", true)]
+    [InlineData(false, null, false)]
+    public async Task StartRunner_MarksSingleUseRunnersAsEphemeral(bool ephemeral, string? jitConfig, bool expected)
+    {
+        var manager = new RunnerLifecycleManager(_logger);
+        var backend = new FakeRunnerBackend();
+
+        await manager.StartRunnerAsync(
+            new DeployRunnerCommand { InstanceId = "e-1", ProfileId = "p1", RunnerName = "r", Ephemeral = ephemeral, JitConfig = jitConfig },
+            backend);
+
+        Assert.Equal(expected, manager.RunningInstances["e-1"].IsEphemeral);
     }
 }

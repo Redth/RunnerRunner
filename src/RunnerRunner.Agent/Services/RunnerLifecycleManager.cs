@@ -67,7 +67,8 @@ public class RunnerLifecycleManager
             RunnerName = info.RunnerName,
             InstanceHandle = info.InstanceHandle,
             Backend = backend,
-            StartedAt = DateTime.UtcNow
+            StartedAt = DateTime.UtcNow,
+            IsEphemeral = command.Ephemeral || !string.IsNullOrEmpty(command.JitConfig)
         };
 
         _logger.LogInformation("Runner {RunnerName} started (handle: {Handle})",
@@ -158,8 +159,14 @@ public class RunnerLifecycleManager
                 health = new RunnerHealthStatus { IsRunning = false, Status = "health_check_failed" };
             }
 
-            if (!health.IsRunning)
-                _runners.TryRemove(instanceId, out _);
+            if (!health.IsRunning && _runners.TryRemove(instanceId, out _)
+                && IsDefinitiveExit(health.Status))
+            {
+                // The runner exited on its own (e.g. an ephemeral/JIT runner finishing its job).
+                // Let the backend release what it holds — instance directory, post-exit steps,
+                // leftover child processes — otherwise it leaks until the next orphan sweep.
+                await ReleaseExitedRunnerAsync(runner, ct);
+            }
 
             snapshots.Add(new ManagedRunnerHealth
             {
@@ -169,6 +176,32 @@ public class RunnerLifecycleManager
         }
 
         return snapshots;
+    }
+
+    /// <summary>
+    /// Only statuses that prove the runner process/container is gone. Anything else
+    /// (e.g. Tart's "stopped" when <c>tart ip</c> fails during boot, "not_found",
+    /// "health_check_failed") may be transient, and releasing would destroy a live runner.
+    /// </summary>
+    internal static bool IsDefinitiveExit(string? status)
+        => status is not null
+           && (status.StartsWith("exited", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(status, "dead", StringComparison.OrdinalIgnoreCase));
+
+    private async Task ReleaseExitedRunnerAsync(ManagedRunner runner, CancellationToken ct)
+    {
+        try
+        {
+            await runner.Backend.StopRunnerAsync(runner.InstanceHandle, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to release exited runner {RunnerName} ({InstanceId})", runner.RunnerName, runner.InstanceId);
+        }
     }
 
     /// <summary>
@@ -282,6 +315,9 @@ public class ManagedRunner
     public required string InstanceHandle { get; set; }
     public required IRunnerBackend Backend { get; set; }
     public DateTime StartedAt { get; set; }
+
+    /// <summary>Single-use runner (ephemeral or JIT) that exits normally after one job.</summary>
+    public bool IsEphemeral { get; set; }
 }
 
 public class ManagedRunnerHealth

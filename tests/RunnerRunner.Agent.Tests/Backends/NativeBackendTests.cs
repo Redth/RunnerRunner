@@ -148,4 +148,33 @@ public class NativeBackendTests
 
         Assert.Equal("C.UTF-8", env["LANG"]);
     }
+
+    [Fact]
+    public async Task GetDescendantProcessIds_FindsGrandchildrenOfAShellWrapper()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Empty(NativeBackend.GetDescendantProcessIds(Environment.ProcessId));
+            return;
+        }
+
+        // Mirrors run.sh -> run-helper.sh -> Runner.Listener: a shell whose child shell owns the sleep.
+        using var root = System.Diagnostics.Process.Start("/bin/sh", ["-c", "/bin/sh -c 'sleep 30; true' & wait"])!;
+        try
+        {
+            List<int> descendants = [];
+            for (var i = 0; i < 50 && descendants.Count < 2; i++)
+            {
+                await Task.Delay(100);
+                descendants = NativeBackend.GetDescendantProcessIds(root.Id);
+            }
+
+            Assert.Equal(2, descendants.Count);
+            Assert.DoesNotContain(root.Id, descendants);
+        }
+        finally
+        {
+            root.Kill(entireProcessTree: true);
+        }
+    }
 }
