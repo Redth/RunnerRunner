@@ -811,8 +811,14 @@
     private async Task SaveConfiguration()
     {
         var host = configureHost ?? throw new InvalidOperationException("No host selected for configuration.");
+        host.GroupId = string.IsNullOrWhiteSpace(host.GroupId) ? null : host.GroupId.Trim();
         host.UpdatedAt = DateTime.UtcNow;
         await Store.Update(host);
+
+        // Push to the live grain too so its scheduler checks don't wait for the next host sync.
+        var hostGrain = GrainFactory.GetGrain<IHostGrain>(host.Id);
+        await hostGrain.SetResourceLimits(host.MaxDockerContainers, host.MaxTartVMs, host.MaxNativeProcesses);
+        await hostGrain.SetGroupId(host.GroupId);
         configureHost = null;
         await ReloadData();
     }
