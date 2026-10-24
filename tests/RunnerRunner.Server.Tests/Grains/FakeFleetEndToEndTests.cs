@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -5,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
@@ -228,7 +230,250 @@ public sealed class FakeFleetEndToEndTests
         }
     }
 
-    private DynamicProvisioningService CreateDynamicProvisioningService(FakeProviderHttpApi? api = null)
+    [Theory]
+    [InlineData(0, "completed")]
+    [InlineData(1, "completed")]
+    [InlineData(0, "in_progress")]
+    [InlineData(1, "in_progress")]
+    public async Task GitHubWebhookFleet_SkipsRecoveryWhenJobAlreadyAdvanced(int retryCount, string jobStatus)
+    {
+        await ClearFleetDocumentsAsync();
+        var id = OrleansTestIds.Create("fleet-retry-done");
+        var hostId = $"{id}-host";
+        var profileId = $"{id}-profile";
+        var secret = $"{id}-secret";
+        var repo = "octo/fleet";
+        var labels = new[] { "self-hosted", "linux", "fleet-docker" };
+        var jobId = NextJobId();
+        var api = new FakeProviderHttpApi()
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal),
+                $$"""{"id":{{jobId}},"status":"{{jobStatus}}","conclusion":null,"runner_name":"other-runner"}""");
+        var service = CreateDynamicProvisioningService(api);
+        await CreateGitHubFleetWithCredentialAsync(id, hostId, profileId, secret, repo, labels);
+
+        var queued = await ProcessWebhookAsync("github", "queued", jobId, repo, labels, secret);
+
+        // Stale provisioned-event recovery does not increment RetryCount; timeout retries do.
+        var evt = (await _store.Get<WebhookEvent>(queued.EventId!))!;
+        evt.ScheduleRetry(
+            "Previous runner is no longer available",
+            DateTime.UtcNow,
+            TimeSpan.Zero,
+            countAttempt: retryCount > 0);
+        evt.InstanceId = null;
+        await _store.Update(evt);
+
+        await service.ProcessQueuedWebhookEventOnceAsync(queued.EventId!, profileId);
+
+        var resolved = await _store.Get<WebhookEvent>(queued.EventId!);
+        Assert.NotNull(resolved);
+        Assert.Equal(jobStatus, resolved.Status);
+        Assert.Equal(retryCount, resolved.RetryCount);
+        Assert.Equal("other-runner", resolved.AssignedRunnerName);
+        Assert.DoesNotContain(_fixture.HostCommands.Commands, c => c.HostId == hostId && c.Kind == HostCommandKind.DeployRunner);
+        Assert.DoesNotContain(api.Requests, r => r.PathAndQuery.Contains("generate-jitconfig", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GitHubWebhookFleet_KeepsCompletedEventResolvedWhenRunnerCleanupFails(bool transportFailure)
+    {
+        await ClearFleetDocumentsAsync();
+        var id = OrleansTestIds.Create("fleet-cleanup-failed");
+        var hostId = $"{id}-host";
+        var oldHostId = $"{id}-old-host";
+        var profileId = $"{id}-profile";
+        var secret = $"{id}-secret";
+        var repo = "octo/fleet";
+        var labels = new[] { "self-hosted", "linux", "fleet-docker" };
+        var jobId = NextJobId();
+        var api = new FakeProviderHttpApi()
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal),
+                $$"""{"id":{{jobId}},"status":"completed","conclusion":"success","runner_name":"old-runner"}""")
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith("/generate-jitconfig", StringComparison.Ordinal),
+                """{"encoded_jit_config":"fake-jit"}""");
+        var hostCommands = Substitute.For<IHostCommandDispatcher>();
+        hostCommands.CanDispatchToHost(Arg.Any<string>())
+            .Returns(call => _fixture.HostCommands.CanDispatchToHost(call.Arg<string>()));
+        hostCommands.DispatchDeployRunnerAsync(Arg.Any<string>(), Arg.Any<DeployRunnerCommand>())
+            .Returns(call => _fixture.HostCommands.DispatchDeployRunnerAsync(call.Arg<string>(), call.Arg<DeployRunnerCommand>()));
+        Exception cleanupFailure = transportFailure
+            ? new HttpRequestException("Stop command transport failed.")
+            : new InvalidOperationException("Old HostWorker is not connected.");
+        hostCommands.DispatchStopRunnerAsync(oldHostId, Arg.Any<StopRunnerCommand>())
+            .Returns(Task.FromException(cleanupFailure));
+        var service = CreateDynamicProvisioningService(api, hostCommands);
+        await CreateGitHubFleetWithCredentialAsync(id, hostId, profileId, secret, repo, labels);
+        await CreateHostAsync(oldHostId, HostPlatform.Linux, ExecutionBackend.Docker);
+        var queued = await ProcessWebhookAsync("github", "queued", jobId, repo, labels, secret);
+        var evt = (await _store.Get<WebhookEvent>(queued.EventId!))!;
+        evt.ScheduleRetry("Previous runner failed", DateTime.UtcNow, TimeSpan.Zero);
+        await _store.Update(evt);
+        await _store.Insert(new RunnerInstance
+        {
+            Id = $"{id}-old-runner",
+            HostId = oldHostId,
+            ProfileId = profileId,
+            RunnerName = "old-runner",
+            JobId = jobId.ToString(),
+            WebhookEventId = evt.Id,
+            ProvisioningMode = "dynamic",
+            Status = RunnerInstanceStatus.Failed
+        });
+
+        var exception = await Record.ExceptionAsync(
+            () => service.ProcessQueuedWebhookEventOnceAsync(evt.Id, profileId));
+        Assert.Same(cleanupFailure, exception);
+        await service.ProcessQueuedWebhookEventOnceAsync(evt.Id, profileId);
+
+        var resolved = await _store.Get<WebhookEvent>(evt.Id);
+        Assert.NotNull(resolved);
+        Assert.Equal("completed", resolved.Status);
+        Assert.Equal("old-runner", resolved.AssignedRunnerName);
+        Assert.NotNull(resolved.ResolvedAt);
+        Assert.Null(resolved.NextRetryAt);
+        await hostCommands.Received(1).DispatchStopRunnerAsync(oldHostId, Arg.Any<StopRunnerCommand>());
+        await hostCommands.DidNotReceive().DispatchDeployRunnerAsync(Arg.Any<string>(), Arg.Any<DeployRunnerCommand>());
+        Assert.DoesNotContain(api.Requests, r => r.PathAndQuery.Contains("generate-jitconfig", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("queued")]
+    [InlineData("unavailable")]
+    [InlineData("timeout")]
+    [InlineData("http_error")]
+    [InlineData("malformed")]
+    public async Task GitHubWebhookFleet_ProvisionsRecoveryWhenJobIsQueuedOrLookupFails(string response)
+    {
+        await ClearFleetDocumentsAsync();
+        var id = OrleansTestIds.Create("fleet-recovery-open");
+        var hostId = $"{id}-host";
+        var profileId = $"{id}-profile";
+        var secret = $"{id}-secret";
+        var repo = "octo/fleet";
+        var labels = new[] { "self-hosted", "linux", "fleet-docker" };
+        var jobId = NextJobId();
+        var api = new FakeProviderHttpApi()
+            .Respond(
+                r => r.RequestUri!.AbsolutePath.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal),
+                _ => response switch
+                {
+                    "queued" => FakeProviderHttpApi.JsonResponse($$"""{"id":{{jobId}},"status":"queued"}"""),
+                    "unavailable" => FakeProviderHttpApi.JsonResponse("{}", HttpStatusCode.ServiceUnavailable),
+                    "timeout" => throw new TaskCanceledException("GitHub job lookup timed out."),
+                    "http_error" => throw new HttpRequestException("GitHub is unreachable."),
+                    "malformed" => FakeProviderHttpApi.JsonResponse("{"),
+                    _ => throw new ArgumentOutOfRangeException(nameof(response))
+                })
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith("/generate-jitconfig", StringComparison.Ordinal),
+                """{"encoded_jit_config":"fake-jit"}""");
+        var service = CreateDynamicProvisioningService(api);
+        await CreateGitHubFleetWithCredentialAsync(id, hostId, profileId, secret, repo, labels);
+        var queued = await ProcessWebhookAsync("github", "queued", jobId, repo, labels, secret);
+
+        await service.ProcessQueuedWebhookEventOnceAsync(queued.EventId!, profileId);
+
+        var provisioned = await _store.Get<WebhookEvent>(queued.EventId!);
+        Assert.NotNull(provisioned);
+        Assert.Equal("provisioned", provisioned.Status);
+        Assert.Equal(0, provisioned.RetryCount);
+        Assert.False(string.IsNullOrWhiteSpace(provisioned.InstanceId));
+        FindDeployCommand(hostId, provisioned.InstanceId!);
+        Assert.Contains(api.Requests, r => r.PathAndQuery.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal));
+        Assert.Contains(api.Requests, r => r.PathAndQuery.Contains("generate-jitconfig", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GitHubPolling_ResolvesOpenEventWhoseRunAlreadyFinished()
+    {
+        await ClearFleetDocumentsAsync();
+        var id = OrleansTestIds.Create("fleet-poll-done");
+        var hostId = $"{id}-host";
+        var profileId = $"{id}-profile";
+        var secret = $"{id}-secret";
+        var repo = "octo/fleet";
+        var labels = new[] { "self-hosted", "linux", "fleet-docker" };
+        var jobId = NextJobId();
+        var api = new FakeProviderHttpApi()
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith("/actions/runs", StringComparison.Ordinal),
+                """{"total_count":0,"workflow_runs":[]}""")
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal),
+                $$"""{"id":{{jobId}},"status":"completed","conclusion":"failure","runner_name":"other-runner"}""");
+        var service = CreateDynamicProvisioningService(api);
+        await CreateGitHubFleetWithCredentialAsync(id, hostId, profileId, secret, repo, labels);
+
+        // A queued event that was provisioned, but whose completion webhook never arrived and
+        // whose run has since dropped out of the active-run queries.
+        var eventId = $"{id}-event";
+        await _store.Insert(new WebhookEvent
+        {
+            Id = eventId,
+            Provider = RunnerProvider.GitHubActions.ToString(),
+            Action = "queued",
+            JobId = jobId.ToString(),
+            RunId = (jobId + 10).ToString(),
+            Repository = repo,
+            Labels = labels.ToList(),
+            Status = "provisioned",
+            ReceivedAt = DateTime.UtcNow.AddMinutes(-30)
+        });
+
+        await service.ReconcileQueuedGitHubJobsAsync(CancellationToken.None);
+
+        var resolved = await _store.Get<WebhookEvent>(eventId);
+        Assert.NotNull(resolved);
+        Assert.Equal("completed", resolved.Status);
+        Assert.Equal("other-runner", resolved.AssignedRunnerName);
+        Assert.Contains(api.Requests, r => r.PathAndQuery.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal));
+    }
+
+    private async Task CreateGitHubFleetWithCredentialAsync(
+        string id,
+        string hostId,
+        string profileId,
+        string secret,
+        string repo,
+        string[] labels)
+    {
+        var ruleId = $"{id}-rule";
+        var credentialId = $"{id}-credential";
+        await CreateHostAsync(hostId, HostPlatform.Linux, ExecutionBackend.Docker);
+        var profile = await CreateProfileAsync(
+            profileId,
+            "github-docker",
+            RunnerProvider.GitHubActions,
+            HostPlatform.Linux,
+            ExecutionBackend.Docker,
+            labels);
+        profile.ProviderCredentialId = credentialId;
+        await _store.Update(profile);
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(profile);
+        await _store.Insert(new ProviderCredential
+        {
+            Id = credentialId,
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubToken = "fake-token",
+            GitHubOrg = "octo",
+            GitHubRepo = repo
+        });
+        await CreateWebhookRuleAsync(ruleId, "github docker", RunnerProvider.GitHubActions, secret, repo, profileId, labels, hostId);
+
+        var rule = (await _store.Get<ProvisioningRule>(ruleId))!;
+        rule.ProviderCredentialId = credentialId;
+        await _store.Update(rule);
+    }
+
+    private DynamicProvisioningService CreateDynamicProvisioningService(
+        FakeProviderHttpApi? api = null,
+        IHostCommandDispatcher? hostCommands = null)
     {
         api ??= new FakeProviderHttpApi(_ => FakeProviderHttpApi.JsonResponse("{}"));
         var auth = new GitHubAuthenticationService(api, NullLogger<GitHubAuthenticationService>.Instance);
@@ -251,7 +496,7 @@ public sealed class FakeFleetEndToEndTests
             cleanup,
             api,
             auth,
-            _fixture.HostCommands,
+            hostCommands ?? _fixture.HostCommands,
             _grainFactory);
     }
 

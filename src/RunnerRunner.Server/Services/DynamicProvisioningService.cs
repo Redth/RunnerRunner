@@ -34,6 +34,17 @@ public class DynamicProvisioningService : BackgroundService
         string WorkflowName,
         string JobsUrl);
 
+    internal sealed record GitHubJobState(
+        string? Status,
+        string? Conclusion,
+        string? RunnerName);
+
+    /// <summary>
+    /// How long an unresolved queued event keeps being checked against its GitHub job.
+    /// Bounds the per-event lookups for jobs GitHub no longer reports (deleted runs).
+    /// </summary>
+    private static readonly TimeSpan OpenGitHubJobCheckWindow = TimeSpan.FromHours(24);
+
     private readonly ILogger<DynamicProvisioningService> _logger;
     private readonly IConfiguration _configuration;
     private readonly IServiceProvider _services;
@@ -46,6 +57,7 @@ public class DynamicProvisioningService : BackgroundService
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _jobLocks = new();
     private readonly ConcurrentDictionary<string, string> _runsEtagCache = new();
     private readonly ConcurrentDictionary<string, string> _jobsEtagCache = new();
+    private readonly ConcurrentDictionary<string, (string ETag, GitHubJobState State)> _jobStateCache = new();
     private readonly SemaphoreSlim _processingGate = new(1, 1);
     private readonly TimeSpan _retrySweepInterval;
     private readonly TimeSpan _pendingTimeout;
@@ -132,7 +144,7 @@ public class DynamicProvisioningService : BackgroundService
         }
     }
 
-    private async Task ReconcileQueuedGitHubJobsAsync(CancellationToken ct)
+    internal async Task ReconcileQueuedGitHubJobsAsync(CancellationToken ct)
     {
         using var scope = _services.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
@@ -180,6 +192,8 @@ public class DynamicProvisioningService : BackgroundService
         using var client = _httpClientFactory.CreateClient();
         await _gitHubAuth.ConfigureClientAsync(client, credential, repository: repo, ct: ct);
 
+        var observedJobIds = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var run in await ListRelevantGitHubWorkflowRunsAsync(client, apiUrl, repo, ct))
         {
             if (ct.IsCancellationRequested)
@@ -212,64 +226,14 @@ public class DynamicProvisioningService : BackgroundService
 
             foreach (var job in jobs.EnumerateArray())
             {
-                var status = job.TryGetProperty("status", out var statusProp)
-                    ? statusProp.GetString()
-                    : null;
-
                 var jobId = job.GetProperty("id").GetInt64().ToString();
-                var jobConclusion = job.TryGetProperty("conclusion", out var conclusionProp)
-                    ? conclusionProp.GetString()
-                    : null;
+                var jobState = ParseGitHubJobState(job);
+                observedJobIds.Add(jobId);
 
-                // The provider names the runner it actually assigned. Without this the
-                // completion path falls back to matching on the provisioning-time job
-                // claim, which can stop a runner that is building something else.
-                var jobRunnerName = job.TryGetProperty("runner_name", out var runnerNameProp)
-                    ? runnerNameProp.GetString()
-                    : null;
-
-                var existingEventsForJob = (await store.Query<WebhookEvent>().ToList())
-                    .Where(e => e.Provider == RunnerProvider.GitHubActions.ToString()
-                        && e.Repository.Equals(repo, StringComparison.OrdinalIgnoreCase)
-                        && e.JobId == jobId)
-                    .ToList();
-
-                if (string.Equals(status, "in_progress", StringComparison.OrdinalIgnoreCase))
-                {
-                    var now = DateTime.UtcNow;
-                    foreach (var existingEvent in existingEventsForJob.Where(e => e.Action == "queued" && e.Status != "in_progress"))
-                    {
-                        if (!string.IsNullOrWhiteSpace(jobRunnerName))
-                            existingEvent.AssignedRunnerName = jobRunnerName;
-                        existingEvent.MarkResolved("in_progress", now, existingEvent.InstanceId);
-                        await store.Update(existingEvent);
-                    }
-
+                if (await ApplyObservedGitHubJobStateAsync(store, repo, jobId, jobState))
                     continue;
-                }
 
-                if (string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
-                {
-                    var now = DateTime.UtcNow;
-                    foreach (var existingEvent in existingEventsForJob.Where(e => e.Action == "queued" && e.Status != "completed"))
-                    {
-                        if (!string.IsNullOrWhiteSpace(jobRunnerName))
-                            existingEvent.AssignedRunnerName = jobRunnerName;
-                        existingEvent.MarkResolved("completed", now, existingEvent.InstanceId);
-                        await store.Update(existingEvent);
-                    }
-
-                    await CleanupDynamicRunnersForJobAsync(
-                        store,
-                        jobId,
-                        $"Job completed ({jobConclusion ?? "unknown"})",
-                        removeRecords: true,
-                        completedRunnerName: jobRunnerName);
-
-                    continue;
-                }
-
-                if (!string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(jobState.Status, "queued", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var key = $"{repo}|{jobId}";
@@ -326,6 +290,203 @@ public class DynamicProvisioningService : BackgroundService
                     await HandleJobQueuedAsync(evt, evt.MatchedProfileId, isRecoveryAttempt: false);
             }
         }
+
+        await ReconcileOpenGitHubJobEventsAsync(store, client, apiUrl, repo, observedJobIds, ct);
+    }
+
+    /// <summary>
+    /// The run queries above only cover active runs, so once a run finishes its jobs drop
+    /// out of view. Without a completion webhook (missed delivery, or a server GitHub
+    /// cannot reach) the queued event for such a job would stay open forever and keep
+    /// provisioning runners for work that is already done. Ask GitHub about each open
+    /// event's job directly so finished jobs are resolved even when no webhook arrives.
+    /// </summary>
+    private async Task ReconcileOpenGitHubJobEventsAsync(
+        IDocumentStore store,
+        HttpClient client,
+        string apiUrl,
+        string repo,
+        HashSet<string> observedJobIds,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var openJobIds = (await store.Query<WebhookEvent>().ToList())
+            .Where(e => ShouldCheckOpenGitHubJob(e, repo, now) && !observedJobIds.Contains(e.JobId!))
+            .Select(e => e.JobId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var jobId in openJobIds)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var state = await GetGitHubJobStateAsync(client, apiUrl, repo, jobId, ct);
+            if (state != null && await ApplyObservedGitHubJobStateAsync(store, repo, jobId, state))
+            {
+                _logger.LogInformation(
+                    "Resolved open GitHub job {JobId} in {Repo} as {Status} from direct job lookup",
+                    jobId,
+                    repo,
+                    state.Status);
+            }
+        }
+    }
+
+    internal static bool ShouldCheckOpenGitHubJob(WebhookEvent evt, string repo, DateTime nowUtc) =>
+        string.Equals(evt.Provider, RunnerProvider.GitHubActions.ToString(), StringComparison.OrdinalIgnoreCase)
+        && string.Equals(evt.Action, "queued", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(evt.Repository, repo, StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrWhiteSpace(evt.JobId)
+        // in_progress counts as terminal for provisioning, but the job still has to be
+        // seen completing so its runner is cleaned up.
+        && (!evt.IsTerminal || string.Equals(evt.Status, "in_progress", StringComparison.OrdinalIgnoreCase))
+        && nowUtc - evt.ReceivedAt <= OpenGitHubJobCheckWindow;
+
+    internal static GitHubJobState ParseGitHubJobState(JsonElement job) =>
+        new(
+            job.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : null,
+            job.TryGetProperty("conclusion", out var conclusionProp) ? conclusionProp.GetString() : null,
+            // The provider names the runner it actually assigned. Without this the
+            // completion path falls back to matching on the provisioning-time job
+            // claim, which can stop a runner that is building something else.
+            job.TryGetProperty("runner_name", out var runnerNameProp) ? runnerNameProp.GetString() : null);
+
+    /// <summary>
+    /// Fetches a single GitHub job's state. Returns null when GitHub cannot answer, so
+    /// callers fall back to their existing behavior rather than guessing.
+    /// </summary>
+    private async Task<GitHubJobState?> GetGitHubJobStateAsync(
+        HttpClient client,
+        string apiUrl,
+        string repo,
+        string jobId,
+        CancellationToken ct)
+    {
+        var url = $"{apiUrl.TrimEnd('/')}/repos/{repo}/actions/jobs/{jobId}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (_jobStateCache.TryGetValue(url, out var cached) && !string.IsNullOrEmpty(cached.ETag))
+            request.Headers.TryAddWithoutValidation("If-None-Match", cached.ETag);
+
+        using var response = await client.SendAsync(request, ct);
+
+        // 304 Not Modified does not count against the primary rate limit, so open events
+        // can be re-checked every poll for free while their job is unchanged.
+        if (response.StatusCode == System.Net.HttpStatusCode.NotModified && cached.State != null)
+            return cached.State;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogDebug(
+                "Could not read GitHub job {JobId} in {Repo}: {StatusCode}",
+                jobId,
+                repo,
+                response.StatusCode);
+            return null;
+        }
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        var state = ParseGitHubJobState(doc.RootElement);
+
+        if (response.Headers.ETag?.Tag is { Length: > 0 } etag)
+            _jobStateCache[url] = (etag, state);
+
+        return state;
+    }
+
+    /// <summary>
+    /// Applies provider-observed job progress to the queued events for that job. Returns
+    /// true when the job has moved past queued (in progress or completed), meaning no
+    /// runner should be provisioned for it.
+    /// </summary>
+    private async Task<bool> ApplyObservedGitHubJobStateAsync(
+        IDocumentStore store,
+        string repo,
+        string jobId,
+        GitHubJobState state)
+    {
+        var isInProgress = string.Equals(state.Status, "in_progress", StringComparison.OrdinalIgnoreCase);
+        var isCompleted = string.Equals(state.Status, "completed", StringComparison.OrdinalIgnoreCase);
+        if (!isInProgress && !isCompleted)
+            return false;
+
+        var resolvedStatus = isCompleted ? "completed" : "in_progress";
+        var now = DateTime.UtcNow;
+        var existingEventsForJob = (await store.Query<WebhookEvent>().ToList())
+            .Where(e => e.Provider == RunnerProvider.GitHubActions.ToString()
+                && e.Repository.Equals(repo, StringComparison.OrdinalIgnoreCase)
+                && e.JobId == jobId
+                && e.Action == "queued"
+                && e.Status != resolvedStatus)
+            .ToList();
+
+        foreach (var existingEvent in existingEventsForJob)
+        {
+            if (!string.IsNullOrWhiteSpace(state.RunnerName))
+                existingEvent.AssignedRunnerName = state.RunnerName;
+            existingEvent.MarkResolved(resolvedStatus, now, existingEvent.InstanceId);
+            await store.Update(existingEvent);
+        }
+
+        if (isCompleted)
+        {
+            await CleanupDynamicRunnersForJobAsync(
+                store,
+                jobId,
+                $"Job completed ({state.Conclusion ?? "unknown"})",
+                removeRecords: true,
+                completedRunnerName: state.RunnerName);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Before recovery provisioning, confirm GitHub still has the job queued, including
+    /// stale provisioned events whose recovery did not increment the retry count.
+    /// </summary>
+    private async Task<bool> TryResolveFinishedGitHubJobAsync(
+        IDocumentStore store,
+        WebhookEvent evt,
+        RunnerProfile profile,
+        ProviderCredential? credential)
+    {
+        if (profile.Provider != RunnerProvider.GitHubActions
+            || credential == null
+            || string.IsNullOrWhiteSpace(evt.JobId)
+            || string.IsNullOrWhiteSpace(evt.Repository)
+            || !GitHubAuthenticationService.HasGitHubApiCredentials(credential, evt.GitHubInstallationId, evt.Repository))
+        {
+            return false;
+        }
+
+        GitHubJobState? state;
+        try
+        {
+            var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
+            using var client = _httpClientFactory.CreateClient();
+            await _gitHubAuth.ConfigureClientAsync(client, credential, evt.GitHubInstallationId, evt.Repository);
+
+            state = await GetGitHubJobStateAsync(client, apiUrl, evt.Repository, evt.JobId, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or JsonException)
+        {
+            // Fail open: an unreachable API must not block provisioning of a job that may
+            // genuinely still be queued.
+            _logger.LogWarning(ex, "Could not verify GitHub job {JobId} before retrying; provisioning anyway", evt.JobId);
+            return false;
+        }
+
+        if (state == null || !await ApplyObservedGitHubJobStateAsync(store, evt.Repository, evt.JobId, state))
+            return false;
+
+        _logger.LogInformation(
+            "Skipping retry for webhook event {EventId}: GitHub job {JobId} is already {Status} (runner: {RunnerName})",
+            evt.Id,
+            evt.JobId,
+            state.Status,
+            state.RunnerName ?? "unknown");
+        return true;
     }
 
     internal static IReadOnlyList<string> BuildGitHubRunQueries(string apiUrl, string repo)
@@ -333,9 +494,9 @@ public class DynamicProvisioningService : BackgroundService
         var root = $"{apiUrl.TrimEnd('/')}/repos/{repo}/actions/runs";
 
         // Status-scoped queries only — fetching all recent runs (including completed) balloons
-        // into per-run jobs calls that burn through GitHub's rate limit. Terminal-state
-        // transitions arrive via webhooks; reconciliation only needs to catch missed
-        // queued/waiting/requested events (and in_progress, in case queued was missed).
+        // into per-run jobs calls that burn through GitHub's rate limit. Completion of jobs
+        // in runs that have since finished is caught by ReconcileOpenGitHubJobEventsAsync,
+        // which looks up only the jobs RunnerRunner still has open events for.
         return
         [
             $"{root}?status=queued&per_page=100",
@@ -737,6 +898,13 @@ public class DynamicProvisioningService : BackgroundService
                     countAttempt: false,
                     delay: _retrySweepInterval);
                 return QueueProcessingOutcome.Blocked;
+            }
+
+            // Check only after capacity/host waits, immediately before minting a runner.
+            if (isRecoveryAttempt
+                && await TryResolveFinishedGitHubJobAsync(store, currentEvent, profile, credential))
+            {
+                return QueueProcessingOutcome.Advanced;
             }
 
             await UpdateEventProgressAsync(
