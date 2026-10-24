@@ -92,19 +92,186 @@ internal sealed class HostWorkerSelfUpdater
 
         await PublishAsync("creating", "Creating replacement HostWorker container.", false, false, null, command, publish, ct);
         var current = await client.Containers.InspectContainerAsync(currentContainerId, ct);
-        var replacementName = BuildReplacementContainerName(current.Name);
-        var createResponse = await client.Containers.CreateContainerAsync(new CreateContainerParameters
-        {
-            Image = command.ContainerImage,
-            Name = replacementName,
-            Env = BuildReplacementEnvironment(current.Config.Env, command.ContainerImage),
-            Labels = BuildReplacementLabels(current.Config.Labels, current.ID),
-            HostConfig = current.HostConfig
-        }, ct);
 
-        await client.Containers.StartContainerAsync(createResponse.ID, null, ct);
-        await PublishAsync("restarting", $"Started replacement container {createResponse.ID[..12]} with {command.ContainerImage}.", true, true, null, command, publish, ct);
+        // The replacement takes over the current container's name so anything that starts the
+        // HostWorker by name (compose, autostart scripts) resumes the new version rather than
+        // resurrecting the old one. The old container is renamed out of the way and kept stopped
+        // for rollback; only the most recent retired container is retained.
+        var currentName = current.Name?.TrimStart('/');
+        var canonicalName = ResolveCanonicalContainerName(currentName);
+        var retiredName = BuildRetiredContainerName(canonicalName);
+        var originalRestartPolicy = current.HostConfig?.RestartPolicy;
+
+        await RemoveRetiredContainerAsync(client, retiredName, current.ID, ct);
+        var renamed = !string.Equals(currentName, retiredName, StringComparison.Ordinal);
+        if (renamed)
+            await client.Containers.RenameContainerAsync(current.ID, new ContainerRenameParameters { NewName = retiredName }, ct);
+
+        string? replacementId = null;
+        try
+        {
+            // Without this an `always` restart policy would bring the retired container back on the
+            // next daemon restart, leaving two HostWorkers with the same identity.
+            await client.Containers.UpdateContainerAsync(current.ID, new ContainerUpdateParameters
+            {
+                RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.No }
+            }, ct);
+
+            var (primaryNetwork, additionalNetworks) = SplitNetworks(current);
+            var createResponse = await client.Containers.CreateContainerAsync(new CreateContainerParameters
+            {
+                Image = command.ContainerImage,
+                Name = canonicalName,
+                Env = BuildReplacementEnvironment(current.Config.Env, command.ContainerImage),
+                Labels = BuildReplacementLabels(current.Config.Labels, current.ID),
+                HostConfig = current.HostConfig,
+                NetworkingConfig = primaryNetwork is { } primary
+                    ? new NetworkingConfig
+                    {
+                        EndpointsConfig = new Dictionary<string, EndpointSettings>
+                        {
+                            [primary.Key] = new() { Aliases = FilterNetworkAliases(primary.Key, primary.Value?.Aliases, current.ID) }
+                        }
+                    }
+                    : null
+            }, ct);
+            replacementId = createResponse.ID;
+
+            // HostConfig only carries the primary network. Networks attached afterwards
+            // (e.g. `docker network connect <compose network>`) must be re-attached, otherwise
+            // the replacement cannot resolve the server by its service name.
+            foreach (var (network, endpoint) in additionalNetworks)
+            {
+                await client.Networks.ConnectNetworkAsync(network, new NetworkConnectParameters
+                {
+                    Container = replacementId,
+                    EndpointConfig = new EndpointSettings
+                    {
+                        Aliases = FilterNetworkAliases(network, endpoint?.Aliases, current.ID)
+                    }
+                }, ct);
+            }
+
+            await client.Containers.StartContainerAsync(replacementId, null, ct);
+        }
+        catch
+        {
+            await RollBackReplacementAsync(client, replacementId, current.ID, renamed ? currentName ?? canonicalName : null, originalRestartPolicy);
+            throw;
+        }
+
+        // Schedule the stop before publishing so a failed publish can't leave both containers running.
         ScheduleContainerStop(currentContainerId);
+        await PublishAsync("restarting", $"Started replacement container {replacementId[..12]} with {command.ContainerImage}.", true, true, null, command, publish, ct);
+    }
+
+    /// <summary>
+    /// Splits the container's networks into the primary one (from <c>HostConfig.NetworkMode</c>,
+    /// which may be a name or an ID) and those attached afterwards with <c>docker network connect</c>.
+    /// </summary>
+    internal static (KeyValuePair<string, EndpointSettings?>? Primary, List<KeyValuePair<string, EndpointSettings?>> Additional) SplitNetworks(ContainerInspectResponse current)
+    {
+        var networkMode = current.HostConfig?.NetworkMode;
+        // host / none / container:<id> modes cannot be combined with other networks.
+        if (networkMode is "host" or "none" || networkMode?.StartsWith("container:", StringComparison.Ordinal) == true)
+            return (null, []);
+
+        var primaryMode = string.IsNullOrEmpty(networkMode) || networkMode == "default" ? "bridge" : networkMode;
+        KeyValuePair<string, EndpointSettings?>? primary = null;
+        var additional = new List<KeyValuePair<string, EndpointSettings?>>();
+        foreach (var (name, endpoint) in current.NetworkSettings?.Networks ?? new Dictionary<string, EndpointSettings>())
+        {
+            var isPrimary = string.Equals(name, primaryMode, StringComparison.Ordinal)
+                || (!string.IsNullOrEmpty(endpoint?.NetworkID) && endpoint.NetworkID.StartsWith(primaryMode, StringComparison.Ordinal));
+            if (isPrimary && primary == null)
+                primary = new KeyValuePair<string, EndpointSettings?>(name, endpoint);
+            else
+                additional.Add(new KeyValuePair<string, EndpointSettings?>(name, endpoint));
+        }
+
+        return (primary, additional);
+    }
+
+    internal static IList<string>? FilterNetworkAliases(string network, IList<string>? aliases, string currentContainerId)
+    {
+        // The default bridge network rejects network-scoped aliases.
+        if (network == "bridge")
+            return null;
+
+        // Docker adds the container's 12-char short ID as an alias; don't carry the old one across.
+        var shortId = currentContainerId.Length >= 12 ? currentContainerId[..12] : currentContainerId;
+        var filtered = aliases?
+            .Where(a => !string.IsNullOrWhiteSpace(a) && !string.Equals(a, shortId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return filtered is { Count: > 0 } ? filtered : null;
+    }
+
+    internal static string ResolveCanonicalContainerName(string? currentName)
+    {
+        if (string.IsNullOrWhiteSpace(currentName))
+            return "runnerrunner-host-worker";
+
+        // An operator may have rolled back by starting the retired container; don't nest suffixes.
+        return currentName.EndsWith(RetiredContainerSuffix, StringComparison.Ordinal) && currentName.Length > RetiredContainerSuffix.Length
+            ? currentName[..^RetiredContainerSuffix.Length]
+            : currentName;
+    }
+
+    private const string RetiredContainerSuffix = "-replaced";
+
+    internal static string BuildRetiredContainerName(string canonicalName)
+    {
+        var prefixLength = Math.Min(canonicalName.Length, 63 - RetiredContainerSuffix.Length);
+        return canonicalName[..prefixLength] + RetiredContainerSuffix;
+    }
+
+    private async Task RemoveRetiredContainerAsync(DockerClient client, string retiredName, string currentContainerId, CancellationToken ct)
+    {
+        try
+        {
+            var previous = await client.Containers.InspectContainerAsync(retiredName, ct);
+            if (string.Equals(previous.ID, currentContainerId, StringComparison.Ordinal))
+                return;
+
+            if (previous.State?.Running == true)
+            {
+                _logger.LogWarning("Retired HostWorker container {ContainerId} ({Name}) is running; removing it before the update",
+                    previous.ID[..12], retiredName);
+            }
+
+            await client.Containers.RemoveContainerAsync(previous.ID, new ContainerRemoveParameters { Force = true }, ct);
+            _logger.LogInformation("Removed previously retired HostWorker container {ContainerId}", previous.ID[..12]);
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            // Nothing retired from an earlier update.
+        }
+    }
+
+    private async Task RollBackReplacementAsync(
+        DockerClient client, string? replacementId, string currentContainerId, string? originalName, RestartPolicy? originalRestartPolicy)
+    {
+        try
+        {
+            if (replacementId != null)
+                await client.Containers.RemoveContainerAsync(replacementId, new ContainerRemoveParameters { Force = true }, CancellationToken.None);
+
+            if (originalName != null)
+                await client.Containers.RenameContainerAsync(currentContainerId, new ContainerRenameParameters { NewName = originalName }, CancellationToken.None);
+
+            if (originalRestartPolicy != null)
+            {
+                await client.Containers.UpdateContainerAsync(currentContainerId, new ContainerUpdateParameters
+                {
+                    RestartPolicy = originalRestartPolicy
+                }, CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to roll back HostWorker container replacement; container {ContainerId} may need to be renamed back to {Name} and its restart policy restored",
+                currentContainerId[..12], originalName);
+        }
     }
 
     private async Task DownloadAsync(string url, string outputPath, CancellationToken ct)
@@ -291,16 +458,6 @@ internal sealed class HostWorkerSelfUpdater
         }
 
         return new ImagesCreateParameters { FromImage = image };
-    }
-
-    private static string BuildReplacementContainerName(string? currentName)
-    {
-        var normalized = string.IsNullOrWhiteSpace(currentName)
-            ? "runnerrunner-host-worker"
-            : currentName.TrimStart('/');
-        var suffix = "-update-" + Guid.NewGuid().ToString("N")[..12];
-        var prefixLength = Math.Min(normalized.Length, 63 - suffix.Length);
-        return normalized[..prefixLength] + suffix;
     }
 
     private static IList<string> BuildReplacementEnvironment(IList<string>? environment, string targetImage)
