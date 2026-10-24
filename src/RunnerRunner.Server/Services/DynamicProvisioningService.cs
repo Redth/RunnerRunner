@@ -442,10 +442,8 @@ public class DynamicProvisioningService : BackgroundService
     }
 
     /// <summary>
-    /// Before provisioning a replacement runner for a job whose previous runner failed,
-    /// confirm GitHub still has the job queued. A runner that "never picked up" its job is
-    /// often idle because another runner already ran it; retrying blindly then spawns a
-    /// fresh runner for finished work every pickup timeout until the retry cap is hit.
+    /// Before recovery provisioning, confirm GitHub still has the job queued, including
+    /// stale provisioned events whose recovery did not increment the retry count.
     /// </summary>
     private async Task<bool> TryResolveFinishedGitHubJobAsync(
         IDocumentStore store,
@@ -462,31 +460,33 @@ public class DynamicProvisioningService : BackgroundService
             return false;
         }
 
+        GitHubJobState? state;
         try
         {
             var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
             using var client = _httpClientFactory.CreateClient();
             await _gitHubAuth.ConfigureClientAsync(client, credential, evt.GitHubInstallationId, evt.Repository);
 
-            var state = await GetGitHubJobStateAsync(client, apiUrl, evt.Repository, evt.JobId, CancellationToken.None);
-            if (state == null || !await ApplyObservedGitHubJobStateAsync(store, evt.Repository, evt.JobId, state))
-                return false;
-
-            _logger.LogInformation(
-                "Skipping retry for webhook event {EventId}: GitHub job {JobId} is already {Status} (runner: {RunnerName})",
-                evt.Id,
-                evt.JobId,
-                state.Status,
-                state.RunnerName ?? "unknown");
-            return true;
+            state = await GetGitHubJobStateAsync(client, apiUrl, evt.Repository, evt.JobId, CancellationToken.None);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or JsonException)
         {
             // Fail open: an unreachable API must not block provisioning of a job that may
             // genuinely still be queued.
             _logger.LogWarning(ex, "Could not verify GitHub job {JobId} before retrying; provisioning anyway", evt.JobId);
             return false;
         }
+
+        if (state == null || !await ApplyObservedGitHubJobStateAsync(store, evt.Repository, evt.JobId, state))
+            return false;
+
+        _logger.LogInformation(
+            "Skipping retry for webhook event {EventId}: GitHub job {JobId} is already {Status} (runner: {RunnerName})",
+            evt.Id,
+            evt.JobId,
+            state.Status,
+            state.RunnerName ?? "unknown");
+        return true;
     }
 
     internal static IReadOnlyList<string> BuildGitHubRunQueries(string apiUrl, string repo)
@@ -900,10 +900,8 @@ public class DynamicProvisioningService : BackgroundService
                 return QueueProcessingOutcome.Blocked;
             }
 
-            // Only events whose earlier runner failed carry RetryCount > 0; checked here, right
-            // before a runner would be minted, so capacity/host waits cost no API calls.
+            // Check only after capacity/host waits, immediately before minting a runner.
             if (isRecoveryAttempt
-                && currentEvent.RetryCount > 0
                 && await TryResolveFinishedGitHubJobAsync(store, currentEvent, profile, credential))
             {
                 return QueueProcessingOutcome.Advanced;
