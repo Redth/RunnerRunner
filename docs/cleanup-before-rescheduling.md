@@ -1,4 +1,4 @@
-# Proposal: retain ownership until cleanup is confirmed
+# Retain ownership until cleanup is confirmed
 
 ## Problem
 
@@ -20,7 +20,7 @@ This is a bounded change to recovery and the resulting rescheduling decisions. I
 
 Uncertain cleanup can hold capacity longer. This is intentional: there is no safe timeout that proves an environment has disappeared. Existing health sweeps retry cleanup for definite exits; healthy runners remain tracked. Permanently ambiguous cases need an operator to establish the native resource's state.
 
-This PR does not implement durable worker deployment intents, replayable cleanup receipts, atomic CPU/memory/disk admission, or adoption after a worker restart. The worker's tracking map remains in memory. It also does not fix lost acknowledgements during initial creation or replace native process-tree cleanup with process groups. Those require separate proposals; the native process-group issue is tracked in #95. This proposal addresses one source of premature replacement related to #99, without claiming to resolve every duplicate-provisioning path.
+This PR does not implement durable worker deployment intents, replayable cleanup receipts, atomic CPU/memory/disk admission, or adoption after a worker restart. The worker's tracking map remains in memory. It also does not fix lost acknowledgements during initial creation or replace native process-tree cleanup with process groups. Those require separate proposals; the native process-group issue is tracked in #95. This feature addresses one source of premature replacement related to #99, without claiming to resolve every duplicate-provisioning path.
 
 ## Compatibility and rollout
 
@@ -36,4 +36,4 @@ The tests exercise transient health errors, cancellation, failed cleanup followe
 dotnet test RunnerRunner.slnx --configuration Release --verbosity minimal
 ```
 
-These are local unit and Orleans test-cluster checks. No production workers or native fleet VMs are changed or exercised by this proposal.
+These are local unit and Orleans test-cluster checks. No production workers or native fleet VMs are changed or exercised by this change.
