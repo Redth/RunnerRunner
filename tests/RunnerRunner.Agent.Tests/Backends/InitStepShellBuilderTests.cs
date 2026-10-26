@@ -118,4 +118,17 @@ public class InitStepShellBuilderTests
         Assert.Contains("$env:K = 'v'", frag);
         Assert.Contains("[init:step]", frag);
     }
+    [Theory]
+    [InlineData(InitStepShell.Cmd, false)]
+    [InlineData(InitStepShell.Cmd, true)]
+    [InlineData(InitStepShell.PowerShell, false)]
+    [InlineData(InitStepShell.PowerShell, true)]
+    public void WindowsChildFailureFailsTheJobAndHonorsContinueOnError(InitStepShell shell, bool continueOnError)
+    {
+        var fragment = InitStepShellBuilder.BuildWindowsFragment([new ResolvedInitStep
+        { Id = "failed", Name = "failed", Script = "exit 23", Shell = shell, ContinueOnError = continueOnError }], "PreRunner");
+        Assert.Contains("if ($LASTEXITCODE -ne 0) { throw", fragment);
+        Assert.Contains("Receive-Job $rrJob -ErrorAction SilentlyContinue", fragment);
+        Assert.Equal(!continueOnError, fragment.Contains("exit $rrRc"));
+    }
 }

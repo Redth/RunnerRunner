@@ -99,8 +99,8 @@ internal static class InitStepShellBuilder
                 _ => "& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $rrPath",
             };
             sb.AppendLine("$rrStarted = Get-Date");
-            sb.AppendLine($"$rrJob = Start-Job -ScriptBlock {{ param($p, $launchKind) if ($launchKind -eq 'cmd') {{ & cmd.exe /c $p }} else {{ & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p }} }} -ArgumentList $rrPath, '{(step.Shell == InitStepShell.Cmd ? "cmd" : "ps")}'");
-            sb.AppendLine($"if (Wait-Job $rrJob -Timeout {step.TimeoutSeconds}) {{ Receive-Job $rrJob; $rrRc = if ($rrJob.State -eq 'Completed') {{ 0 }} else {{ 1 }} }} else {{ Stop-Job $rrJob; Write-Host '[RunnerRunner] [init:{EscPsh(step.Name)}] timed out'; $rrRc = 124 }}");
+            sb.AppendLine($"$rrJob = Start-Job -ScriptBlock {{ param($p, $launchKind) $ErrorActionPreference = 'Stop'; if ($launchKind -eq 'cmd') {{ & cmd.exe /c $p }} else {{ & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $p }}; if ($LASTEXITCODE -ne 0) {{ throw 'Init process exited unsuccessfully' }} }} -ArgumentList $rrPath, '{(step.Shell == InitStepShell.Cmd ? "cmd" : "ps")}'");
+            sb.AppendLine($"if (Wait-Job $rrJob -Timeout {step.TimeoutSeconds}) {{ Receive-Job $rrJob -ErrorAction SilentlyContinue; $rrRc = if ($rrJob.State -eq 'Completed') {{ 0 }} else {{ 1 }} }} else {{ Stop-Job $rrJob; Write-Host '[RunnerRunner] [init:{EscPsh(step.Name)}] timed out'; $rrRc = 124 }}");
             sb.AppendLine("Remove-Job $rrJob -Force -ErrorAction SilentlyContinue");
 
             if (!string.IsNullOrWhiteSpace(step.WorkingDirectory))
