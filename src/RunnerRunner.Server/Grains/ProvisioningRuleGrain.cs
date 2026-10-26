@@ -453,7 +453,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             envVars,
             profile.ExecutionBackend,
             host.Platform);
-        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
+        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.ExecutionBackend, profile.DockerConfig, profile.TartConfig, _logger);
 
         await runnerGrain.Initialize(
             host.Id,
