@@ -16,9 +16,9 @@ public class RunnerLifecycleManager
 
     /// <summary>
     /// Fired when a runner exits unexpectedly (container/VM/process died).
-    /// Parameters: (instanceId, exitCode, reason)
+    /// Parameters: (owned runner, exitCode, reason)
     /// </summary>
-    public event Action<string, long, string>? OnRunnerExited;
+    public event Action<ManagedRunner, long, string>? OnRunnerExited;
 
     public RunnerLifecycleManager(ILogger<RunnerLifecycleManager> logger)
     {
@@ -30,13 +30,20 @@ public class RunnerLifecycleManager
     public async Task<RunnerInstanceInfo?> StartRunnerAsync(
         DeployRunnerCommand command,
         IRunnerBackend backend,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        NativeRunnerOwnership? ownership = null,
+        Action<NativeRunnerOwnership>? beforeNativeCreate = null,
+        Action<string>? nativeCreated = null)
     {
         _logger.LogInformation("Starting runner {RunnerName} (instance {InstanceId})",
             command.RunnerName, command.InstanceId);
 
         var request = new RunnerStartRequest
         {
+            DeferRegistration = command.DeferRegistration,
+            Ownership = ownership,
+            BeforeNativeCreate = beforeNativeCreate,
+            NativeCreated = nativeCreated,
             InstanceId = command.InstanceId,
             RunnerName = command.RunnerName,
             Provider = command.Provider,
@@ -68,7 +75,7 @@ public class RunnerLifecycleManager
             InstanceHandle = info.InstanceHandle,
             Backend = backend,
             StartedAt = DateTime.UtcNow,
-            IsEphemeral = command.Ephemeral || !string.IsNullOrEmpty(command.JitConfig)
+            IsEphemeral = command.Ephemeral || command.DeferRegistration || !string.IsNullOrEmpty(command.JitConfig)
         };
 
         _logger.LogInformation("Runner {RunnerName} started (handle: {Handle})",
@@ -83,17 +90,29 @@ public class RunnerLifecycleManager
         return info;
     }
 
+    /// <summary>Resume observation of an exact existing resource without replaying startup.</summary>
+    public void AdoptRunner(ManagedRunner runner)
+    {
+        if (!_runners.TryAdd(runner.InstanceId, runner))
+        {
+            var current = _runners[runner.InstanceId];
+            if (current.InstanceHandle != runner.InstanceHandle || current.Backend.BackendType != runner.Backend.BackendType)
+                throw new InvalidOperationException("A different native resource is already tracked for this instance.");
+            return;
+        }
+        if (runner.Backend is Backends.DockerBackend docker)
+            _ = MonitorContainerExitAsync(docker, runner.InstanceId, runner.InstanceHandle, runner.RunnerName);
+    }
+
     public async Task StopRunnerAsync(string instanceId, CancellationToken ct = default)
     {
-        if (!_runners.TryRemove(instanceId, out var runner))
+        if (!_runners.TryGetValue(instanceId, out var runner))
         {
             _logger.LogWarning("Runner instance {InstanceId} not found", instanceId);
             return;
         }
 
-        _logger.LogInformation("Stopping runner {RunnerName}", runner.RunnerName);
-        await runner.Backend.StopRunnerAsync(runner.InstanceHandle, ct);
-        _logger.LogInformation("Runner {RunnerName} stopped", runner.RunnerName);
+        await ReleaseRunnerAsync(runner, ct);
     }
 
     public async Task<RunnerHealthStatus?> CheckHealthAsync(string instanceId, CancellationToken ct = default)
@@ -112,7 +131,8 @@ public class RunnerLifecycleManager
             var (exitCode, error) = await docker.WaitForExitAsync(containerId);
 
             // Only fire if we still consider this runner active
-            if (_runners.TryRemove(instanceId, out _))
+            if (_runners.TryGetValue(instanceId, out var runner)
+                && await ReleaseRunnerAsync(runner, CancellationToken.None))
             {
                 var reason = exitCode switch
                 {
@@ -129,7 +149,7 @@ public class RunnerLifecycleManager
                     "Runner {RunnerName} ({InstanceId}) container exited: code={ExitCode}, reason={Reason}",
                     runnerName, instanceId, exitCode, reason);
 
-                OnRunnerExited?.Invoke(instanceId, exitCode, reason);
+                OnRunnerExited?.Invoke(runner, exitCode, reason);
             }
         }
         catch (OperationCanceledException)
@@ -153,25 +173,30 @@ public class RunnerLifecycleManager
             {
                 health = await runner.Backend.GetHealthAsync(runner.InstanceHandle, ct);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Health check failed for runner {RunnerName} ({InstanceId})", runner.RunnerName, instanceId);
                 health = new RunnerHealthStatus { IsRunning = false, Status = "health_check_failed" };
             }
 
-            if (!health.IsRunning && _runners.TryRemove(instanceId, out _)
-                && IsDefinitiveExit(health.Status))
+            var cleanupConfirmed = false;
+            if (!health.IsRunning && IsDefinitiveExit(health.Status))
             {
                 // The runner exited on its own (e.g. an ephemeral/JIT runner finishing its job).
                 // Let the backend release what it holds — instance directory, post-exit steps,
                 // leftover child processes — otherwise it leaks until the next orphan sweep.
-                await ReleaseExitedRunnerAsync(runner, ct);
+                cleanupConfirmed = await ReleaseExitedRunnerAsync(runner, ct);
             }
 
             snapshots.Add(new ManagedRunnerHealth
             {
                 Runner = runner,
-                Health = health
+                Health = health,
+                CleanupConfirmed = cleanupConfirmed
             });
         }
 
@@ -188,11 +213,11 @@ public class RunnerLifecycleManager
            && (status.StartsWith("exited", StringComparison.OrdinalIgnoreCase)
                || string.Equals(status, "dead", StringComparison.OrdinalIgnoreCase));
 
-    private async Task ReleaseExitedRunnerAsync(ManagedRunner runner, CancellationToken ct)
+    private async Task<bool> ReleaseExitedRunnerAsync(ManagedRunner runner, CancellationToken ct)
     {
         try
         {
-            await runner.Backend.StopRunnerAsync(runner.InstanceHandle, ct);
+            return await ReleaseRunnerAsync(runner, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -201,6 +226,29 @@ public class RunnerLifecycleManager
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to release exited runner {RunnerName} ({InstanceId})", runner.RunnerName, runner.InstanceId);
+            return false;
+        }
+    }
+
+    private async Task<bool> ReleaseRunnerAsync(ManagedRunner runner, CancellationToken ct)
+    {
+        await runner.CleanupLock.WaitAsync(ct);
+        try
+        {
+            if (!_runners.TryGetValue(runner.InstanceId, out var current) || !ReferenceEquals(current, runner))
+                return false;
+
+            _logger.LogInformation("Stopping runner {RunnerName}", runner.RunnerName);
+            await runner.Backend.StopRunnerAsync(runner.InstanceHandle, ct);
+            // Keep ownership when cleanup throws or its outcome is uncertain. A later
+            // health check/stop can retry the same native handle without freeing capacity.
+            var removed = _runners.TryRemove(new KeyValuePair<string, ManagedRunner>(runner.InstanceId, runner));
+            _logger.LogInformation("Runner {RunnerName} stopped", runner.RunnerName);
+            return removed;
+        }
+        finally
+        {
+            runner.CleanupLock.Release();
         }
     }
 
@@ -309,6 +357,7 @@ public class RunnerLifecycleManager
 
 public class ManagedRunner
 {
+    internal SemaphoreSlim CleanupLock { get; } = new(1, 1);
     public required string InstanceId { get; set; }
     public required string ProfileId { get; set; }
     public required string RunnerName { get; set; }
@@ -324,4 +373,7 @@ public class ManagedRunnerHealth
 {
     public required ManagedRunner Runner { get; set; }
     public required RunnerHealthStatus Health { get; set; }
+
+    /// <summary>True only after the backend released this instance successfully.</summary>
+    public bool CleanupConfirmed { get; set; }
 }

@@ -1,3 +1,5 @@
+using NSubstitute;
+using RunnerRunner.Server.Services.Admission;
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -92,12 +94,19 @@ public class RunnerTimeoutServiceTests
         Assert.Null(evt.NextRetryAt);
     }
 
-    [Fact]
-    public async Task ScanForTimeouts_RequeuesPendingDynamicRunnerAndRemovesInstance()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ScanForTimeouts_RetainsReservedRunnerAndOnlyRequeuesUnreserved(bool reserved)
     {
         var store = TestDocumentStore.Create();
         var hostCommands = new RecordingHostCommandDispatcher();
+        var admission = Substitute.For<IResourceAdmission>();
+        if (reserved)
+            admission.GetReservationAsync("inst-timeout", Arg.Any<CancellationToken>()).Returns(
+                new ResourceReservation("inst-timeout", "host-timeout", ExecutionBackend.Docker, new(2, 4096, 64), "container-timeout", false));
         using var services = new ServiceCollection()
+            .AddSingleton(admission)
             .AddSingleton(store)
             .BuildServiceProvider();
 
@@ -148,6 +157,14 @@ public class RunnerTimeoutServiceTests
 
         var requeuedEvent = await store.Get<WebhookEvent>(evt.Id);
         Assert.NotNull(requeuedEvent);
+        if (reserved)
+        {
+            Assert.Equal("provisioned", requeuedEvent.Status);
+            Assert.Equal(instance.Id, requeuedEvent.InstanceId);
+            Assert.NotNull(await store.Get<RunnerInstance>(instance.Id));
+            Assert.Empty(hostCommands.Commands);
+            return;
+        }
         Assert.Equal("pending", requeuedEvent!.Status);
         Assert.Null(requeuedEvent.InstanceId);
         Assert.Null(requeuedEvent.ResolvedAt);

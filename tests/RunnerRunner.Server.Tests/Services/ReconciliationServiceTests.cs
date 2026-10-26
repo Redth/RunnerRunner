@@ -1,3 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+using RunnerRunner.Server.Services.Admission;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Services;
@@ -7,6 +11,39 @@ namespace RunnerRunner.Server.Tests.Services;
 
 public class ReconciliationServiceTests
 {
+    [Fact]
+    public async Task SnapshotOmissionRetainsReservationAndDoesNotDeleteUnknownNativeResources()
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new RunnerRunner.Core.Models.Host { Id = "host-1", Name = "host-1" });
+        await store.Insert(new RunnerInstance
+        {
+            Id = "owned", HostId = "host-1", ProfileId = "profile-1", RunnerName = "owned-runner",
+            ContainerId = "owned-container", Status = RunnerInstanceStatus.Running, StartedAt = DateTime.UtcNow.AddHours(-1)
+        });
+        var admission = Substitute.For<IResourceAdmission>();
+        admission.GetReservationAsync("owned", Arg.Any<CancellationToken>()).Returns(
+            new ResourceReservation("owned", "host-1", ExecutionBackend.Docker, new(2,4096,64), "owned-container", false));
+        var commands = new RecordingHostCommandDispatcher();
+        using var services = new ServiceCollection().AddSingleton(store).AddSingleton(admission)
+            .AddSingleton(new RunnerRegistrationCleanupService([], admission, NullLogger<RunnerRegistrationCleanupService>.Instance))
+            .BuildServiceProvider();
+        using var service = new ReconciliationService(NullLogger<ReconciliationService>.Instance, services, commands);
+        await service.ProcessReconciliationAsync(new ReconciliationReport
+        {
+            HostId = "host-1", Runners = [new DiscoveredRunnerInfo
+            {
+                InstanceId = "unknown", RunnerName = "rr-unknown", VmName = "rr-unknown", Backend = ExecutionBackend.Tart, IsRunning = true
+            }]
+        });
+        var kept = await store.Get<RunnerInstance>("owned");
+        Assert.NotNull(kept);
+        Assert.Equal(RunnerInstanceStatus.Stopping, kept.Status);
+        Assert.Null(kept.StoppedAt);
+        Assert.Equal("owned-container", kept.ContainerId);
+        Assert.Empty(commands.Commands);
+    }
+
     private static readonly DateTime Now = new(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
 
     [Fact]

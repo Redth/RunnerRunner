@@ -36,6 +36,9 @@ public sealed class HostWorkerConnectionRegistry
         await connection.SendAsync(message, cancellationToken);
     }
 
+    public HostWorkerConnection? GetConnection(string hostId)
+        => _connections.TryGetValue(hostId, out var connection) ? connection : null;
+
     public bool IsConnected(string hostId)
         => _connections.ContainsKey(hostId);
 
@@ -72,6 +75,7 @@ public sealed class HostWorkerConnection : IAsyncDisposable
     }
 
     public string HostId { get; }
+    public bool SupportsDurableOwnership { get; set; }
     public IReadOnlyCollection<string> Keys { get; }
 
     public ValueTask SendAsync(HostWorkerMessage message, CancellationToken cancellationToken)

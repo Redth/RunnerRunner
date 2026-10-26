@@ -7,12 +7,14 @@
 @using RunnerRunner.Core.Hub
 @using RunnerRunner.Server.Components.Hosts
 @using RunnerRunner.Server.Services
+@using RunnerRunner.Server.Services.Admission
 @using RunnerRunner.Server.Services.HostWorkers
 @inject IDocumentStore Store
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 @inject IGrainFactory GrainFactory
 @inject CapacityPlanningService CapacityService
+@inject IResourceAdmission ResourceAdmission
 @inject IHostCommandDispatcher HostCommandDispatcher
 @inject HostWorkerUpdateService HostWorkerUpdateService
 @inject HostWorkerEnrollmentGuideBuilder GuideBuilder
@@ -149,6 +151,17 @@
                         <div class="col-lg-5">
                             <section class="rr-form-section h-100">
                                 <div class="rr-form-section-title"><i class="bi bi-speedometer2"></i>Resource limits</div>
+                                <label><input type="checkbox" @bind="enableJobBudget" disabled="@hasJobBudget" /> Enable durable job budget (cannot be disabled while retaining ownership)</label>
+                                <p class="form-text">Job budget shared by all profiles. Reserve capacity for the host OS, services and persistent VMs before entering these values. Enable durable admission only after draining the host and upgrading its worker. A zero budget blocks new jobs; hosts without a budget retain existing scheduling.</p>
+                                <div class="row mb-3">
+                                    <div class="col"><label class="form-label">CPUs</label><input type="number" class="form-control" @bind="jobCpuBudget" min="0" /></div>
+                                    <div class="col"><label class="form-label">Memory (MiB)</label><input type="number" class="form-control" @bind="jobMemoryBudget" min="0" /></div>
+                                    <div class="col"><label class="form-label">Disk (GiB)</label><input type="number" class="form-control" @bind="jobDiskBudget" min="0" /></div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(configurationError))
+                                {
+                                    <div class="alert alert-warning">@configurationError</div>
+                                }
                                 <p class="form-text mb-3">Enable a backend to show its resource limit. Turning it off stores <code>0</code>, which disables scheduling for that backend on this host.</p>
                                 <div class="mb-3">
                                     <div class="form-check form-switch">
@@ -732,10 +745,16 @@
 
     // Configure modal
     private Host? configureHost;
+    private bool enableJobBudget;
+    private bool hasJobBudget;
+    private int jobCpuBudget;
+    private long jobMemoryBudget;
+    private long jobDiskBudget;
+    private string? configurationError;
     private string newLabelKey = "";
     private string newLabelValue = "";
 
-    private void ToggleConfigure(Host host)
+    private async Task ToggleConfigure(Host host)
     {
         openActionsMenuHostId = null;
         if (configureHost?.Id == host.Id)
@@ -744,6 +763,12 @@
             return;
         }
 
+        var budget = await ResourceAdmission.GetBudgetAsync(host.Id);
+        enableJobBudget = hasJobBudget = budget is not null;
+        jobCpuBudget = budget?.CpuCount ?? 0;
+        jobMemoryBudget = budget?.MemoryMiB ?? 0;
+        jobDiskBudget = budget?.DiskGiB ?? 0;
+        configurationError = null;
         configureHost = CloneHost(host);
         newLabelKey = "";
         newLabelValue = "";
@@ -762,7 +787,7 @@
     private void ToggleActionsMenu(string hostId)
         => openActionsMenuHostId = openActionsMenuHostId == hostId ? null : hostId;
 
-    private void ConfigureHostFromMenu(Host host)
+    private Task ConfigureHostFromMenu(Host host)
         => ToggleConfigure(host);
 
     private void OpenManualUpdateWizardFromMenu(Host host)
@@ -811,6 +836,29 @@
     private async Task SaveConfiguration()
     {
         var host = configureHost ?? throw new InvalidOperationException("No host selected for configuration.");
+        try
+        {
+            if (enableJobBudget)
+            {
+                if (!hasJobBudget)
+                {
+                    var liveHost = await Store.Get<Host>(host.Id);
+                    var instances = await Store.Query<RunnerInstance>().ToList();
+                    if (liveHost?.IsDraining != true || instances.Any(i => i.HostId == host.Id &&
+                        i.Status is not (RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed)))
+                        throw new ResourceAdmissionException("Drain the host and confirm all runners stopped before enabling a budget.");
+                }
+                if (host.MaxNativeProcesses != 0)
+                    throw new ResourceAdmissionException("Disable Native capacity on a budgeted host; durable admission currently supports Docker and Tart.");
+                await ResourceAdmission.SetBudgetAsync(host.Id, new(jobCpuBudget, jobMemoryBudget, jobDiskBudget,
+                    host.MaxDockerContainers, host.MaxTartVMs));
+            }
+        }
+        catch (ResourceAdmissionException ex)
+        {
+            configurationError = ex.Message;
+            return;
+        }
         host.GroupId = string.IsNullOrWhiteSpace(host.GroupId) ? null : host.GroupId.Trim();
         host.UpdatedAt = DateTime.UtcNow;
         await Store.Update(host);

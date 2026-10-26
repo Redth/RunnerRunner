@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Microsoft.Extensions.Logging;
 using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
@@ -13,13 +14,16 @@ namespace RunnerRunner.Server.Services;
 public class RunnerRegistrationCleanupService
 {
     private readonly IEnumerable<IRunnerProviderPlugin> _providers;
+    private readonly IResourceAdmission _admission;
     private readonly ILogger<RunnerRegistrationCleanupService> _logger;
 
     public RunnerRegistrationCleanupService(
         IEnumerable<IRunnerProviderPlugin> providers,
+        IResourceAdmission admission,
         ILogger<RunnerRegistrationCleanupService> logger)
     {
         _providers = providers;
+        _admission = admission;
         _logger = logger;
     }
 
@@ -28,6 +32,8 @@ public class RunnerRegistrationCleanupService
         RunnerInstance instance,
         CancellationToken ct = default)
     {
+        if (await _admission.GetReservationAsync(instance.Id, ct) is { Released: false })
+            return;
         if (string.IsNullOrWhiteSpace(instance.RunnerName) || string.IsNullOrWhiteSpace(instance.ProfileId))
             return;
 

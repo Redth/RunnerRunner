@@ -1,3 +1,5 @@
+using NSubstitute;
+using RunnerRunner.Server.Services.Admission;
 using System.Security.Cryptography;
 using System.Text;
 using RunnerRunner.Core.Models;
@@ -387,6 +389,42 @@ public sealed class GrainStateTests
         Assert.NotNull(stopped.StoppedAt);
         Assert.Contains(stopped.StatusHistory, entry => entry.Status == RunnerInstanceStatus.Stopped);
         Assert.Equal(0, (await host.GetState()).RunningDockerContainers);
+    }
+
+    [Fact]
+    public async Task RunnerInstanceGrain_TimeoutAndTerminalCallsRetainUnconfirmedOwnership()
+    {
+        var hostId = OrleansTestIds.Create("reserved-host");
+        var profileId = OrleansTestIds.Create("reserved-profile");
+        var instanceId = OrleansTestIds.Create("reserved-runner");
+        var host = _grainFactory.GetGrain<IHostGrain>(hostId);
+        await host.Register("builder", HostPlatform.Windows, "x64", "1.0.0");
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(new RunnerProfile
+        {
+            Id = profileId, Name = "reserved", ExecutionBackend = ExecutionBackend.Docker
+        });
+        var reservation = new ResourceReservation(instanceId, hostId, ExecutionBackend.Docker, new(2, 4096, 64), "owned-container", false);
+        _fixture.Admission.GetReservationAsync(instanceId, Arg.Any<CancellationToken>()).Returns(reservation);
+        var runner = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
+        await runner.Initialize(hostId, profileId, "owned-runner", "dynamic");
+        await runner.MarkStarting();
+        await runner.MarkRunning(containerId: "owned-container");
+        await runner.MarkFailed("lost acknowledgment");
+        await runner.MarkCrashed("stale health");
+        await runner.MarkStopped();
+        var state = await runner.GetState();
+        Assert.Equal(RunnerInstanceStatus.Stopping, state.Status);
+        Assert.Null(state.StoppedAt);
+        Assert.Equal("owned-container", state.ContainerId);
+        Assert.Equal(1, (await host.GetState()).RunningDockerContainers);
+        Assert.NotNull(await _fixture.DocumentStore.Get<RunnerInstance>(instanceId));
+        await runner.UpdateHealth("still uncertain", RunnerInstanceStatus.Stopping);
+        Assert.Equal(RunnerInstanceStatus.Stopping, (await _fixture.DocumentStore.Get<RunnerInstance>(instanceId))!.Status);
+        _fixture.Admission.GetReservationAsync(instanceId, Arg.Any<CancellationToken>()).Returns(reservation with { Released = true });
+        await runner.MarkStopped();
+        Assert.Equal(0, (await host.GetState()).RunningDockerContainers);
+        // Dynamic grain state is purged after confirmed cleanup; its history remains.
+        Assert.Equal(RunnerInstanceStatus.Stopped, (await _fixture.DocumentStore.Get<RunnerInstance>(instanceId))!.Status);
     }
 
     [Fact]

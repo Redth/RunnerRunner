@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Orleans;
@@ -930,6 +931,7 @@ public class DynamicProvisioningService : BackgroundService
                 isRecoveryAttempt);
 
             JitConfigResult? jitResult = null;
+            var deferRegistration = DeferredRunnerRegistration.Required(profile, hostSelection.Host.Platform);
 
             // Apply webhook-supplied image tag override when permitted. We
             // copy the image configs before mutating so the shared profile
@@ -948,7 +950,7 @@ public class DynamicProvisioningService : BackgroundService
                 if (!effectiveLabels.Contains(overrideLabel, StringComparer.OrdinalIgnoreCase))
                     effectiveLabels.Add(overrideLabel);
             }
-            if (credential != null)
+            if (credential != null && !deferRegistration)
             {
                 await UpdateEventProgressAsync(
                     store,
@@ -976,7 +978,7 @@ public class DynamicProvisioningService : BackgroundService
                 }
             }
 
-            var envVars = await ComposeEnvironmentVariablesAsync(store, profile, hostSelection.Host, credential);
+            var envVars = await ComposeEnvironmentVariablesAsync(store, profile, hostSelection.Host, deferRegistration ? null : credential);
             var instanceId = Guid.NewGuid().ToString();
             envVars["RR_INSTANCE_ID"] = instanceId;
             envVars["RR_RUNNER_NAME"] = runnerName;
@@ -1014,8 +1016,8 @@ public class DynamicProvisioningService : BackgroundService
             var initSteps = await InitStepResolver.ResolveAsync(
                 store, profile, envVars, profile.ExecutionBackend, hostSelection.Host.Platform);
 
-            // Resolve registry credentials for Docker image pulls
-            var registryCred = await RegistryCredentialResolver.ResolveAsync(store, dockerConfig, _logger);
+            var registryCred = await RegistryCredentialResolver.ResolveAsync(
+                store, profile.ExecutionBackend, dockerConfig, tartConfig, _logger);
 
             // Resolve runner agent version (for Docker auto-install)
             var agentVersion = profile.RunnerAgentVersion;
@@ -1043,6 +1045,7 @@ public class DynamicProvisioningService : BackgroundService
                 Labels = effectiveLabels,
                 RunnerGroup = GetEffectiveRunnerGroup(profile, credential),
                 Ephemeral = true,
+                DeferRegistration = deferRegistration,
                 JitConfig = jitResult?.JitConfig,
                 RegistrationToken = jitResult?.RegistrationToken,
                 ProvisioningMode = "dynamic",
@@ -1054,6 +1057,14 @@ public class DynamicProvisioningService : BackgroundService
                 RegistryPassword = registryCred?.Password,
                 BackendCapacityLimit = CapacityPlanningService.GetBackendLimit(hostSelection.Host, profile.ExecutionBackend)
             };
+
+            if (deferRegistration)
+                await runnerGrain.ConfigureDeferredRegistration(new DeferredRunnerRegistration
+                {
+                    CredentialId = credential?.Id ?? throw new InvalidOperationException("Deferred registration requires a credential."),
+                    Labels = effectiveLabels, RunnerGroup = profile.RunnerGroup,
+                    Repository = currentEvent.Repository, GitHubInstallationId = currentEvent.GitHubInstallationId
+                });
 
             currentEvent.MarkResolved("provisioned", now, instanceId);
             currentEvent.LastAttemptAt = now;
@@ -1135,7 +1146,11 @@ public class DynamicProvisioningService : BackgroundService
                 ImageName = docker.ImageName,
                 Tag = imageTagOverride,
                 PullPolicy = docker.PullPolicy,
-                CredentialId = docker.CredentialId
+                CredentialId = docker.CredentialId,
+                CpuCount = docker.CpuCount,
+                MemorySizeMb = docker.MemorySizeMb,
+                DiskSizeGb = docker.DiskSizeGb,
+                HyperVIsolation = docker.HyperVIsolation, PrepareBeforeRegistration = docker.PrepareBeforeRegistration
             };
             applied = imageTagOverride;
         }
@@ -1804,6 +1819,13 @@ public class DynamicProvisioningService : BackgroundService
                 });
             }
 
+            if (await _services.GetRequiredService<IResourceAdmission>().GetReservationAsync(instance.Id) is { Released: false })
+            {
+                var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id);
+                await runnerGrain.MarkStopping();
+                await runnerGrain.UpdateStatusMessage($"Cleanup requested; awaiting native confirmation. {reason}");
+                continue;
+            }
             await _runnerRegistrationCleanupService.TryRemoveRunnerAsync(store, instance);
 
             instance.Status = RunnerInstanceStatus.Stopped;

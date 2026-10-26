@@ -200,88 +200,95 @@ public class NativeBackend : IRunnerBackend
 
     public async Task StopRunnerAsync(string instanceHandle, CancellationToken ct = default)
     {
-        // Claim the runner up front: the health loop (releasing a runner that exited on its own)
-        // and an explicit stop command can race, and only one of them may tear it down.
-        if (!_runners.TryRemove(instanceHandle, out var runner))
+        if (!_runners.TryGetValue(instanceHandle, out var runner))
             return;
 
-        _logger.LogInformation("Stopping native runner {RunnerName} (PID: {PID})",
-            runner.RunnerName, instanceHandle);
-
-        // run.sh exits on SIGTERM without forwarding it, so its run-helper.sh/Runner.Listener
-        // children would outlive it (still registered with the provider). Snapshot the tree first.
-        var descendants = runner.Process.HasExited ? [] : SnapshotProcesses(GetDescendantProcessIds(runner.Process.Id));
-
-        if (!runner.Process.HasExited)
-        {
-            // Send SIGTERM for graceful shutdown (runner deregisters itself)
-            try
-            {
-                if (!OperatingSystem.IsWindows())
-                {
-                    // Unix: send SIGTERM via kill
-                    Process.Start("kill", $"-TERM {runner.Process.Id}")?.WaitForExit(1000);
-                    SignalProcesses(descendants, "TERM");
-                }
-                else
-                {
-                    runner.Process.CloseMainWindow();
-                }
-
-                // Wait up to 30 seconds for graceful shutdown
-                runner.Process.WaitForExit(30_000);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error during graceful shutdown");
-            }
-
-            // Force kill if still running
-            if (!runner.Process.HasExited)
-            {
-                _logger.LogWarning("Runner {RunnerName} did not exit gracefully, force killing", runner.RunnerName);
-                runner.Process.Kill(entireProcessTree: true);
-            }
-        }
-
-        await KillSurvivingDescendantsAsync(descendants, runner.RunnerName, ct);
-        runner.Process.Dispose();
-
-        // Run PostExit init steps before wiping the instance dir.
-        if (runner.PostExitSteps.Count > 0)
-        {
-            _logger.LogInformation("Running {Count} post-exit init step(s) for {RunnerName}",
-                runner.PostExitSteps.Count, runner.RunnerName);
-            try
-            {
-                var executor = new InitStepExecutor(_logger);
-                await executor.RunAsync(
-                    runner.PostExitSteps,
-                    Core.Models.InitStepPhase.PostExit,
-                    runner.WorkDir,
-                    runner.RunnerEnvironment,
-                    runner.LogFile,
-                    ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Post-exit init steps failed for {RunnerName}", runner.RunnerName);
-            }
-        }
-
-        // Clean up instance directory
+        await runner.CleanupLock.WaitAsync(ct);
         try
         {
-            if (Directory.Exists(runner.InstanceDir))
+            if (!_runners.TryGetValue(instanceHandle, out var current) || !ReferenceEquals(current, runner)) return;
+            _logger.LogInformation("Stopping native runner {RunnerName} (PID: {PID})",
+                runner.RunnerName, instanceHandle);
+
+            // run.sh exits on SIGTERM without forwarding it, so its run-helper.sh/Runner.Listener
+            // children would outlive it (still registered with the provider). Snapshot the tree first.
+            var descendants = runner.CleanupDescendants ??= runner.Process.HasExited ? [] : SnapshotProcesses(GetDescendantProcessIds(runner.Process.Id));
+
+            if (!runner.Process.HasExited)
             {
-                Directory.Delete(runner.InstanceDir, recursive: true);
-                _logger.LogInformation("Cleaned up instance dir {Dir}", runner.InstanceDir);
+                // Send SIGTERM for graceful shutdown (runner deregisters itself)
+                try
+                {
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        // Unix: send SIGTERM via kill
+                        Process.Start("kill", $"-TERM {runner.Process.Id}")?.WaitForExit(1000);
+                        SignalProcesses(descendants, "TERM");
+                    }
+                    else
+                    {
+                        runner.Process.CloseMainWindow();
+                    }
+
+                    // Wait up to 30 seconds for graceful shutdown
+                    runner.Process.WaitForExit(30_000);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error during graceful shutdown");
+                }
+
+                // Force kill if still running
+                if (!runner.Process.HasExited)
+                {
+                    _logger.LogWarning("Runner {RunnerName} did not exit gracefully, force killing", runner.RunnerName);
+                    runner.Process.Kill(entireProcessTree: true);
+                }
             }
+
+            await KillSurvivingDescendantsAsync(descendants, runner.RunnerName, ct);
+            await runner.Process.WaitForExitAsync(ct);
+
+            // Run PostExit init steps before wiping the instance dir.
+            if (runner.PostExitSteps.Count > 0)
+            {
+                _logger.LogInformation("Running {Count} post-exit init step(s) for {RunnerName}",
+                    runner.PostExitSteps.Count, runner.RunnerName);
+                try
+                {
+                    var executor = new InitStepExecutor(_logger);
+                    await executor.RunAsync(
+                        runner.PostExitSteps,
+                        Core.Models.InitStepPhase.PostExit,
+                        runner.WorkDir,
+                        runner.RunnerEnvironment,
+                        runner.LogFile,
+                        ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Post-exit init steps failed for {RunnerName}", runner.RunnerName);
+                }
+            }
+
+            // Clean up instance directory
+            try
+            {
+                if (Directory.Exists(runner.InstanceDir))
+                {
+                    Directory.Delete(runner.InstanceDir, recursive: true);
+                    _logger.LogInformation("Cleaned up instance dir {Dir}", runner.InstanceDir);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up instance directory {Dir}", runner.InstanceDir);
+                throw;
+            }
+            _runners.TryRemove(new KeyValuePair<string, ManagedNativeRunner>(instanceHandle, runner));
+            runner.Process.Dispose();
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to clean up instance directory {Dir}", runner.InstanceDir);
-        }
+        finally { runner.CleanupLock.Release(); }
     }
 
     public Task<RunnerHealthStatus> GetHealthAsync(string instanceHandle, CancellationToken ct = default)
@@ -980,6 +987,8 @@ public class NativeBackend : IRunnerBackend
 
     private class ManagedNativeRunner
     {
+        public SemaphoreSlim CleanupLock { get; } = new(1, 1);
+        public List<ProcessIdentity>? CleanupDescendants { get; set; }
         public required Process Process { get; set; }
         public required string InstanceDir { get; set; }
         public required string WorkDir { get; set; }

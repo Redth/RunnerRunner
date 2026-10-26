@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using RunnerRunner.Server.Components;
 using RunnerRunner.Server.Data;
 using RunnerRunner.Server.Hubs;
@@ -116,6 +117,7 @@ builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
 
 // Orleans silo (co-hosted with Blazor server)
+builder.Services.PostConfigure<Orleans.Serialization.OrleansJsonSerializerOptions>(GrainStorageSerialization.Configure);
 builder.UseOrleans(silo =>
 {
     var orleansConnString = pgConnectionString;
@@ -167,11 +169,17 @@ builder.UseOrleans(silo =>
         var advertisedIp = builder.Configuration["Orleans:AdvertisedIPAddress"];
         if (!string.IsNullOrEmpty(advertisedIp) && System.Net.IPAddress.TryParse(advertisedIp, out var ip))
         {
+            var listenAddress = builder.Configuration["Orleans:ListenIPAddress"];
+            var listenIp = System.Net.IPAddress.Any;
+            if (!string.IsNullOrWhiteSpace(listenAddress)
+                && !System.Net.IPAddress.TryParse(listenAddress, out listenIp))
+                throw new InvalidOperationException("Orleans:ListenIPAddress must be a valid IP address.");
+
             silo.Configure<Orleans.Configuration.EndpointOptions>(options =>
             {
                 options.AdvertisedIPAddress = ip;
-                options.SiloListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 11111);
-                options.GatewayListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 30000);
+                options.SiloListeningEndpoint = new System.Net.IPEndPoint(listenIp, 11111);
+                options.GatewayListeningEndpoint = new System.Net.IPEndPoint(listenIp, 30000);
                 options.SiloPort = 11111;
                 options.GatewayPort = 30000;
             });
@@ -208,6 +216,8 @@ builder.Services.AddSingleton<HostWorkerEnrollmentGuideBuilder>();
 builder.Services.AddSingleton<HostWorkerSshSetupService>();
 builder.Services.AddSingleton<LongRunningTaskService>();
 builder.Services.AddScoped<SettingsBackupService>();
+builder.Services.AddSingleton(new PostgresResourceAdmission(pgConnectionString));
+builder.Services.AddSingleton<IResourceAdmission>(sp => sp.GetRequiredService<PostgresResourceAdmission>());
 builder.Services.AddSingleton<IHostCommandDispatcher, GrpcHostCommandDispatcher>();
 builder.Services.AddSingleton<ProvisioningRuleGrainSyncService>();
 builder.Services.AddScoped<CapacityPlanningService>();
@@ -250,6 +260,8 @@ if (!app.Environment.IsDevelopment())
     await OrleansSchemaInitializer.EnsureCreatedAsync(pgConnectionString, schemaLogger);
 }
 
+await app.Services.GetRequiredService<PostgresResourceAdmission>().EnsureCreatedAsync();
+
 // Ensure all document store tables exist before serving requests
 await DatabaseInitializer.EnsureTablesCreatedAsync(app.Services);
 await RunnerRunnerAuthSchemaInitializer.EnsureCreatedAsync(app.Services);
@@ -260,6 +272,7 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
     app.UseHsts();
 }
+app.UseMiddleware<HostWorkerEndpointIsolationMiddleware>();
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseForwardedHeaders();
 app.UseHttpsRedirection();

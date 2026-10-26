@@ -8,6 +8,12 @@ internal sealed class RecordingHostCommandDispatcher : IHostCommandDispatcher
     private readonly object _gate = new();
     private readonly List<DispatchedHostCommand> _commands = [];
     private readonly HashSet<string> _disconnectedHosts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _lostActivationReplies = new(StringComparer.Ordinal);
+
+    public void LoseActivationReplyFor(string hostId)
+    {
+        lock (_gate) _lostActivationReplies.Add(hostId);
+    }
 
     public IReadOnlyList<DispatchedHostCommand> Commands
     {
@@ -46,6 +52,14 @@ internal sealed class RecordingHostCommandDispatcher : IHostCommandDispatcher
 
     public Task DispatchDeployRunnerAsync(string hostId, DeployRunnerCommand command)
         => RecordAsync(hostId, HostCommandKind.DeployRunner, command);
+
+    public async Task DispatchActivateRunnerAsync(string hostId, ActivateRunnerCommand command)
+    {
+        await RecordAsync(hostId, HostCommandKind.ActivateRunner, command);
+        lock (_gate)
+            if (_lostActivationReplies.Contains(hostId))
+                throw new IOException("Activation reply lost after delivery.");
+    }
 
     public Task DispatchStopRunnerAsync(string hostId, StopRunnerCommand command)
         => RecordAsync(hostId, HostCommandKind.StopRunner, command);

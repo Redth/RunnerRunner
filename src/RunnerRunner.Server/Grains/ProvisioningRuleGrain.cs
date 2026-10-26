@@ -409,11 +409,12 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
         var credential = string.IsNullOrWhiteSpace(profile.ProviderCredentialId)
             ? null
             : await store.Get<ProviderCredential>(profile.ProviderCredentialId);
+        var deferRegistration = DeferredRunnerRegistration.Required(profile, host.Platform);
         var provider = ResolveProvider(profile.Provider);
         string? registrationToken = null;
         string? runnerUrl = null;
 
-        if (credential != null && provider != null)
+        if (credential != null && provider != null && !deferRegistration)
         {
             try
             {
@@ -435,7 +436,7 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
         var runnerName = $"{runnerNamePrefix}-{instanceId[..8]}";
 
         var provisioningMode = _state.State.Config.Type == ProvisioningType.Webhook ? "dynamic" : "static";
-        var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host, credential);
+        var envVars = await ComposeEnvironmentVariablesAsync(store, profile, host, deferRegistration ? null : credential);
         envVars["RR_INSTANCE_ID"] = instanceId;
         envVars["RR_RUNNER_NAME"] = runnerName;
 
@@ -453,7 +454,8 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             envVars,
             profile.ExecutionBackend,
             host.Platform);
-        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
+        var registryCred = await RegistryCredentialResolver.ResolveAsync(
+            store, profile.ExecutionBackend, profile.DockerConfig, profile.TartConfig, _logger);
 
         await runnerGrain.Initialize(
             host.Id,
@@ -481,7 +483,8 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             TartConfig = profile.TartConfig,
             Labels = effectiveLabels,
             RunnerGroup = profile.RunnerGroup,
-            Ephemeral = profile.Ephemeral,
+            DeferRegistration = deferRegistration,
+            Ephemeral = deferRegistration || profile.Ephemeral,
             RegistrationToken = registrationToken,
             RunnerUrl = runnerUrl,
             RunnerBasePath = host.RunnerBasePath,
@@ -492,6 +495,13 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             BackendCapacityLimit = CapacityPlanningService.GetBackendLimit(host, profile.ExecutionBackend),
             ProvisioningMode = provisioningMode
         };
+
+        if (deferRegistration)
+            await runnerGrain.ConfigureDeferredRegistration(new DeferredRunnerRegistration
+            {
+                CredentialId = credential?.Id ?? throw new InvalidOperationException("Deferred registration requires a credential."),
+                Labels = effectiveLabels, RunnerGroup = profile.RunnerGroup
+            });
 
         try
         {

@@ -12,13 +12,21 @@ namespace RunnerRunner.Agent.Backends;
 public class TartBackend : IRunnerBackend
 {
     private readonly ILogger<TartBackend> _logger;
+    private readonly Func<string, string, CancellationToken, Task<(int ExitCode, string Output)>> _runCommand;
 
     public ExecutionBackend BackendType => ExecutionBackend.Tart;
 
-    public TartBackend(ILogger<TartBackend> logger)
+    public TartBackend(ILogger<TartBackend> logger) : this(logger, RunProcessCommandAsync) { }
+
+    internal TartBackend(ILogger<TartBackend> logger,
+        Func<string, string, CancellationToken, Task<(int ExitCode, string Output)>> runCommand)
     {
         _logger = logger;
+        _runCommand = runCommand;
     }
+
+    private Task<(int ExitCode, string Output)> RunCommandAsync(string command, string arguments, CancellationToken ct)
+        => _runCommand(command, arguments, ct);
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
@@ -45,8 +53,10 @@ public class TartBackend : IRunnerBackend
 
         // Clone the base image for this runner instance
         _logger.LogInformation("Cloning tart image {Source} → {VM}", sourceImage, vmName);
-        EnsureSuccess(await RunCommandAsync("tart", $"clone {sourceImage} {vmName}", ct),
-            $"tart clone {sourceImage} {vmName}");
+        if (string.IsNullOrEmpty(request.RegistryUsername))
+            EnsureSuccess(await RunCommandAsync("tart", $"clone {sourceImage} {vmName}", ct), "tart clone");
+        else
+            await ClonePrivateImageAsync(sourceImage, vmName, request.RegistryUsername, request.RegistryPassword ?? "", ct);
 
         // Configure VM resources if specified
         if (config.CpuCount.HasValue)
@@ -108,19 +118,22 @@ public class TartBackend : IRunnerBackend
 
     public async Task StopRunnerAsync(string instanceHandle, CancellationToken ct = default)
     {
-        _logger.LogInformation("Stopping tart VM {VM}", instanceHandle);
-
-        // Gracefully stop the VM
-        var stopResult = await RunCommandAsync("tart", $"stop {instanceHandle}", ct);
-        if (stopResult.ExitCode != 0)
-            _logger.LogWarning("tart stop {VM} returned {Code}: {Output}", instanceHandle, stopResult.ExitCode, stopResult.Output);
-
-        // Delete the cloned VM to free disk space
-        var deleteResult = await RunCommandAsync("tart", $"delete {instanceHandle}", ct);
-        if (deleteResult.ExitCode != 0)
-            _logger.LogWarning("tart delete {VM} returned {Code}: {Output}", instanceHandle, deleteResult.ExitCode, deleteResult.Output);
-        else
-            _logger.LogInformation("Tart VM {VM} stopped and deleted", instanceHandle);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(instanceHandle, @"\Arr-[A-Za-z0-9_.-]{1,200}\z"))
+            throw new InvalidOperationException("Refusing unbound or unsafe Tart VM handle.");
+        var vm = (await ListVmsAsync(ct)).SingleOrDefault(v => v.Name == instanceHandle);
+        if (vm is null) return; // A successful, parsed native inventory proves absence.
+        if (vm.IsRunning)
+        {
+            EnsureSuccess(await RunCommandAsync("tart", $"stop {instanceHandle}", ct), "tart stop owned VM");
+            vm = (await ListVmsAsync(ct)).SingleOrDefault(v => v.Name == instanceHandle);
+            if (vm is null) return;
+        }
+        if (!string.Equals(vm.State, "stopped", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Owned Tart VM is not confirmed stopped; capacity retained.");
+        EnsureSuccess(await RunCommandAsync("tart", $"delete {instanceHandle}", ct), "tart delete owned VM");
+        if ((await ListVmsAsync(ct)).Any(v => v.Name == instanceHandle))
+            throw new InvalidOperationException("Owned Tart VM is still present after deletion; capacity retained.");
+        _logger.LogInformation("Tart VM {VM} stopped and deletion verified", instanceHandle);
     }
 
     public async Task<RunnerHealthStatus> GetHealthAsync(string instanceHandle, CancellationToken ct = default)
@@ -175,7 +188,7 @@ public class TartBackend : IRunnerBackend
     internal static List<TartVmInfo> ParseListOutput(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
-            return [];
+            throw new InvalidDataException("Empty Tart inventory is not proof of absent VMs.");
 
         using var doc = JsonDocument.Parse(output);
         var vms = new List<TartVmInfo>();
@@ -183,8 +196,8 @@ public class TartBackend : IRunnerBackend
         {
             var name = GetStringProperty(element, "Name") ?? "";
             var state = GetStringProperty(element, "State") ?? "";
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(state))
+                throw new InvalidDataException("Tart inventory lacks VM identity or state.");
 
             vms.Add(new TartVmInfo(name, state));
         }
@@ -406,8 +419,8 @@ public class TartBackend : IRunnerBackend
 
     private async Task SshExec(string sshUser, string vmIp, string? sshPassword, string script, CancellationToken ct)
     {
-        _logger.LogDebug("SSH exec on {User}@{Ip}: {Script}",
-            sshUser, vmIp, script.Length > 200 ? script[..200] + "..." : script);
+        // Provisioning scripts can contain runner registration tokens.
+        _logger.LogDebug("SSH provisioning on {User}@{Ip}", sshUser, vmIp);
 
         var sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15";
         ProcessStartInfo psi;
@@ -417,16 +430,7 @@ public class TartBackend : IRunnerBackend
             var sshpassPath = ResolveToolPath("sshpass", "/opt/homebrew/bin/sshpass", "/usr/local/bin/sshpass");
             if (!string.IsNullOrWhiteSpace(sshpassPath))
             {
-                var fullCommand = $"{sshpassPath} -p '{EscapeShell(sshPassword)}' ssh {sshOpts} {sshUser}@{vmIp} bash -s";
-                psi = new ProcessStartInfo
-                {
-                    FileName = "/bin/bash",
-                    Arguments = $"-lc \"{fullCommand.Replace("\"", "\\\"")}\"",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    RedirectStandardInput = true
-                };
+                psi = BuildSshpassStartInfo(sshpassPath, sshUser, vmIp, sshPassword);
             }
             else
             {
@@ -492,10 +496,24 @@ public class TartBackend : IRunnerBackend
         var stderr = await process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
 
-        var output = string.IsNullOrEmpty(stderr) ? stdout : $"{stdout}\n{stderr}";
-
+        // Remote diagnostics may echo provisioning scripts or credentials.
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"SSH command failed with exit code {process.ExitCode}: {output.Trim()}");
+            throw new InvalidOperationException($"SSH provisioning failed with exit code {process.ExitCode}.");
+    }
+
+    internal static ProcessStartInfo BuildSshpassStartInfo(string path, string user, string host, string password)
+    {
+        var start = new ProcessStartInfo(path)
+        {
+            UseShellExecute = false, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "-e", "ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+                     $"{user}@{host}", "bash", "-s" })
+            start.ArgumentList.Add(argument);
+        start.Environment["SSHPASS"] = password;
+        return start;
     }
 
     private static string EscapeShell(string value) =>
@@ -507,7 +525,35 @@ public class TartBackend : IRunnerBackend
             throw new InvalidOperationException($"{operation} failed: {result.Output}");
     }
 
-    private static async Task<(int ExitCode, string Output)> RunCommandAsync(
+    internal static ProcessStartInfo BuildPrivateCloneStartInfo(string image, string name, string username, string password)
+    {
+        var separator = image.IndexOf('/');
+        if (separator <= 0 || !Uri.TryCreate("https://" + image[..separator], UriKind.Absolute, out var registry)
+            || registry.HostNameType == UriHostNameType.Unknown || !string.IsNullOrEmpty(registry.UserInfo))
+            throw new InvalidOperationException("Private Tart image must include a registry hostname.");
+        var start = new ProcessStartInfo(ResolveToolPath("tart", "/opt/homebrew/bin/tart", "/usr/local/bin/tart") ?? "tart")
+        { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add("clone"); start.ArgumentList.Add(image); start.ArgumentList.Add(name);
+        start.Environment["TART_REGISTRY_HOSTNAME"] = image[..separator];
+        start.Environment["TART_REGISTRY_USERNAME"] = username;
+        start.Environment["TART_REGISTRY_PASSWORD"] = password;
+        return start;
+    }
+
+    private static async Task ClonePrivateImageAsync(string image, string name, string username, string password, CancellationToken ct)
+    {
+        using var process = Process.Start(BuildPrivateCloneStartInfo(image, name, username, password))
+            ?? throw new InvalidOperationException("Tart clone could not start.");
+        // Drain both pipes concurrently; neither registry diagnostics nor credentials enter logs.
+        var output = process.StandardOutput.ReadToEndAsync(ct);
+        var error = process.StandardError.ReadToEndAsync(ct);
+        try { await process.WaitForExitAsync(ct); await Task.WhenAll(output, error); }
+        catch (OperationCanceledException) { TryKillCanceledProcess(process); throw; }
+        if (process.ExitCode != 0) throw new InvalidOperationException("Private Tart image pull/clone failed.");
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunProcessCommandAsync(
+
         string command, string arguments, CancellationToken ct)
     {
         if (string.Equals(command, "tart", StringComparison.OrdinalIgnoreCase))

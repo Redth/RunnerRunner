@@ -18,6 +18,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
     private readonly HostWorkerLogPublisher _logPublisher;
     private readonly ILogger<HostWorkerConnectionService> _logger;
     private readonly HostResourceUsageCollector _resourceUsageCollector;
+    private readonly WindowsJobDockerService _jobDocker;
     private readonly Channel<HostWorkerMessage> _outbound = Channel.CreateBounded<HostWorkerMessage>(
         new BoundedChannelOptions(1_000)
         {
@@ -34,7 +35,8 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         RunnerLifecycleManager lifecycleManager,
         HostWorkerLogPublisher logPublisher,
         ILogger<HostWorkerConnectionService> logger,
-        HostResourceUsageCollector resourceUsageCollector)
+        HostResourceUsageCollector resourceUsageCollector,
+        WindowsJobDockerService jobDocker)
     {
         _configuration = configuration;
         _identity = identity;
@@ -43,6 +45,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         _logPublisher = logPublisher;
         _logger = logger;
         _resourceUsageCollector = resourceUsageCollector;
+        _jobDocker = jobDocker;
         _processor.AttachEventSink(this);
         _logPublisher.AttachEventSink(this);
     }
@@ -52,6 +55,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await _jobDocker.WaitForReadyAsync(stoppingToken);
         var serverUrl = _configuration["HostWorker:ServerUrl"];
         if (string.IsNullOrWhiteSpace(serverUrl))
         {
@@ -99,15 +103,15 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         var receiveLoop = ReceiveLoopAsync(call.ResponseStream, linkedCts.Token);
         var heartbeatLoop = HeartbeatLoopAsync(linkedCts.Token);
 
-        var completed = await Task.WhenAny(sendLoop, receiveLoop, heartbeatLoop);
-        linkedCts.Cancel();
-
         try
         {
+            await _processor.ReplayCleanupReceiptsAsync(linkedCts.Token);
+            var completed = await Task.WhenAny(sendLoop, receiveLoop, heartbeatLoop);
             await completed;
         }
         finally
         {
+            linkedCts.Cancel();
             try
             {
                 await Task.WhenAll(sendLoop, receiveLoop, heartbeatLoop);
@@ -120,9 +124,10 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
 
     private GrpcChannelOptions CreateGrpcChannelOptions(string serverUrl)
     {
+        var handler = HostWorkerServerTrust.CreateHandler(_configuration, serverUrl);
         var proxyUrl = ResolveProxyUrl(serverUrl);
         if (string.IsNullOrWhiteSpace(proxyUrl))
-            return new GrpcChannelOptions();
+            return new GrpcChannelOptions { HttpHandler = handler };
 
         var proxy = new WebProxy(proxyUrl)
         {
@@ -132,14 +137,9 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         if (bypassList.Length > 0)
             proxy.BypassList = bypassList;
 
-        return new GrpcChannelOptions
-        {
-            HttpHandler = new SocketsHttpHandler
-            {
-                UseProxy = true,
-                Proxy = proxy
-            }
-        };
+        handler.UseProxy = true;
+        handler.Proxy = proxy;
+        return new GrpcChannelOptions { HttpHandler = handler };
     }
 
     private string? ResolveProxyUrl(string serverUrl)
@@ -176,6 +176,12 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
             if (message.Kind == HostWorkerMessageKinds.Command)
             {
                 await _processor.EnqueueAsync(message, ct);
+                continue;
+            }
+
+            if (message.Kind == HostWorkerMessageKinds.CleanupReceiptAccepted)
+            {
+                _processor.AcknowledgeCleanup(HostWorkerProtocol.DeserializePayload<RunnerStoppedEvent>(message));
                 continue;
             }
 
@@ -218,7 +224,7 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
                 AgentVersion = buildInfo.InformationalVersion,
                 AgentCommitSha = buildInfo.CommitSha,
                 AgentBuildTag = buildInfo.BuildTag,
-                Capabilities = capabilities.ToList(),
+                Capabilities = capabilities.Append("durable-ownership-v1").ToList(),
                 Runtime = HostWorkerRuntimeDetector.Detect(_configuration)
             },
             EnrollmentToken = _configuration["HostWorker:EnrollmentToken"],

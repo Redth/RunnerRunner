@@ -261,6 +261,8 @@
                         <input class="form-control" @bind="dockerTag" placeholder="latest" />
                     </div>
                     <div class="col-md-3 mb-3">
+                        <label><input type="checkbox" @bind="dockerHyperV" /> Hyper-V isolation (Windows)</label>
+                        <label><input type="checkbox" @bind="dockerPrepare" /> Readiness before GitHub registration (Windows, budgeted host)</label>
                         <label class="form-label">Pull Policy</label>
                         <select class="form-select" @bind="dockerPullPolicy">
                             @foreach (var p in Enum.GetValues<PullPolicy>())
@@ -270,6 +272,16 @@
                         </select>
                     </div>
                 </div>
+            }
+
+            @if (editProfile.ExecutionBackend == ExecutionBackend.Docker)
+            {
+                <div class="row">
+                    <div class="col-md-4 mb-3"><label class="form-label">CPU count</label><input type="number" class="form-control" min="1" @bind="dockerCpu" /></div>
+                    <div class="col-md-4 mb-3"><label class="form-label">Memory (MiB)</label><input type="number" class="form-control" min="1" @bind="dockerMemory" /></div>
+                    <div class="col-md-4 mb-3"><label class="form-label">Windows writable disk (GiB)</label><input type="number" class="form-control" min="1" @bind="dockerDisk" /></div>
+                </div>
+                <p class="text-muted">Windows jobs require all three limits and use Hyper-V isolation.</p>
             }
 
             @* Tart Image Config *@
@@ -814,6 +826,11 @@
     private string dockerImage = "";
     private string dockerTag = "latest";
     private PullPolicy dockerPullPolicy = PullPolicy.IfNotPresent;
+    private bool dockerHyperV;
+    private bool dockerPrepare;
+    private int? dockerCpu;
+    private int? dockerMemory;
+    private int? dockerDisk;
 
     // Tart config fields
     private string tartRegistry = "ghcr.io";
@@ -903,6 +920,10 @@
             dockerImage = profile.DockerConfig.ImageName;
             dockerTag = profile.DockerConfig.Tag;
             dockerPullPolicy = profile.DockerConfig.PullPolicy;
+            dockerHyperV = profile.DockerConfig.HyperVIsolation; dockerPrepare = profile.DockerConfig.PrepareBeforeRegistration;
+            dockerCpu = profile.DockerConfig.CpuCount;
+            dockerMemory = profile.DockerConfig.MemorySizeMb;
+            dockerDisk = profile.DockerConfig.DiskSizeGb;
         }
         if (profile.TartConfig is not null)
         {
@@ -1001,7 +1022,11 @@
                 RegistryUrl = dockerRegistry,
                 ImageName = dockerImage,
                 Tag = dockerTag,
-                PullPolicy = dockerPullPolicy
+                PullPolicy = dockerPullPolicy,
+                HyperVIsolation = dockerHyperV, PrepareBeforeRegistration = dockerPrepare,
+                CpuCount = dockerCpu,
+                MemorySizeMb = dockerMemory,
+                DiskSizeGb = dockerDisk
             };
             editProfile.TartConfig = null;
         }
@@ -1181,6 +1206,7 @@
     {
         dockerRegistry = "ghcr.io"; dockerImage = ""; dockerTag = "latest";
         dockerPullPolicy = PullPolicy.IfNotPresent;
+        dockerCpu = null; dockerMemory = null; dockerDisk = null; dockerHyperV = false; dockerPrepare = false;
         tartRegistry = "ghcr.io"; tartImage = ""; tartTag = "latest";
         tartCpu = null; tartMemory = null; tartDisk = null; tartDisplay = ""; tartSshUser = "admin"; tartSshPassword = "";
     }

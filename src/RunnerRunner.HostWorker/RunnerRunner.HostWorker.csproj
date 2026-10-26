@@ -23,4 +23,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="RunnerRunner.HostWorker.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../deploy/windows/JobDockerFirewall.ps1" Link="JobDockerFirewall.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../deploy/windows/JobDockerGatewayStartup.ps1" Link="JobDockerGatewayStartup.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

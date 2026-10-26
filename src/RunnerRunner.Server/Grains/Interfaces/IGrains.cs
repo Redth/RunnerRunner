@@ -45,6 +45,8 @@ public interface IRunnerInstanceGrain : IGrainWithStringKey
 {
     Task<RunnerInstanceGrainState> GetState();
     Task Initialize(string hostId, string profileId, string runnerName, string provisioningMode, string? jobId = null, string? webhookEventId = null, string? provisioningRuleId = null, string? imageTagOverride = null, string? runnerDefinitionId = null);
+    Task ConfigureDeferredRegistration(DeferredRunnerRegistration registration);
+    Task ActivatePrepared(string hostId, RunnerStartedEvent prepared);
     Task MarkDeployed();
     Task MarkStarting(string? statusMessage = null);
     Task MarkRunning(string? containerId = null, string? vmName = null, int? processId = null, string? statusMessage = null);
@@ -52,7 +54,7 @@ public interface IRunnerInstanceGrain : IGrainWithStringKey
     Task MarkStopped();
     Task MarkFailed(string error);
     Task MarkCrashed(string reason);
-    Task UpdateHealth(string? statusMessage = null);
+    Task UpdateHealth(string? statusMessage = null, RunnerInstanceStatus? observedStatus = null);
     Task UpdateStatusMessage(string message);
 
     /// <summary>

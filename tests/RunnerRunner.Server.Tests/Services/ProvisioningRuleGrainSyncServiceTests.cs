@@ -163,11 +163,13 @@ public class ProvisioningRuleGrainSyncServiceTests
         });
 
         var setConfigCalls = 0;
+        var retried = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         grain.SetConfig(Arg.Any<ProvisioningRuleConfig>()).Returns(_ =>
         {
             if (Interlocked.Increment(ref setConfigCalls) == 1)
                 return Task.FromException(new TimeoutException("Orleans membership is still warming up"));
 
+            retried.TrySetResult();
             return Task.CompletedTask;
         });
 
@@ -185,8 +187,15 @@ public class ProvisioningRuleGrainSyncServiceTests
             TimeSpan.FromMilliseconds(10));
 
         await startupSync.StartAsync(CancellationToken.None);
-        await WaitUntilAsync(() => Volatile.Read(ref setConfigCalls) >= 2);
-        await startupSync.StopAsync(CancellationToken.None);
+        try
+        {
+            // Observe the retry itself; coverage on shared runners can delay its scheduling.
+            await retried.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            await startupSync.StopAsync(CancellationToken.None);
+        }
 
         await grain.Received(2).SetConfig(Arg.Any<ProvisioningRuleConfig>());
     }
@@ -199,18 +208,4 @@ public class ProvisioningRuleGrainSyncServiceTests
             NullLogger<ProvisioningRuleGrainSyncService>.Instance), grainFactory);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-                return;
-
-            await Task.Delay(10);
-        }
-
-        Assert.True(condition());
-    }
 }

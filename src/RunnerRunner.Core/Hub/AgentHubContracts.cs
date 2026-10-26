@@ -112,6 +112,9 @@ public class DeployRunnerCommand
     /// </summary>
     [Id(21)]
     public int? BackendCapacityLimit { get; set; }
+
+    [Id(22)]
+    public bool DeferRegistration { get; set; }
 }
 
 [GenerateSerializer]
@@ -134,7 +137,8 @@ public enum HostCommandKind
     DeleteImage = 5,
     GetHostLogs = 6,
     GetRunnerLogs = 7,
-    ApplyHostWorkerUpdate = 8
+    ApplyHostWorkerUpdate = 8,
+    ActivateRunner = 9
 }
 
 [GenerateSerializer]
@@ -169,6 +173,9 @@ public sealed class HostCommandEnvelope
 
     [Id(9)]
     public HostWorkerUpdateCommand? ApplyHostWorkerUpdate { get; set; }
+
+    [Id(10)]
+    public ActivateRunnerCommand? ActivateRunner { get; set; }
 }
 
 [GenerateSerializer]
@@ -285,6 +292,17 @@ public class RunnerStoppedEvent
     public required string Reason { get; set; }
     [Id(2)]
     public string? ErrorMessage { get; set; }
+    [Id(3)]
+    public bool CleanupConfirmed { get; set; }
+    [Id(4)]
+    public ExecutionBackend? Backend { get; set; }
+    [Id(5)]
+    public string? InstanceHandle { get; set; }
+    [Id(6)]
+    public bool NeverStarted { get; set; }
+
+    [Id(7)]
+    public string? CleanupReceiptId { get; set; }
 }
 
 [GenerateSerializer]

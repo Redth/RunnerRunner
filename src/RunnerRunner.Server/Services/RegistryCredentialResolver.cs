@@ -4,7 +4,7 @@ using RunnerRunner.Core.Models;
 namespace RunnerRunner.Server.Services;
 
 /// <summary>
-/// Resolves registry credentials for Docker image pulls.
+/// Resolves registry credentials for the selected Docker or Tart image backend.
 /// Matches credentials by explicit CredentialId first, then by registry URL + namespace.
 /// </summary>
 public static class RegistryCredentialResolver
@@ -15,22 +15,33 @@ public static class RegistryCredentialResolver
     /// </summary>
     public static async Task<RegistryCredential?> ResolveAsync(
         IDocumentStore store,
+        ExecutionBackend backend,
         DockerImageConfig? dockerConfig,
+        TartImageConfig? tartConfig,
         ILogger? logger = null)
     {
-        if (dockerConfig == null)
+        var registryType = backend == ExecutionBackend.Tart ? RegistryType.Tart : RegistryType.Docker;
+        var registryUrl = backend switch
+        {
+            ExecutionBackend.Docker => dockerConfig?.RegistryUrl,
+            ExecutionBackend.Tart => tartConfig?.RegistryUrl,
+            _ => null
+        };
+        if (string.IsNullOrWhiteSpace(registryUrl))
             return null;
+        var normalizedRegistry = NormalizeRegistryUrl(registryUrl);
+        var imageName = (backend == ExecutionBackend.Tart ? tartConfig?.ImageName : dockerConfig?.ImageName)?.Trim('/') ?? "";
+        var credentialId = backend == ExecutionBackend.Docker ? dockerConfig?.CredentialId : null;
 
         // 1. Explicit credential binding via CredentialId
-        if (!string.IsNullOrEmpty(dockerConfig.CredentialId))
+        if (!string.IsNullOrEmpty(credentialId))
         {
-            var credential = await store.Get<RegistryCredential>(dockerConfig.CredentialId);
-            if (credential != null)
-            {
-                logger?.LogDebug("Resolved registry credential by CredentialId: {Id}", dockerConfig.CredentialId);
-                return credential;
-            }
-            logger?.LogWarning("DockerConfig references CredentialId {Id} but credential not found", dockerConfig.CredentialId);
+            var credential = await store.Get<RegistryCredential>(credentialId);
+            if (credential == null || credential.RegistryType != registryType ||
+                !NormalizeRegistryUrl(credential.RegistryUrl).Equals(normalizedRegistry, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Explicit registry credential does not match the image registry and backend.");
+            logger?.LogDebug("Resolved registry credential by CredentialId: {Id}", credentialId);
+            return credential;
         }
 
         // 2. Match by registry URL and image namespace
@@ -38,12 +49,9 @@ public static class RegistryCredentialResolver
         if (allCredentials.Count == 0)
             return null;
 
-        var normalizedRegistry = NormalizeRegistryUrl(dockerConfig.RegistryUrl);
-        var imageName = dockerConfig.ImageName?.Trim('/') ?? "";
-
-        // Filter to credentials matching the registry URL
+        // Docker and Tart may share a hostname while having different credentials.
         var registryMatches = allCredentials
-            .Where(c => !string.IsNullOrEmpty(c.RegistryUrl) &&
+            .Where(c => c.RegistryType == registryType && !string.IsNullOrEmpty(c.RegistryUrl) &&
                         NormalizeRegistryUrl(c.RegistryUrl).Equals(normalizedRegistry, StringComparison.OrdinalIgnoreCase))
             .ToList();
 

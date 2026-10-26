@@ -12,12 +12,13 @@ namespace RunnerRunner.Agent.Backends;
 /// Execution backend that runs runner instances as Docker containers.
 /// Used primarily for Linux hosts where container overhead is minimal.
 /// </summary>
-public class DockerBackend : IRunnerBackend
+public partial class DockerBackend : IRunnerBackend, IRecoverableRunnerBackend, IStagedRunnerBackend
 {
     private readonly ILogger<DockerBackend> _logger;
     private readonly DockerClient _client;
     private readonly Uri _endpoint;
     private readonly bool _hasDockerHint;
+    private readonly IWindowsJobDocker? _jobDocker;
     private readonly TimeSpan _availabilityCacheWindow = TimeSpan.FromSeconds(30);
     private DateTime _lastAvailabilityCheckUtc = DateTime.MinValue;
     private bool _cachedAvailability;
@@ -25,13 +26,17 @@ public class DockerBackend : IRunnerBackend
     public ExecutionBackend BackendType => ExecutionBackend.Docker;
     public DockerClient GetClient() => _client;
 
-    public DockerBackend(ILogger<DockerBackend> logger)
+    public DockerBackend(ILogger<DockerBackend> logger, IWindowsJobDocker? jobDocker = null)
     {
         _logger = logger;
+        _jobDocker = jobDocker;
         _hasDockerHint = HasDockerInstallHint();
         _endpoint = ResolveDockerEndpoint();
         _client = new DockerClientConfiguration(_endpoint).CreateClient();
     }
+
+    internal static ImagesCreateParameters BuildPullParameters(DockerImageConfig config) =>
+        new() { FromImage = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag) };
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
@@ -58,11 +63,17 @@ public class DockerBackend : IRunnerBackend
 
     public async Task<RunnerInstanceInfo> StartRunnerAsync(RunnerStartRequest request, CancellationToken ct = default)
     {
+        var ownership = request.Ownership;
+        if (ownership is not null && (request.BeforeNativeCreate is null || request.NativeCreated is null))
+            throw new InvalidOperationException("Owned Docker requests require durable creation boundaries.");
+        if (ownership is not null && (ownership.InstanceId != request.InstanceId || ownership.RunnerName != request.RunnerName))
+            throw new InvalidOperationException("Docker request differs from durable ownership.");
+        if (request.DeferRegistration && ownership is null)
+            throw new InvalidOperationException("Prepared startup requires durable ownership.");
         var config = request.DockerConfig
             ?? throw new InvalidOperationException("DockerConfig is required for Docker backend");
 
         var imageName = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag);
-        var repository = ImageReference.BuildRepository(config.RegistryUrl, config.ImageName);
 
         // Pull image if needed
         if (config.PullPolicy == PullPolicy.Always ||
@@ -80,14 +91,34 @@ public class DockerBackend : IRunnerBackend
                 _logger.LogInformation("Using registry credentials (user: {User}) for image pull", request.RegistryUsername);
             }
             await _client.Images.CreateImageAsync(
-                new ImagesCreateParameters { FromImage = repository, Tag = config.Tag },
+                BuildPullParameters(config),
                 authConfig, new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)), ct);
         }
+
+        // Require the actual image platform before selecting isolation and resource controls.
+        var runtimeImage = await _client.Images.InspectImageAsync(imageName, ct);
+        if (request.DeferRegistration) ValidatePreparedRequest(request, runtimeImage.Os);
+        var hostConfig = BuildHostConfig(config, IsWindowsContainerImage(runtimeImage.Os), request.Ephemeral || request.DeferRegistration || !string.IsNullOrEmpty(request.JitConfig));
+        if (ownership is not null && (ownership.CpuCount != config.CpuCount || ownership.MemoryMiB != config.MemorySizeMb || ownership.DiskGiB != config.DiskSizeGb || ownership.HyperVIsolation != config.HyperVIsolation))
+            throw new InvalidOperationException("Docker resource limits differ from durable ownership.");
+        if (ownership is not null) ownership = ownership with { ImageId = runtimeImage.ID, Platform = runtimeImage.Os };
 
         // Build environment variables
         var envVars = request.EnvironmentVariables
             .Select(kvp => $"{kvp.Key}={kvp.Value}")
             .ToList();
+
+        if (_jobDocker is not null && request.DeferRegistration)
+        {
+            if (request.EnvironmentVariables.Keys.Any(k => k.StartsWith("DOCKER_", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Job Docker settings are owned by the host.");
+            foreach (var pair in _jobDocker.Environment)
+            {
+                if (request.EnvironmentVariables.Keys.Any(k => string.Equals(k, pair.Key, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("Job Docker environment is owned by the host.");
+                envVars.Add($"{pair.Key}={pair.Value}");
+            }
+        }
 
         // Add RunnerRunner identity env vars
         envVars.Add($"RR_INSTANCE_ID={request.InstanceId}");
@@ -152,26 +183,19 @@ public class DockerBackend : IRunnerBackend
         // Create and start container with RunnerRunner labels for tracking
         var createParams = new CreateContainerParameters
         {
-            Image = imageName,
-            Name = $"rr-{request.RunnerName}",
+            Image = runtimeImage.ID,
+            Name = ownership?.NativeName ?? $"rr-{request.RunnerName}",
             Env = envVars,
             Labels = new Dictionary<string, string>
             {
                 ["runnerrunner.managed"] = "true",
                 ["runnerrunner.instance-id"] = request.InstanceId,
                 ["runnerrunner.runner-name"] = request.RunnerName,
-                ["runnerrunner.profile-id"] = request.InstanceId.Split('-').FirstOrDefault() ?? ""
+                ["runnerrunner.profile-id"] = ownership?.ProfileId ?? request.InstanceId,
+                ["runnerrunner.host-id"] = ownership?.HostId ?? "",
+                ["runnerrunner.intent-id"] = ownership?.IntentId ?? ""
             },
-            HostConfig = new HostConfig
-            {
-                // Keep managed containers until RunnerRunner explicitly removes them so
-                // reconciliation and logs can distinguish "exited" from "never existed".
-                AutoRemove = false,
-                Binds = null,
-                RestartPolicy = request.Ephemeral
-                    ? new RestartPolicy { Name = RestartPolicyKind.No }
-                    : new RestartPolicy { Name = RestartPolicyKind.UnlessStopped }
-            }
+            HostConfig = hostConfig
         };
 
         // JIT mode: inspect image for original entrypoint, then override with
@@ -196,7 +220,17 @@ public class DockerBackend : IRunnerBackend
                 imageName, isWindowsContainer ? "Windows" : "Linux", request.InitSteps.Count);
         }
 
+        if (request.DeferRegistration)
+        {
+            createParams.Entrypoint = BuildPreparedWindowsEntrypoint(ownership!.IntentId, request.InitSteps);
+            createParams.Cmd = [];
+        }
+
+        // Commit the immutable image/platform before the daemon can create anything.
+        // If Create's response is lost, the nonce-labelled deterministic name is recoverable.
+        if (ownership is not null) request.BeforeNativeCreate!(ownership);
         var createResponse = await _client.Containers.CreateContainerAsync(createParams, ct);
+        request.NativeCreated?.Invoke(createResponse.ID);
 
         // Copy the job-started hook script into the container filesystem.
         // This avoids any dependency on host-side paths being visible to dockerd.
@@ -221,29 +255,85 @@ public class DockerBackend : IRunnerBackend
             }
         }
 
-        await _client.Containers.StartContainerAsync(createResponse.ID, null, ct);
+        if (!await _client.Containers.StartContainerAsync(createResponse.ID, null, ct))
+            throw new InvalidOperationException("Docker did not acknowledge container startup; ownership retained.");
+
+        if (request.DeferRegistration)
+        {
+            if (_jobDocker is not null)
+                await PrepareJobDockerAsync(createResponse.ID, ownership!, ct);
+            await CheckPreparedWindowsAsync(createResponse.ID, request, ct);
+        }
 
         _logger.LogInformation("Container {ContainerId} started for runner {RunnerName}",
             createResponse.ID[..12], request.RunnerName);
 
         return new RunnerInstanceInfo
         {
+            Prepared = request.DeferRegistration,
             InstanceHandle = createResponse.ID,
             RunnerName = request.RunnerName
         };
     }
 
-    public async Task StopRunnerAsync(string instanceHandle, CancellationToken ct = default)
+    public async Task<NativeRunnerObservation> InspectOwnedAsync(NativeRunnerOwnership ownership, string? handle, CancellationToken ct)
     {
-        _logger.LogInformation("Stopping container {ContainerId}", instanceHandle[..12]);
-
-        // Send SIGTERM first for graceful runner deregistration
-        await _client.Containers.StopContainerAsync(instanceHandle,
-            new ContainerStopParameters { WaitBeforeKillSeconds = 30 }, ct);
-
-        // Remove the container
         try
         {
+            var inspect = await _client.Containers.InspectContainerAsync(handle ?? ownership.NativeName, ct);
+            return ObserveOwned(inspect, ownership, handle);
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            // A missing name after a lost Create response is uncertain: the daemon
+            // may still commit that request. Only a recorded immutable ID proves absence.
+            return new(handle is null ? NativeRunnerState.Unknown : NativeRunnerState.Absent, handle);
+        }
+    }
+
+    internal static NativeRunnerObservation ObserveOwned(ContainerInspectResponse inspect, NativeRunnerOwnership ownership, string? handle)
+    {
+        var labels = inspect.Config?.Labels;
+        bool Label(string key, string value) => labels?.TryGetValue(key, out var actual) == true && actual == value;
+        if (string.IsNullOrWhiteSpace(ownership.ImageId) || string.IsNullOrWhiteSpace(ownership.IntentId)
+            || string.IsNullOrWhiteSpace(ownership.HostId) || string.IsNullOrWhiteSpace(inspect.ID)
+            || (handle is not null && inspect.ID != handle) || inspect.Name != "/" + ownership.NativeName
+            || inspect.Image != ownership.ImageId || inspect.Platform != ownership.Platform
+            || !Label("runnerrunner.managed", "true") || !Label("runnerrunner.host-id", ownership.HostId)
+            || !Label("runnerrunner.intent-id", ownership.IntentId) || !Label("runnerrunner.instance-id", ownership.InstanceId)
+            || !Label("runnerrunner.profile-id", ownership.ProfileId) || !Label("runnerrunner.runner-name", ownership.RunnerName))
+            throw new InvalidOperationException("Native Docker identity does not match the durable ownership claim.");
+        var host = inspect.HostConfig ?? throw new InvalidOperationException("Docker resource controls are missing.");
+        var windows = IsWindowsContainerImage(ownership.Platform);
+        var diskMatches = ownership.DiskGiB is null || (host.StorageOpt?.TryGetValue("size", out var diskSize) == true && diskSize == $"{ownership.DiskGiB}G");
+        var isolationMatches = ownership.HyperVIsolation ? host.Isolation == "hyperv" : host.Isolation is null or "" or "default" or "process" or "hyperv";
+        if (host.AutoRemove || host.Privileged || host.Binds?.Count > 0
+            || !diskMatches
+            || (windows && (!isolationMatches || host.CPUCount != (ownership.CpuCount ?? 0)))
+            || (!windows && ownership.CpuCount is { } cpu && host.NanoCPUs != (long)cpu * 1_000_000_000)
+            || (ownership.MemoryMiB is { } memory && host.Memory != (long)memory * 1024 * 1024))
+            throw new InvalidOperationException("Native Docker resource controls differ from the owned deployment.");
+        var state = inspect.State;
+        if (state is null || state.Paused || state.Restarting) return new(NativeRunnerState.Unknown, inspect.ID);
+        return state.Status switch
+        {
+            "running" when state.Running => new(NativeRunnerState.Running, inspect.ID),
+            "created" when !state.Running => new(NativeRunnerState.Created, inspect.ID),
+            "exited" or "dead" when !state.Running => new(NativeRunnerState.Exited, inspect.ID, state.ExitCode),
+            _ => new(NativeRunnerState.Unknown, inspect.ID)
+        };
+    }
+
+    public async Task StopRunnerAsync(string instanceHandle, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Stopping container {ContainerId}", instanceHandle[..Math.Min(instanceHandle.Length, 12)]);
+
+        try
+        {
+            // An authenticated not-found response also confirms that no container
+            // remains. Other transport/daemon failures must retain lifecycle ownership.
+            await _client.Containers.StopContainerAsync(instanceHandle,
+                new ContainerStopParameters { WaitBeforeKillSeconds = 30 }, ct);
             await _client.Containers.RemoveContainerAsync(instanceHandle,
                 new ContainerRemoveParameters { Force = true }, ct);
         }
@@ -261,7 +351,9 @@ public class DockerBackend : IRunnerBackend
             return new RunnerHealthStatus
             {
                 IsRunning = inspect.State.Running,
-                Status = inspect.State.Status
+                Status = inspect.State.Status == "exited"
+                    ? $"exited:{inspect.State.ExitCode}"
+                    : inspect.State.Status
             };
         }
         catch (DockerContainerNotFoundException)
@@ -647,6 +739,34 @@ public class DockerBackend : IRunnerBackend
             || File.Exists("/opt/homebrew/bin/docker")
             || File.Exists("/var/run/docker.sock")
             || File.Exists(Path.Combine(home, ".docker", "run", "docker.sock"));
+    }
+
+    internal static HostConfig BuildHostConfig(DockerImageConfig config, bool isWindows, bool ephemeral)
+    {
+        if (config.CpuCount is <= 0 || config.MemorySizeMb is <= 0 || config.DiskSizeGb is <= 0)
+            throw new InvalidOperationException("Container resource limits must be positive when supplied.");
+        if (!isWindows && config.HyperVIsolation)
+            throw new InvalidOperationException("Hyper-V isolation requires a Windows container image.");
+
+        var result = new HostConfig
+        {
+            AutoRemove = false,
+            Binds = null,
+            RestartPolicy = new RestartPolicy { Name = ephemeral ? RestartPolicyKind.No : RestartPolicyKind.UnlessStopped },
+            Memory = config.MemorySizeMb is int memory ? checked((long)memory * 1024 * 1024) : 0
+        };
+        if (isWindows)
+        {
+            result.Isolation = config.HyperVIsolation ? "hyperv" : "default";
+            result.CPUCount = config.CpuCount ?? 0;
+        }
+        else if (config.CpuCount is int cpu)
+        {
+            result.NanoCPUs = checked((long)cpu * 1_000_000_000);
+        }
+        if (config.DiskSizeGb is int disk)
+            result.StorageOpt = new Dictionary<string, string> { ["size"] = disk.ToString(System.Globalization.CultureInfo.InvariantCulture) + "G" };
+        return result;
     }
 
     private static Uri ResolveDockerEndpoint()
