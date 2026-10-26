@@ -4,6 +4,21 @@ namespace RunnerRunner.Agent.Tests.Backends;
 
 public class TartBackendTests
 {
+    [Theory]
+    [InlineData("ghcr.io/example/runner:latest", "ghcr.io")]
+    [InlineData("localhost:5000/example/runner:latest", "localhost:5000")]
+    public void PrivateCloneScopesCredentialsToChildEnvironment(string image, string host)
+    {
+        var start = TartBackend.BuildPrivateCloneStartInfo(image, "rr-fixture", "fixture-user", "fixture-secret");
+        Assert.False(start.UseShellExecute);
+        Assert.Equal(new[] { "clone", image, "rr-fixture" }, start.ArgumentList);
+        Assert.Equal(host, start.Environment["TART_REGISTRY_HOSTNAME"]);
+        Assert.Equal("fixture-user", start.Environment["TART_REGISTRY_USERNAME"]);
+        Assert.Equal("fixture-secret", start.Environment["TART_REGISTRY_PASSWORD"]);
+        Assert.DoesNotContain("fixture-secret", start.Arguments);
+        Assert.DoesNotContain("fixture-secret", string.Join(" ", start.ArgumentList));
+    }
+
     [Fact]
     public void ParseListOutput_ParsesRunningAndStoppedVms()
     {

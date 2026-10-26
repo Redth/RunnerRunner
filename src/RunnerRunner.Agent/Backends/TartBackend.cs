@@ -45,8 +45,10 @@ public class TartBackend : IRunnerBackend
 
         // Clone the base image for this runner instance
         _logger.LogInformation("Cloning tart image {Source} → {VM}", sourceImage, vmName);
-        EnsureSuccess(await RunCommandAsync("tart", $"clone {sourceImage} {vmName}", ct),
-            $"tart clone {sourceImage} {vmName}");
+        if (string.IsNullOrEmpty(request.RegistryUsername))
+            EnsureSuccess(await RunCommandAsync("tart", $"clone {sourceImage} {vmName}", ct), "tart clone");
+        else
+            await ClonePrivateImageAsync(sourceImage, vmName, request.RegistryUsername, request.RegistryPassword ?? "", ct);
 
         // Configure VM resources if specified
         if (config.CpuCount.HasValue)
@@ -505,6 +507,33 @@ public class TartBackend : IRunnerBackend
     {
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"{operation} failed: {result.Output}");
+    }
+
+    internal static ProcessStartInfo BuildPrivateCloneStartInfo(string image, string name, string username, string password)
+    {
+        var separator = image.IndexOf('/');
+        if (separator <= 0 || !Uri.TryCreate("https://" + image[..separator], UriKind.Absolute, out var registry)
+            || registry.HostNameType == UriHostNameType.Unknown || !string.IsNullOrEmpty(registry.UserInfo))
+            throw new InvalidOperationException("Private Tart image must include a registry hostname.");
+        var start = new ProcessStartInfo(ResolveToolPath("tart", "/opt/homebrew/bin/tart", "/usr/local/bin/tart") ?? "tart")
+        { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add("clone"); start.ArgumentList.Add(image); start.ArgumentList.Add(name);
+        start.Environment["TART_REGISTRY_HOSTNAME"] = image[..separator];
+        start.Environment["TART_REGISTRY_USERNAME"] = username;
+        start.Environment["TART_REGISTRY_PASSWORD"] = password;
+        return start;
+    }
+
+    private static async Task ClonePrivateImageAsync(string image, string name, string username, string password, CancellationToken ct)
+    {
+        using var process = Process.Start(BuildPrivateCloneStartInfo(image, name, username, password))
+            ?? throw new InvalidOperationException("Tart clone could not start.");
+        // Drain both pipes concurrently; neither registry diagnostics nor credentials enter logs.
+        var output = process.StandardOutput.ReadToEndAsync(ct);
+        var error = process.StandardError.ReadToEndAsync(ct);
+        try { await process.WaitForExitAsync(ct); await Task.WhenAll(output, error); }
+        catch (OperationCanceledException) { TryKillCanceledProcess(process); throw; }
+        if (process.ExitCode != 0) throw new InvalidOperationException("Private Tart image pull/clone failed.");
     }
 
     private static async Task<(int ExitCode, string Output)> RunCommandAsync(
