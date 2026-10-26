@@ -16,6 +16,7 @@ internal sealed class HostCommandProcessor : BackgroundService
     private readonly RunnerLifecycleManager _lifecycleManager;
     private readonly ImageManager _imageManager;
     private readonly HostWorkerPaths _paths;
+    private readonly DeploymentIntentStore _deploymentIntents;
     private readonly HostWorkerLocalLogStore _logStore;
     private readonly HostWorkerSelfUpdater _selfUpdater;
     private readonly HostResourceUsageCollector _resourceUsageCollector;
@@ -32,6 +33,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         });
     private IHostWorkerEventSink? _eventSink;
     private long _sequence;
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
 
     public HostCommandProcessor(
         IConfiguration configuration,
@@ -43,7 +45,8 @@ internal sealed class HostCommandProcessor : BackgroundService
         HostWorkerSelfUpdater selfUpdater,
         HostResourceUsageCollector resourceUsageCollector,
         ILogger<HostCommandProcessor> logger,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        WindowsJobDockerService? jobDocker = null)
         : this(
             configuration,
             identity,
@@ -55,7 +58,7 @@ internal sealed class HostCommandProcessor : BackgroundService
             resourceUsageCollector,
             logger,
             loggerFactory,
-            dockerBackend: null,
+            dockerBackend: new DockerBackend(loggerFactory.CreateLogger<DockerBackend>(), jobDocker?.Enabled == true ? jobDocker : null),
             tartBackend: null,
             nativeBackend: null)
     {
@@ -81,6 +84,7 @@ internal sealed class HostCommandProcessor : BackgroundService
         _lifecycleManager = lifecycleManager;
         _imageManager = imageManager;
         _paths = paths;
+        _deploymentIntents = new DeploymentIntentStore(paths, identity.HostId);
         _logStore = logStore;
         _selfUpdater = selfUpdater;
         _resourceUsageCollector = resourceUsageCollector;
@@ -107,6 +111,7 @@ internal sealed class HostCommandProcessor : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await RecoverOwnedRunnersAsync(stoppingToken);
         var healthLoop = RunHealthLoopAsync(stoppingToken);
 
         await foreach (var message in _queue.Reader.ReadAllAsync(stoppingToken))
@@ -141,75 +146,82 @@ internal sealed class HostCommandProcessor : BackgroundService
 
     internal async Task ProcessCommandAsync(HostWorkerMessage message, CancellationToken ct)
     {
-        var envelope = HostWorkerProtocol.DeserializeCommand(message);
+        await _operationGate.WaitAsync(ct);
         try
         {
-            await AppendJournalAsync(message.CommandId, envelope.Kind, "received", null, ct);
-            await PublishStatusAsync(HostWorkerMessageKinds.CommandAccepted, message.CommandId, envelope.Kind, true, "Command accepted", null, ct);
-
-            switch (envelope.Kind)
+            var envelope = HostWorkerProtocol.DeserializeCommand(message);
+            try
             {
-                case HostCommandKind.DeployRunner when envelope.DeployRunner != null:
-                    await HandleDeployRunnerAsync(envelope.DeployRunner, ct);
-                    break;
-                case HostCommandKind.StopRunner when envelope.StopRunner != null:
-                    await HandleStopRunnerAsync(envelope.StopRunner, ct);
-                    break;
-                case HostCommandKind.CleanupOrphan when envelope.CleanupOrphan != null:
-                    await HandleCleanupOrphanAsync(envelope.CleanupOrphan, ct);
-                    break;
-                case HostCommandKind.ListImages when envelope.ListImages != null:
-                    await HandleListImagesAsync(envelope.ListImages, ct);
-                    break;
-                case HostCommandKind.PullImage when envelope.PullImage != null:
-                    await HandlePullImageAsync(envelope.PullImage, ct);
-                    break;
-                case HostCommandKind.DeleteImage when envelope.DeleteImage != null:
-                    await HandleDeleteImageAsync(envelope.DeleteImage, ct);
-                    break;
-                case HostCommandKind.GetHostLogs when envelope.GetHostLogs != null:
-                    await HandleGetHostLogsAsync(envelope.GetHostLogs, ct);
-                    break;
-                case HostCommandKind.GetRunnerLogs when envelope.GetRunnerLogs != null:
-                    await HandleGetRunnerLogsAsync(envelope.GetRunnerLogs, ct);
-                    break;
-                case HostCommandKind.ApplyHostWorkerUpdate when envelope.ApplyHostWorkerUpdate != null:
-                    await HandleApplyHostWorkerUpdateAsync(envelope.ApplyHostWorkerUpdate, ct);
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unsupported or malformed HostWorker command kind '{envelope.Kind}'.");
-            }
+                await AppendJournalAsync(message.CommandId, envelope.Kind, "received", null, ct);
+                await PublishStatusAsync(HostWorkerMessageKinds.CommandAccepted, message.CommandId, envelope.Kind, true, "Command accepted", null, ct);
 
-            await AppendJournalAsync(message.CommandId, envelope.Kind, "completed", null, ct);
-            await PublishStatusAsync(HostWorkerMessageKinds.CommandCompleted, message.CommandId, envelope.Kind, true, "Command completed", null, ct);
+                switch (envelope.Kind)
+                {
+                    case HostCommandKind.DeployRunner when envelope.DeployRunner != null:
+                        await HandleDeployRunnerAsync(envelope.DeployRunner, ct);
+                        break;
+                    case HostCommandKind.ActivateRunner when envelope.ActivateRunner != null:
+                        await HandleActivateRunnerAsync(envelope.ActivateRunner, ct);
+                        break;
+                    case HostCommandKind.StopRunner when envelope.StopRunner != null:
+                        await HandleStopRunnerAsync(envelope.StopRunner, ct);
+                        break;
+                    case HostCommandKind.CleanupOrphan when envelope.CleanupOrphan != null:
+                        await HandleCleanupOrphanAsync(envelope.CleanupOrphan, ct);
+                        break;
+                    case HostCommandKind.ListImages when envelope.ListImages != null:
+                        await HandleListImagesAsync(envelope.ListImages, ct);
+                        break;
+                    case HostCommandKind.PullImage when envelope.PullImage != null:
+                        await HandlePullImageAsync(envelope.PullImage, ct);
+                        break;
+                    case HostCommandKind.DeleteImage when envelope.DeleteImage != null:
+                        await HandleDeleteImageAsync(envelope.DeleteImage, ct);
+                        break;
+                    case HostCommandKind.GetHostLogs when envelope.GetHostLogs != null:
+                        await HandleGetHostLogsAsync(envelope.GetHostLogs, ct);
+                        break;
+                    case HostCommandKind.GetRunnerLogs when envelope.GetRunnerLogs != null:
+                        await HandleGetRunnerLogsAsync(envelope.GetRunnerLogs, ct);
+                        break;
+                    case HostCommandKind.ApplyHostWorkerUpdate when envelope.ApplyHostWorkerUpdate != null:
+                        await HandleApplyHostWorkerUpdateAsync(envelope.ApplyHostWorkerUpdate, ct);
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unsupported or malformed HostWorker command kind '{envelope.Kind}'.");
+                }
+
+                await AppendJournalAsync(message.CommandId, envelope.Kind, "completed", null, ct);
+                await PublishStatusAsync(HostWorkerMessageKinds.CommandCompleted, message.CommandId, envelope.Kind, true, "Command completed", null, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Command {CommandKind} ({CommandId}) failed on HostWorker {HostId}",
+                    envelope.Kind, message.CommandId, _identity.HostId);
+                await AppendJournalAsync(message.CommandId, envelope.Kind, "failed", ex.Message, ct);
+                await PublishStatusAsync(HostWorkerMessageKinds.CommandRejected, message.CommandId, envelope.Kind, false, null, ex.Message, ct);
+            }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Command {CommandKind} ({CommandId}) failed on HostWorker {HostId}",
-                envelope.Kind, message.CommandId, _identity.HostId);
-            await AppendJournalAsync(message.CommandId, envelope.Kind, "failed", ex.Message, ct);
-            await PublishStatusAsync(HostWorkerMessageKinds.CommandRejected, message.CommandId, envelope.Kind, false, null, ex.Message, ct);
-        }
+        finally { _operationGate.Release(); }
     }
 
     private async Task HandleDeployRunnerAsync(DeployRunnerCommand command, CancellationToken ct)
     {
+        if (_deploymentIntents.Contains(command.InstanceId))
+            throw new InvalidOperationException("Instance deployment was already claimed; reconcile it instead of replaying credentials.");
+
         _logger.LogInformation("Deploying runner {RunnerName} on HostWorker {HostId} with backend {Backend}",
             command.RunnerName, _identity.HostId, command.Backend);
 
+        var intent = _deploymentIntents.Begin(command);
         var backend = SelectBackend(command.Backend);
         if (!await backend.IsAvailableAsync())
         {
-            await PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
-            {
-                InstanceId = command.InstanceId,
-                Reason = "failed",
-                ErrorMessage = $"Backend {command.Backend} is not available on host {_identity.HostName}"
-            }, ct);
+            await PublishNotStartedAsync(command, $"Backend {command.Backend} is not available on host {_identity.HostName}", ct);
             return;
         }
 
@@ -229,9 +241,20 @@ internal sealed class HostCommandProcessor : BackgroundService
 
         try
         {
-            var result = await _lifecycleManager.StartRunnerAsync(command, backend, ct);
+            var result = await _lifecycleManager.StartRunnerAsync(command, backend, ct, intent.Ownership,
+                owner => _deploymentIntents.MarkCreating(command.InstanceId, owner),
+                handle => _deploymentIntents.MarkCreated(command.InstanceId, handle));
             if (result == null)
                 throw new InvalidOperationException("Runner backend did not return a started runner handle.");
+
+            if (result.Prepared)
+            {
+                _deploymentIntents.MarkPrepared(command.InstanceId, result.InstanceHandle);
+                await PublishAsync(HostWorkerMessageKinds.RunnerPrepared, new RunnerStartedEvent
+                { InstanceId = command.InstanceId, RunnerName = result.RunnerName, InstanceHandle = result.InstanceHandle, Backend = command.Backend }, ct);
+                return;
+            }
+            _deploymentIntents.MarkStarted(command.InstanceId, result.InstanceHandle);
 
             await PublishAsync(HostWorkerMessageKinds.RunnerStarted, new RunnerStartedEvent
             {
@@ -243,14 +266,28 @@ internal sealed class HostCommandProcessor : BackgroundService
         }
         catch (Exception ex)
         {
-            await PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
+            await PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
             {
                 InstanceId = command.InstanceId,
-                Reason = "failed",
-                ErrorMessage = ex.Message
+                Status = RunnerInstanceStatus.Stopping,
+                CheckedAt = DateTime.UtcNow,
+                StatusMessage = $"Deployment outcome uncertain; reconcile before releasing capacity. {ex.Message}"
             }, ct);
             throw;
         }
+    }
+
+    private async Task HandleActivateRunnerAsync(ActivateRunnerCommand command, CancellationToken ct)
+    {
+        var intent = _deploymentIntents.Read(command.InstanceId)
+            ?? throw new InvalidOperationException("No prepared ownership exists.");
+        if (intent.Ownership is null || SelectBackend(intent.Backend) is not IStagedRunnerBackend staged)
+            throw new InvalidOperationException("Backend does not support prepared activation.");
+        _deploymentIntents.ClaimActivation(command.InstanceId, command.InstanceHandle);
+        await staged.ActivateRunnerAsync(intent.Ownership, command.InstanceHandle, command.JitConfig, ct);
+        _deploymentIntents.MarkStarted(command.InstanceId, command.InstanceHandle);
+        await PublishAsync(HostWorkerMessageKinds.RunnerStarted, new RunnerStartedEvent
+        { InstanceId = command.InstanceId, RunnerName = intent.RunnerName, InstanceHandle = command.InstanceHandle, Backend = intent.Backend }, ct);
     }
 
     private async Task<bool> IsTartCapacityFullAsync(DeployRunnerCommand command, CancellationToken ct)
@@ -275,34 +312,57 @@ internal sealed class HostCommandProcessor : BackgroundService
 
         var message = $"Tart capacity is full on host {_identity.HostName}: {runningTartVmCount}/{Math.Max(0, limit)} VM(s) are already running.";
         _logger.LogInformation("Rejecting Tart runner {RunnerName}: {Message}", command.RunnerName, message);
-        await PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
-        {
-            InstanceId = command.InstanceId,
-            Reason = "failed",
-            ErrorMessage = message
-        }, ct);
+        await PublishNotStartedAsync(command, message, ct);
 
         return true;
+    }
+
+    private async Task PublishNotStartedAsync(DeployRunnerCommand command, string error, CancellationToken ct)
+    {
+        var receipt = _deploymentIntents.CompleteCleanup(command.InstanceId, null, neverStarted: true, "failed");
+        await PublishAsync(HostWorkerMessageKinds.RunnerStopped, receipt, ct);
     }
 
     private async Task HandleStopRunnerAsync(StopRunnerCommand command, CancellationToken ct)
     {
         try
         {
-            if (_lifecycleManager.RunningInstances.ContainsKey(command.InstanceId))
+            var intent = _deploymentIntents.Read(command.InstanceId)
+                ?? throw new InvalidOperationException("No durable ownership record; refusing unbound native cleanup.");
+            var handle = intent.InstanceHandle;
+            if (_lifecycleManager.RunningInstances.TryGetValue(command.InstanceId, out var runner))
             {
+                if (runner.Backend.BackendType != intent.Backend ||
+                    (handle is not null && handle != runner.InstanceHandle))
+                    throw new InvalidOperationException("Native runner differs from durable ownership.");
+                handle = runner.InstanceHandle;
+                if (command.InstanceHandle is not null && command.InstanceHandle != handle)
+                    throw new InvalidOperationException("Stop handle differs from owned runner.");
+                _deploymentIntents.MarkStarted(command.InstanceId, handle);
                 await _lifecycleManager.StopRunnerAsync(command.InstanceId, ct);
             }
-            else if (!string.IsNullOrWhiteSpace(command.InstanceHandle))
+            else if (!string.IsNullOrWhiteSpace(handle))
             {
-                await TryStopByHandleAsync(command.InstanceHandle, ct);
+                if (command.InstanceHandle is not null && command.InstanceHandle != handle)
+                    throw new InvalidOperationException("Stop handle differs from durable ownership.");
+                // Never probe another backend with an opaque handle. A successful
+                // Docker 'not found' says nothing about an owned Tart VM.
+                var backend = SelectBackend(intent.Backend);
+                if (intent.Ownership is null || backend is not IRecoverableRunnerBackend recoverable)
+                    throw new InvalidOperationException("Restarted backend lacks immutable native ownership proof; manual reconciliation required.");
+                var observed = await recoverable.InspectOwnedAsync(intent.Ownership, handle, ct);
+                if (observed.Handle != handle || observed.State == NativeRunnerState.Unknown)
+                    throw new InvalidOperationException("Native cleanup identity or outcome is uncertain.");
+                if (observed.State != NativeRunnerState.Absent)
+                    await backend.StopRunnerAsync(handle, ct);
+            }
+            else
+            {
+                throw new InvalidOperationException("Claimed deployment has no reconciled native handle; cleanup cannot be confirmed.");
             }
 
-            await PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
-            {
-                InstanceId = command.InstanceId,
-                Reason = "stopped"
-            }, ct);
+            var receipt = _deploymentIntents.CompleteCleanup(command.InstanceId, handle, neverStarted: false, "stopped");
+            await PublishAsync(HostWorkerMessageKinds.RunnerStopped, receipt, ct);
         }
         catch (Exception ex)
         {
@@ -310,31 +370,11 @@ internal sealed class HostCommandProcessor : BackgroundService
             {
                 InstanceId = command.InstanceId,
                 Status = RunnerInstanceStatus.Stopping,
-                CleanupPending = true,
                 CheckedAt = DateTime.UtcNow,
-                StatusMessage = "Stop failed; native cleanup is unconfirmed."
+                StatusMessage = $"Cleanup unconfirmed; capacity retained. Stop failed: {ex.Message}"
             }, ct);
             throw;
         }
-    }
-
-    private async Task TryStopByHandleAsync(string handle, CancellationToken ct)
-    {
-        var errors = new List<string>();
-        foreach (var backend in new[] { _dockerBackend, _tartBackend, _nativeBackend })
-        {
-            try
-            {
-                await backend.StopRunnerAsync(handle, ct);
-                return;
-            }
-            catch (Exception ex)
-            {
-                errors.Add(ex.Message);
-            }
-        }
-
-        throw new InvalidOperationException($"Runner handle '{handle}' could not be stopped by any backend: {string.Join("; ", errors)}");
     }
 
     private async Task HandleCleanupOrphanAsync(CleanupOrphanCommand command, CancellationToken ct)
@@ -589,13 +629,16 @@ internal sealed class HostCommandProcessor : BackgroundService
         {
             try
             {
+                await RecoverOwnedRunnersAsync(ct);
+                await ReplayCleanupReceiptsAsync(ct);
                 foreach (var snapshot in await _lifecycleManager.CollectRunnerHealthAsync(ct))
+                {
                     await PublishRunnerHealthAsync(snapshot, ct);
+                }
 
                 await PublishAsync(HostWorkerMessageKinds.Reconciliation, new ReconciliationReport
                 {
                     HostId = _identity.HostId,
-                    TrackedInstanceIds = _lifecycleManager.RunningInstances.Keys.ToList(),
                     Runners = await DiscoverManagedRunnersAsync(ct)
                 }, ct);
             }
@@ -615,17 +658,25 @@ internal sealed class HostCommandProcessor : BackgroundService
         if (snapshot.CleanupConfirmed)
         {
             var reason = snapshot.Runner.IsEphemeral && snapshot.Health.Status == "exited:0"
-                ? "completed" : snapshot.Health.Status ?? "not running";
-            return PublishRunnerExitedAsync(snapshot.Runner.InstanceId, reason, ct);
+                ? "completed"
+                : snapshot.Health.Status ?? "not running";
+            return PublishRunnerExitedAsync(snapshot.Runner, reason, ct);
         }
+
+        var intent = _deploymentIntents.Read(snapshot.Runner.InstanceId);
+        if (intent is { DeferredRegistration: true } && intent.State != "started")
+            return Task.CompletedTask;
+
         return PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
         {
             InstanceId = snapshot.Runner.InstanceId,
+            // Stopping remains capacity-consuming in the server's current state model.
+            // A timeout is not evidence of release, nor proof that the runner is healthy.
             Status = snapshot.Health.IsRunning ? RunnerInstanceStatus.Running : RunnerInstanceStatus.Stopping,
-            CleanupPending = !snapshot.Health.IsRunning,
             CheckedAt = snapshot.Health.CheckedAt,
-            StatusMessage = snapshot.Health.IsRunning ? snapshot.Health.Status
-                : "Native cleanup unconfirmed; retaining runner ownership."
+            StatusMessage = snapshot.Health.IsRunning
+                ? snapshot.Health.Status ?? "Running"
+                : $"Cleanup unconfirmed; capacity retained. {snapshot.Health.Status}"
         }, ct);
     }
 
@@ -713,28 +764,115 @@ internal sealed class HostCommandProcessor : BackgroundService
         return runners;
     }
 
-    private void OnRunnerExited(string instanceId, long exitCode, string reason)
+    private void OnRunnerExited(ManagedRunner runner, long exitCode, string reason)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                await PublishRunnerExitedAsync(instanceId, exitCode == 0 ? "completed" : reason, CancellationToken.None);
+                await PublishRunnerExitedAsync(runner, exitCode == 0 ? "completed" : reason, CancellationToken.None);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to report runner exit for {InstanceId}", instanceId);
+                _logger.LogWarning(ex, "Failed to report runner exit for {InstanceId}", runner.InstanceId);
             }
         });
     }
 
-    private Task PublishRunnerExitedAsync(string instanceId, string reason, CancellationToken ct)
-        => PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
+    private Task PublishRunnerExitedAsync(ManagedRunner runner, string reason, CancellationToken ct)
+    {
+        // The native exit monitor can finish before StartRunnerAsync returns.
+        _deploymentIntents.MarkStarted(runner.InstanceId, runner.InstanceHandle);
+        var receipt = _deploymentIntents.CompleteCleanup(runner.InstanceId, runner.InstanceHandle, neverStarted: false,
+            string.Equals(reason, "completed", StringComparison.OrdinalIgnoreCase) ? "completed" : "crashed");
+        return PublishAsync(HostWorkerMessageKinds.RunnerStopped, receipt, ct);
+    }
+
+    internal async Task RecoverOwnedRunnersAsync(CancellationToken ct)
+    {
+        // Recovery never races a live Create/Start command. The process lock also
+        // prevents two workers from taking ownership of the same data root.
+        if (!await _operationGate.WaitAsync(0, ct)) return;
+        try
         {
-            InstanceId = instanceId,
-            Reason = string.Equals(reason, "completed", StringComparison.OrdinalIgnoreCase) ? "completed" : "crashed",
-            ErrorMessage = string.Equals(reason, "completed", StringComparison.OrdinalIgnoreCase) ? null : reason
-        }, ct);
+            foreach (var intent in _deploymentIntents.RecoveryCandidates())
+            {
+                if (_lifecycleManager.RunningInstances.ContainsKey(intent.InstanceId)) continue;
+                try
+                {
+                    var backend = SelectBackend(intent.Backend);
+                    if (backend is not IRecoverableRunnerBackend recoverable) continue;
+                    if (intent.State == "claimed" && intent.Ownership!.ImageId is null && intent.InstanceHandle is null)
+                    {
+                        // The durable pre-Create boundary was never crossed.
+                        var neverStarted = _deploymentIntents.CompleteCleanup(intent.InstanceId, null, true, "failed");
+                        await PublishAsync(HostWorkerMessageKinds.RunnerStopped, neverStarted, ct);
+                        continue;
+                    }
+                    var observed = await recoverable.InspectOwnedAsync(intent.Ownership!, intent.InstanceHandle, ct);
+                    if (observed.State == NativeRunnerState.Unknown) continue;
+                    if (observed.Handle is null) throw new InvalidDataException("Native observation has no immutable handle.");
+                    if (observed.State == NativeRunnerState.Running && intent.DeferredRegistration &&
+                        intent.State is not ("activating" or "started"))
+                    {
+                        await backend.StopRunnerAsync(observed.Handle, ct);
+                        var receipt = _deploymentIntents.CompleteCleanup(intent.InstanceId, observed.Handle, false, "stopped");
+                        await PublishAsync(HostWorkerMessageKinds.RunnerStopped, receipt, ct);
+                    }
+                    else if (observed.State == NativeRunnerState.Running)
+                    {
+                        var activationUncertain = intent.DeferredRegistration && intent.State == "activating";
+                        if (!activationUncertain)
+                            _deploymentIntents.MarkStarted(intent.InstanceId, observed.Handle);
+                        _lifecycleManager.AdoptRunner(new ManagedRunner
+                        {
+                            InstanceId = intent.InstanceId, ProfileId = intent.ProfileId, RunnerName = intent.RunnerName,
+                            InstanceHandle = observed.Handle, Backend = backend, StartedAt = intent.CreatedAt, IsEphemeral = intent.IsEphemeral
+                        });
+                        if (activationUncertain)
+                            await PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
+                            {
+                                InstanceId = intent.InstanceId, Status = RunnerInstanceStatus.Starting,
+                                CheckedAt = DateTime.UtcNow,
+                                StatusMessage = "Activation outcome uncertain; observing the original environment without replay or termination."
+                            }, ct);
+                        else
+                            await PublishAsync(HostWorkerMessageKinds.RunnerStarted, new RunnerStartedEvent
+                        {
+                            InstanceId = intent.InstanceId, RunnerName = intent.RunnerName,
+                            Backend = intent.Backend, InstanceHandle = observed.Handle
+                        }, ct);
+                    }
+                    else
+                    {
+                        if (observed.State == NativeRunnerState.Absent && intent.InstanceHandle != observed.Handle)
+                            throw new InvalidDataException("Absence is not bound to a recorded immutable handle.");
+                        _deploymentIntents.MarkCreated(intent.InstanceId, observed.Handle);
+                        if (observed.State is NativeRunnerState.Created or NativeRunnerState.Exited)
+                            await backend.StopRunnerAsync(observed.Handle, ct);
+                        var receipt = _deploymentIntents.CompleteCleanup(intent.InstanceId, observed.Handle, false,
+                            observed.State == NativeRunnerState.Exited && observed.ExitCode == 0 ? "completed" : "stopped");
+                        await PublishAsync(HostWorkerMessageKinds.RunnerStopped, receipt, ct);
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Native recovery remains uncertain for {InstanceId}; ownership retained", intent.InstanceId);
+                }
+            }
+        }
+        finally { _operationGate.Release(); }
+    }
+
+    internal async Task ReplayCleanupReceiptsAsync(CancellationToken ct)
+    {
+        foreach (var receipt in _deploymentIntents.PendingCleanupReceipts())
+            await PublishAsync(HostWorkerMessageKinds.RunnerStopped, receipt, ct);
+    }
+
+    internal void AcknowledgeCleanup(RunnerStoppedEvent receipt)
+        => _deploymentIntents.AcknowledgeCleanup(receipt);
 
     private async Task<string> GetNativeRunnerLogsAsync(NativeBackend native, string instanceHandle, string? runnerInstanceId, int tailLines, CancellationToken ct)
     {

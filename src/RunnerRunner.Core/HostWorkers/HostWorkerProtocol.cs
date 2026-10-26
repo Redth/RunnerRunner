@@ -56,8 +56,10 @@ public static class HostWorkerMessageKinds
     public const string CommandAccepted = "worker.command.accepted";
     public const string CommandRejected = "worker.command.rejected";
     public const string CommandCompleted = "worker.command.completed";
+    public const string RunnerPrepared = "runner.prepared";
     public const string RunnerStarted = "runner.started";
     public const string RunnerStopped = "runner.stopped";
+    public const string CleanupReceiptAccepted = "runner.cleanup.accepted";
     public const string RunnerHealth = "runner.health";
     public const string Reconciliation = "worker.reconciliation";
     public const string ImageList = "image.list";

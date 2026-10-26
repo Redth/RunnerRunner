@@ -17,4 +17,14 @@ public class DockerImageConfig
     public PullPolicy PullPolicy { get; set; } = PullPolicy.IfNotPresent;
     [Id(5)]
     public string? CredentialId { get; set; }
+    [Id(6)]
+    public int? CpuCount { get; set; }
+    [Id(7)]
+    public int? MemorySizeMb { get; set; }
+    [Id(8)]
+    public int? DiskSizeGb { get; set; }
+    [Id(9)]
+    public bool HyperVIsolation { get; set; }
+    [Id(10)]
+    public bool PrepareBeforeRegistration { get; set; }
 }

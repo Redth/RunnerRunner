@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Orleans;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
@@ -156,6 +157,8 @@ public class OrchestrationEngine : BackgroundService
 
         foreach (var stale in staleInstances)
         {
+            if (await _services.GetRequiredService<IResourceAdmission>().GetReservationAsync(stale.Id, ct) is { Released: false })
+                continue;
             await store.Remove<RunnerInstance>(stale.Id);
             _logger.LogDebug("Cleaned up stale instance {Id} ({RunnerName})", stale.Id, stale.RunnerName);
         }
@@ -257,8 +260,8 @@ public class OrchestrationEngine : BackgroundService
         var initSteps = await InitStepResolver.ResolveAsync(
             store, profile, envVars, profile.ExecutionBackend, host?.Platform ?? HostPlatform.Linux);
 
-        // Resolve registry credentials for Docker image pulls
-        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.ExecutionBackend, profile.DockerConfig, profile.TartConfig, _logger);
+        var registryCred = await RegistryCredentialResolver.ResolveAsync(
+            store, profile.ExecutionBackend, profile.DockerConfig, profile.TartConfig, _logger);
 
         var command = new DeployRunnerCommand
         {

@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using RunnerRunner.Core.Interfaces;
@@ -8,8 +9,10 @@ namespace RunnerRunner.Server.Tests.Services;
 
 public class RunnerRegistrationCleanupServiceTests
 {
-    [Fact]
-    public async Task TryRemoveRunnerAsync_UsesWebhookRepositoryScopeForGitHubCleanup()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TryRemoveRunnerAsync_UsesRepositoryScopeOnlyAfterCapacityReleased(bool reserved)
     {
         var store = TestDocumentStore.Create();
 
@@ -53,11 +56,20 @@ public class RunnerRegistrationCleanupServiceTests
         var provider = Substitute.For<IRunnerProviderPlugin>();
         provider.Provider.Returns(RunnerProvider.GitHubActions);
 
+        var admission = Substitute.For<IResourceAdmission>();
+        if (reserved)
+            admission.GetReservationAsync(instance.Id, Arg.Any<CancellationToken>()).Returns(new ResourceReservation(instance.Id, "host", ExecutionBackend.Docker, new(2,4096,64), "owned", false));
         var service = new RunnerRegistrationCleanupService(
             [provider],
+            admission,
             Substitute.For<ILogger<RunnerRegistrationCleanupService>>());
 
         await service.TryRemoveRunnerAsync(store, instance);
+        if (reserved)
+        {
+            await provider.DidNotReceiveWithAnyArgs().RemoveRunnerAsync(default!, default!, default);
+            return;
+        }
 
         await provider.Received(1).RemoveRunnerAsync(
             Arg.Is<ProviderCredential>(c =>

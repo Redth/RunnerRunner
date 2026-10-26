@@ -419,8 +419,8 @@ public class TartBackend : IRunnerBackend
 
     private async Task SshExec(string sshUser, string vmIp, string? sshPassword, string script, CancellationToken ct)
     {
-        _logger.LogDebug("SSH exec on {User}@{Ip}: {Script}",
-            sshUser, vmIp, script.Length > 200 ? script[..200] + "..." : script);
+        // Provisioning scripts can contain runner registration tokens.
+        _logger.LogDebug("SSH provisioning on {User}@{Ip}", sshUser, vmIp);
 
         var sshOpts = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15";
         ProcessStartInfo psi;
@@ -430,16 +430,7 @@ public class TartBackend : IRunnerBackend
             var sshpassPath = ResolveToolPath("sshpass", "/opt/homebrew/bin/sshpass", "/usr/local/bin/sshpass");
             if (!string.IsNullOrWhiteSpace(sshpassPath))
             {
-                var fullCommand = $"{sshpassPath} -p '{EscapeShell(sshPassword)}' ssh {sshOpts} {sshUser}@{vmIp} bash -s";
-                psi = new ProcessStartInfo
-                {
-                    FileName = "/bin/bash",
-                    Arguments = $"-lc \"{fullCommand.Replace("\"", "\\\"")}\"",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    RedirectStandardInput = true
-                };
+                psi = BuildSshpassStartInfo(sshpassPath, sshUser, vmIp, sshPassword);
             }
             else
             {
@@ -505,10 +496,24 @@ public class TartBackend : IRunnerBackend
         var stderr = await process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
 
-        var output = string.IsNullOrEmpty(stderr) ? stdout : $"{stdout}\n{stderr}";
-
+        // Remote diagnostics may echo provisioning scripts or credentials.
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"SSH command failed with exit code {process.ExitCode}: {output.Trim()}");
+            throw new InvalidOperationException($"SSH provisioning failed with exit code {process.ExitCode}.");
+    }
+
+    internal static ProcessStartInfo BuildSshpassStartInfo(string path, string user, string host, string password)
+    {
+        var start = new ProcessStartInfo(path)
+        {
+            UseShellExecute = false, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "-e", "ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null", "-o", "ConnectTimeout=15",
+                     $"{user}@{host}", "bash", "-s" })
+            start.ArgumentList.Add(argument);
+        start.Environment["SSHPASS"] = password;
+        return start;
     }
 
     private static string EscapeShell(string value) =>

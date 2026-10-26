@@ -45,13 +45,19 @@ public sealed class HostWorkerGrpcService : HostWorkerControl.HostWorkerControlB
             hello.Agent.Name,
             helloMessage.HostId);
 
+        connection.SupportsDurableOwnership = hello.Agent.Capabilities.Contains("durable-ownership-v1", StringComparer.Ordinal);
+
         _logger.LogInformation("HostWorker {HostId} connected from {Peer}", canonicalHostId, context.Peer);
 
         var sendLoop = SendLoopAsync(connection, responseStream, context.CancellationToken);
         try
         {
             while (await requestStream.MoveNext(context.CancellationToken))
+            {
+                if (!_registry.IsCurrent(canonicalHostId, connection))
+                    throw new RpcException(new Status(StatusCode.Aborted, "Worker connection was superseded."));
                 await _events.HandleMessageAsync(canonicalHostId, requestStream.Current, context.CancellationToken);
+            }
         }
         finally
         {

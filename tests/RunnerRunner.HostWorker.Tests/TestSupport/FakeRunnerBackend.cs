@@ -3,8 +3,12 @@ using RunnerRunner.Core.Models;
 
 namespace RunnerRunner.HostWorker.Tests.TestSupport;
 
-internal sealed class FakeRunnerBackend : IRunnerBackend
+internal sealed class FakeRunnerBackend : IRunnerBackend, IRecoverableRunnerBackend, IStagedRunnerBackend
 {
+    public List<(string Handle, string Jit)> Activations { get; } = [];
+    public Task ActivateRunnerAsync(NativeRunnerOwnership ownership, string handle, string jitConfig, CancellationToken ct)
+    { Activations.Add((handle, jitConfig)); return Task.CompletedTask; }
+
     public ExecutionBackend BackendType { get; init; } = ExecutionBackend.Native;
     public bool IsAvailable { get; set; } = true;
     public List<RunnerStartRequest> StartRequests { get; } = [];
@@ -14,6 +18,10 @@ internal sealed class FakeRunnerBackend : IRunnerBackend
     public Func<RunnerStartRequest, CancellationToken, Task<RunnerInstanceInfo>>? StartAsyncHandler { get; set; }
     public Func<string, CancellationToken, Task>? StopAsyncHandler { get; set; }
     public Func<string, CancellationToken, Task<RunnerHealthStatus>>? HealthAsyncHandler { get; set; }
+
+    public Func<NativeRunnerOwnership, string?, NativeRunnerObservation>? InspectHandler { get; set; }
+    public Task<NativeRunnerObservation> InspectOwnedAsync(NativeRunnerOwnership ownership, string? handle, CancellationToken ct)
+        => Task.FromResult(InspectHandler?.Invoke(ownership, handle) ?? new(NativeRunnerState.Unknown, handle));
 
     public Task<bool> IsAvailableAsync(CancellationToken ct = default)
         => Task.FromResult(IsAvailable);

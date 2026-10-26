@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans;
@@ -80,6 +81,67 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         StartPendingTimer();
     }
 
+    public async Task ConfigureDeferredRegistration(DeferredRunnerRegistration registration)
+    {
+        if (_state.State.DeferredRegistration is not null || _state.State.RegistrationClaimed ||
+            _state.State.DeployedAt is not null || string.IsNullOrWhiteSpace(registration.CredentialId))
+            throw new InvalidOperationException("Registration configuration cannot be replaced after dispatch.");
+        _state.State.DeferredRegistration = registration;
+        await _state.WriteStateAsync();
+    }
+
+    public async Task ActivatePrepared(string hostId, RunnerStartedEvent prepared)
+    {
+        var registration = _state.State.DeferredRegistration;
+        if (registration is null || _state.State.RegistrationClaimed || hostId != _state.State.HostId ||
+            prepared.InstanceId != this.GetPrimaryKeyString() || prepared.RunnerName != _state.State.RunnerName ||
+            prepared.Backend != _state.State.Backend || _state.State.Status != RunnerInstanceStatus.Starting)
+            return;
+        var admission = _serviceProvider.GetRequiredService<IResourceAdmission>();
+        if (!await admission.RecordStartedAsync(hostId, prepared.InstanceId, prepared.Backend, prepared.InstanceHandle))
+            return;
+
+        // Serialized grain + durable claim before the provider call. A crash or lost
+        // response cannot mint a second registration for this native environment.
+        _state.State.RegistrationClaimed = true;
+        await _state.WriteStateAsync();
+        var dispatcher = _serviceProvider.GetRequiredService<IHostCommandDispatcher>();
+        var deliveryAttempted = false;
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+            var credential = await store.Get<ProviderCredential>(registration.CredentialId)
+                ?? throw new InvalidOperationException("Provider credential is unavailable.");
+            if (credential.Provider != RunnerProvider.GitHubActions)
+                throw new InvalidOperationException("Prepared registration requires GitHub.");
+            var result = await _serviceProvider.GetRequiredService<JitConfigService>().GenerateGitHubJitConfig(
+                credential, _state.State.RunnerName, registration.Labels, registration.RunnerGroup,
+                registration.Repository, registration.GitHubInstallationId);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.JitConfig))
+                throw new InvalidOperationException("Prepared runner registration was not issued.");
+            deliveryAttempted = true;
+            await dispatcher.DispatchActivateRunnerAsync(hostId, new ActivateRunnerCommand
+            {
+                InstanceId = prepared.InstanceId, InstanceHandle = prepared.InstanceHandle, JitConfig = result.JitConfig
+            });
+        }
+        catch
+        {
+            // Never report provider response bodies/credentials or release capacity on
+            // uncertain delivery. Normal native cleanup and provider reconciliation own it.
+            if (!deliveryAttempted)
+            {
+                await MarkStopping();
+                await dispatcher.DispatchStopRunnerAsync(hostId, new StopRunnerCommand
+                { InstanceId = prepared.InstanceId, InstanceHandle = prepared.InstanceHandle });
+            }
+            else
+                await UpdateStatusMessage("Activation delivery uncertain; retain ownership and reconcile without replay or termination.");
+            throw new InvalidOperationException("Prepared registration/activation was not confirmed.");
+        }
+    }
+
     public async Task MarkDeployed()
     {
         _state.State.DeployedAt = DateTime.UtcNow;
@@ -157,7 +219,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public async Task MarkStopped()
     {
-        if (_state.State.CleanupPending) return;
+        if (await RetainUncertainReservationAsync("Stopped status without native cleanup")) return;
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Stopped;
         _state.State.StoppedAt = DateTime.UtcNow;
@@ -177,7 +239,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public async Task MarkFailed(string error)
     {
-        if (_state.State.CleanupPending) return;
+        if (await RetainUncertainReservationAsync(error)) return;
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Failed;
         _state.State.ErrorMessage = error;
@@ -197,7 +259,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public async Task MarkCrashed(string reason)
     {
-        if (_state.State.CleanupPending) return;
+        if (await RetainUncertainReservationAsync(reason)) return;
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Crashed;
         _state.State.ErrorMessage = reason;
@@ -215,27 +277,28 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         await PurgeDynamicStateIfNeeded();
     }
 
-    public async Task SetCleanupPending(bool pending)
+    private async Task<bool> RetainUncertainReservationAsync(string reason)
     {
-        if (_state.State.CleanupPending == pending) return;
-        _state.State.CleanupPending = pending;
-        if (pending)
-        {
-            _state.State.Status = RunnerInstanceStatus.Stopping;
-            _state.State.StoppedAt = null;
-            CancelAllTimers();
-        }
-        else if (_state.State.Status == RunnerInstanceStatus.Stopping)
-        {
-            _state.State.Status = RunnerInstanceStatus.Running;
-        }
+        var reservation = await _serviceProvider.GetRequiredService<IResourceAdmission>()
+            .GetReservationAsync(this.GetPrimaryKeyString());
+        if (reservation is null || reservation.Released) return false;
+        _state.State.Status = RunnerInstanceStatus.Stopping;
+        _state.State.StatusMessage = $"Native cleanup unconfirmed; capacity retained. {reason}";
+        _state.State.ErrorMessage = reason;
+        _state.State.StoppedAt = null;
+        RecordStatusTransition(RunnerInstanceStatus.Stopping, _state.State.StatusMessage, "ownership_uncertain");
+        CancelAllTimers();
         await _state.WriteStateAsync();
+        await PublishStatusChange();
         await SyncToDocumentDb();
+        return true;
     }
 
-    public async Task UpdateHealth(string? statusMessage = null)
+    public async Task UpdateHealth(string? statusMessage = null, RunnerInstanceStatus? observedStatus = null)
     {
         _state.State.LastHealthCheck = DateTime.UtcNow;
+        if (observedStatus is RunnerInstanceStatus.Starting or RunnerInstanceStatus.Running or RunnerInstanceStatus.Stopping)
+            _state.State.Status = observedStatus.Value;
         if (statusMessage != null)
             _state.State.StatusMessage = statusMessage;
 
@@ -501,7 +564,6 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         instance.VmName = _state.State.VmName;
         instance.ProcessId = _state.State.ProcessId;
         instance.ErrorMessage = _state.State.ErrorMessage;
-        instance.CleanupPending = _state.State.CleanupPending;
         instance.ProvisioningMode = _state.State.ProvisioningMode;
         instance.WebhookEventId = _state.State.WebhookEventId;
         instance.JitConfig = _state.State.JitConfig;

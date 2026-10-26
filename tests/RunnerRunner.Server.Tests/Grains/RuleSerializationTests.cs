@@ -18,8 +18,8 @@ public class RuleSerializationTests
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<OrleansJsonSerializerOptions>>();
         var storage = new JsonGrainStorageSerializer(new OrleansJsonSerializer(options));
-        var payload = JObject.Parse(storage.Serialize(new HostGrainState()).ToString());
-        Assert.Equal(false, payload["IsDraining"]?.Value<bool>());
+        var payload = JObject.Parse(storage.Serialize(new RunnerInstanceGrainState()).ToString());
+        Assert.Equal(false, payload["RegistrationClaimed"]?.Value<bool>());
         var created = storage.Deserialize<ProvisioningRuleGrainState>(storage.Serialize(new ProvisioningRuleGrainState()));
         Assert.True(created.Config.Enabled);
         Assert.Equal(1, created.Config.DesiredCount);

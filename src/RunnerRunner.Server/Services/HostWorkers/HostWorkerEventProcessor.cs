@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using RunnerRunner.Core.HostWorkers;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
@@ -13,6 +14,8 @@ namespace RunnerRunner.Server.Services.HostWorkers;
 public sealed class HostWorkerEventProcessor
 {
     private readonly IDocumentStore _store;
+    private readonly IResourceAdmission _admission;
+    private readonly HostWorkerConnectionRegistry _connections;
     private readonly IGrainFactory _grainFactory;
     private readonly HostWorkerLogCache _logCache;
     private readonly LongRunningTaskService _tasks;
@@ -25,6 +28,8 @@ public sealed class HostWorkerEventProcessor
         HostWorkerLogCache logCache,
         LongRunningTaskService tasks,
         IConfiguration configuration,
+        IResourceAdmission admission,
+        HostWorkerConnectionRegistry connections,
         ILogger<HostWorkerEventProcessor> logger)
     {
         _store = store;
@@ -32,6 +37,8 @@ public sealed class HostWorkerEventProcessor
         _logCache = logCache;
         _tasks = tasks;
         _configuration = configuration;
+        _admission = admission;
+        _connections = connections;
         _logger = logger;
     }
 
@@ -97,14 +104,18 @@ public sealed class HostWorkerEventProcessor
                 case HostWorkerMessageKinds.Heartbeat:
                     await HeartbeatAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<HeartbeatEvent>(message));
                     break;
+                case HostWorkerMessageKinds.RunnerPrepared:
+                    var prepared = HostWorkerProtocol.DeserializePayload<RunnerStartedEvent>(message);
+                    await _grainFactory.GetGrain<IRunnerInstanceGrain>(prepared.InstanceId).ActivatePrepared(canonicalHostId, prepared);
+                    break;
                 case HostWorkerMessageKinds.RunnerStarted:
-                    await RunnerStartedAsync(HostWorkerProtocol.DeserializePayload<RunnerStartedEvent>(message));
+                    await RunnerStartedAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerStartedEvent>(message), ct);
                     break;
                 case HostWorkerMessageKinds.RunnerStopped:
-                    await RunnerStoppedAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerStoppedEvent>(message));
+                    await RunnerStoppedAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerStoppedEvent>(message), ct);
                     break;
                 case HostWorkerMessageKinds.RunnerHealth:
-                    await RunnerHealthUpdateAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>(message));
+                    await RunnerHealthUpdateAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>(message), ct);
                     break;
                 case HostWorkerMessageKinds.Reconciliation:
                     await ReconciliationAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<ReconciliationReport>(message));
@@ -313,8 +324,18 @@ public sealed class HostWorkerEventProcessor
             host.ObservedResourceUsageAt = observedAt;
     }
 
-    private async Task RunnerStartedAsync(RunnerStartedEvent evt)
+    private async Task RunnerStartedAsync(string hostId, RunnerStartedEvent evt, CancellationToken ct)
     {
+        if (await _admission.GetReservationAsync(evt.InstanceId, ct) is null)
+        {
+            await LegacyRunnerStartedAsync(hostId, evt, ct);
+            return;
+        }
+        if (!await _admission.RecordStartedAsync(hostId, evt.InstanceId, evt.Backend, evt.InstanceHandle, ct))
+        {
+            _logger.LogWarning("Rejected unowned or released startup receipt for {InstanceId} from {HostId}", evt.InstanceId, hostId);
+            return;
+        }
         var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
         if (instance != null)
         {
@@ -358,13 +379,25 @@ public sealed class HostWorkerEventProcessor
         AgentHub.NotifyQueueRelevantChange();
     }
 
-    private async Task RunnerStoppedAsync(string hostId, RunnerStoppedEvent evt)
+    private async Task RunnerStoppedAsync(string hostId, RunnerStoppedEvent evt, CancellationToken ct)
     {
+        if (await _admission.GetReservationAsync(evt.InstanceId, ct) is null)
+        {
+            await LegacyRunnerStoppedAsync(hostId, evt, ct);
+            if (evt.CleanupConfirmed && !string.IsNullOrWhiteSpace(evt.CleanupReceiptId))
+                await _connections.SendAsync(hostId, HostWorkerProtocol.CreateMessage(hostId,
+                    HostWorkerMessageKinds.CleanupReceiptAccepted, evt), ct);
+            return;
+        }
+        if (!evt.CleanupConfirmed || evt.Backend is not { } backend ||
+            !await _admission.ConfirmCleanupAsync(hostId, evt.InstanceId, backend, evt.InstanceHandle, evt.NeverStarted, ct))
+        {
+            _logger.LogWarning("Cleanup is unconfirmed for {InstanceId} from {HostId}; reservation retained", evt.InstanceId, hostId);
+            return;
+        }
         var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
-        if (instance == null || instance.HostId != hostId) return;
         if (instance != null)
         {
-            instance.CleanupPending = false;
             instance.Status = evt.Reason == "crashed" ? RunnerInstanceStatus.Crashed
                 : evt.ErrorMessage != null ? RunnerInstanceStatus.Failed
                 : RunnerInstanceStatus.Stopped;
@@ -386,25 +419,50 @@ public sealed class HostWorkerEventProcessor
             }
         }
 
-        var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
-        await runnerGrain.SetCleanupPending(false);
-        if (evt.Reason == "crashed")
-            await runnerGrain.MarkCrashed(evt.ErrorMessage ?? evt.Reason);
-        else if (evt.ErrorMessage != null)
-            await runnerGrain.MarkFailed(evt.ErrorMessage);
-        else
-            await runnerGrain.MarkStopped();
+        // A duplicate receipt may arrive after the dynamic grain/document was purged.
+        // The durable ledger still accepts it; never recreate an empty runner grain.
+        if (instance is not null)
+        {
+            var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+            if (evt.Reason == "crashed")
+                await runnerGrain.MarkCrashed(evt.ErrorMessage ?? evt.Reason);
+            else if (evt.ErrorMessage != null)
+                await runnerGrain.MarkFailed(evt.ErrorMessage);
+            else
+                await runnerGrain.MarkStopped();
+        }
+        if (!string.IsNullOrWhiteSpace(evt.CleanupReceiptId))
+        {
+            // The database release is committed before ACK. A disconnect here is safe:
+            // the worker retains the receipt and retries it on the next connection.
+            await _connections.SendAsync(hostId, HostWorkerProtocol.CreateMessage(hostId,
+                HostWorkerMessageKinds.CleanupReceiptAccepted, new RunnerStoppedEvent
+                {
+                    InstanceId = evt.InstanceId, Backend = backend, InstanceHandle = evt.InstanceHandle,
+                    NeverStarted = evt.NeverStarted, CleanupConfirmed = true,
+                    CleanupReceiptId = evt.CleanupReceiptId, Reason = "accepted"
+                }), ct);
+        }
 
         AgentHub.NotifyQueueRelevantChange();
     }
 
-    private async Task RunnerHealthUpdateAsync(string hostId, RunnerHealthUpdateEvent evt)
+    private async Task RunnerHealthUpdateAsync(string hostId, RunnerHealthUpdateEvent evt, CancellationToken ct)
     {
+        if (await _admission.GetReservationAsync(evt.InstanceId, ct) is null)
+        {
+            await LegacyRunnerHealthUpdateAsync(hostId, evt, ct);
+            return;
+        }
+        var reservation = await _admission.GetReservationAsync(evt.InstanceId, ct);
+        if (reservation is null || reservation.HostId != hostId || reservation.Released)
+            return;
+        // Health is advisory, never a cleanup receipt.
+        if (evt.Status is not (RunnerInstanceStatus.Running or RunnerInstanceStatus.Starting or RunnerInstanceStatus.Stopping))
+            evt.Status = RunnerInstanceStatus.Stopping;
         var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
-        if (instance == null || instance.HostId != hostId || instance.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed) return;
         if (instance != null)
         {
-            instance.CleanupPending = evt.CleanupPending;
             instance.Status = evt.Status;
             instance.LastHealthCheck = evt.CheckedAt;
             if (!string.IsNullOrEmpty(evt.StatusMessage))
@@ -413,8 +471,7 @@ public sealed class HostWorkerEventProcessor
         }
 
         var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
-        await runnerGrain.SetCleanupPending(evt.CleanupPending);
-        await runnerGrain.UpdateHealth(evt.StatusMessage);
+        await runnerGrain.UpdateHealth(evt.StatusMessage, evt.Status);
     }
 
     private Task ReconciliationAsync(string hostId, ReconciliationReport report)
@@ -601,4 +658,108 @@ public sealed class HostWorkerEventProcessor
         evt.HostId = hostId;
         return evt;
     }
+    private async Task LegacyRunnerStartedAsync(string hostId, RunnerStartedEvent evt, CancellationToken ct)
+    {
+        var owner = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (owner is null || owner.HostId != hostId) return;
+        var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (instance != null)
+        {
+            instance.Status = RunnerInstanceStatus.Running;
+            instance.StartedAt = DateTime.UtcNow;
+
+            switch (evt.Backend)
+            {
+                case ExecutionBackend.Docker:
+                    instance.ContainerId = evt.InstanceHandle;
+                    break;
+                case ExecutionBackend.Tart:
+                    instance.VmName = evt.InstanceHandle;
+                    break;
+                case ExecutionBackend.Native:
+                    if (int.TryParse(evt.InstanceHandle, out var pid))
+                        instance.ProcessId = pid;
+                    break;
+            }
+
+            await _store.Update(instance);
+        }
+
+        var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+        switch (evt.Backend)
+        {
+            case ExecutionBackend.Docker:
+                await runnerGrain.MarkRunning(containerId: evt.InstanceHandle);
+                break;
+            case ExecutionBackend.Tart:
+                await runnerGrain.MarkRunning(vmName: evt.InstanceHandle);
+                break;
+            case ExecutionBackend.Native:
+                await runnerGrain.MarkRunning(processId: int.TryParse(evt.InstanceHandle, out var pid) ? pid : null);
+                break;
+            default:
+                await runnerGrain.MarkRunning(containerId: evt.InstanceHandle);
+                break;
+        }
+
+        AgentHub.NotifyQueueRelevantChange();
+    }
+
+    private async Task LegacyRunnerStoppedAsync(string hostId, RunnerStoppedEvent evt, CancellationToken ct)
+    {
+        var owner = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (owner is null || owner.HostId != hostId) return;
+        var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (instance != null)
+        {
+            instance.Status = evt.Reason == "crashed" ? RunnerInstanceStatus.Crashed
+                : evt.ErrorMessage != null ? RunnerInstanceStatus.Failed
+                : RunnerInstanceStatus.Stopped;
+            instance.ErrorMessage = evt.ErrorMessage;
+            instance.StoppedAt = DateTime.UtcNow;
+            await _store.Update(instance);
+
+            if (instance.ProvisioningMode == "dynamic" && !string.IsNullOrWhiteSpace(instance.WebhookEventId))
+            {
+                var webhookEvent = await _store.Get<WebhookEvent>(instance.WebhookEventId);
+                var now = DateTime.UtcNow;
+                if (webhookEvent is not null && RunnerTimeoutService.PrepareLinkedEventRetry(
+                        webhookEvent,
+                        now,
+                        $"Runner stopped before the queued job was confirmed in progress: {evt.ErrorMessage ?? evt.Reason}"))
+                {
+                    await _store.Update(webhookEvent);
+                }
+            }
+        }
+
+        var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+        if (evt.Reason == "crashed")
+            await runnerGrain.MarkCrashed(evt.ErrorMessage ?? evt.Reason);
+        else if (evt.ErrorMessage != null)
+            await runnerGrain.MarkFailed(evt.ErrorMessage);
+        else
+            await runnerGrain.MarkStopped();
+
+        AgentHub.NotifyQueueRelevantChange();
+    }
+
+    private async Task LegacyRunnerHealthUpdateAsync(string hostId, RunnerHealthUpdateEvent evt, CancellationToken ct)
+    {
+        var owner = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (owner is null || owner.HostId != hostId) return;
+        var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (instance != null)
+        {
+            instance.Status = evt.Status;
+            instance.LastHealthCheck = evt.CheckedAt;
+            if (!string.IsNullOrEmpty(evt.StatusMessage))
+                instance.StatusMessage = evt.StatusMessage;
+            await _store.Update(instance);
+        }
+
+        var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+        await runnerGrain.UpdateHealth(evt.StatusMessage);
+    }
+
 }

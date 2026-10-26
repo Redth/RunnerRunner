@@ -33,6 +33,11 @@ public interface IRunnerBackend
 
 public class RunnerStartRequest
 {
+    public bool DeferRegistration { get; set; }
+    public NativeRunnerOwnership? Ownership { get; set; }
+    // Host-local durable boundaries. Never serialized or supplied by a remote job.
+    public Action<NativeRunnerOwnership>? BeforeNativeCreate { get; set; }
+    public Action<string>? NativeCreated { get; set; }
     public string InstanceId { get; set; } = "";
     public required string RunnerName { get; set; }
     public RunnerProvider Provider { get; set; }
@@ -69,6 +74,7 @@ public class RunnerStartRequest
 
 public class RunnerInstanceInfo
 {
+    public bool Prepared { get; set; }
     public required string InstanceHandle { get; set; } // container ID, VM name, or PID
     public required string RunnerName { get; set; }
 }

@@ -704,6 +704,18 @@
                                                     </div>
                                                 </div>
                                             }
+                                            @if (runner.ExecutionBackend == ExecutionBackend.Docker)
+                                            {
+                                                var limits = EnsureDockerConfig(runner);
+                                                <div class="row g-3">
+                                                    <div class="col-lg-4"><label class="form-label" for="dockerCpu-@runner.Id">CPU count</label><input id="dockerCpu-@runner.Id" type="number" class="form-control" min="1" @bind="limits.CpuCount" /></div>
+                                                    <div class="col-lg-4"><label class="form-label" for="dockerMemory-@runner.Id">Memory (MiB)</label><input id="dockerMemory-@runner.Id" type="number" class="form-control" min="1" @bind="limits.MemorySizeMb" /></div>
+                                                    <div class="col-lg-4"><label class="form-label" for="dockerDisk-@runner.Id">Windows writable disk (GiB)</label><input id="dockerDisk-@runner.Id" type="number" class="form-control" min="1" @bind="limits.DiskSizeGb" /></div>
+                                                </div>
+                                                <label><input type="checkbox" @bind="limits.HyperVIsolation" /> Hyper-V isolation (Windows)</label>
+                                                <label><input type="checkbox" @bind="limits.PrepareBeforeRegistration" /> Readiness before GitHub registration (Windows, budgeted host)</label>
+                                                <p class="text-muted">Budgeted jobs require all three limits. Writable-layer quotas require support from the Docker storage driver.</p>
+                                            }
                                             else if (runner.ExecutionBackend == ExecutionBackend.Tart)
                                             {
                                                 var tart = EnsureTartConfig(runner);

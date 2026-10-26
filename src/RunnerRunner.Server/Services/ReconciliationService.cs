@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
@@ -59,13 +60,17 @@ public class ReconciliationService : IHostedService, IDisposable
         StreamSubscriptionService.OnReconciliationReportReceived -= HandleReconciliation;
     }
 
-    private async void HandleReconciliation(ReconciliationReport report)
+    private void HandleReconciliation(ReconciliationReport report)
+        => _ = ProcessReconciliationAsync(report);
+
+    internal async Task ProcessReconciliationAsync(ReconciliationReport report)
     {
         try
         {
             using var scope = _services.CreateScope();
             var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
             var registrationCleanup = scope.ServiceProvider.GetRequiredService<RunnerRegistrationCleanupService>();
+            var admission = scope.ServiceProvider.GetRequiredService<IResourceAdmission>();
 
             var reportHostId = report.HostId;
             var hosts = (await store.Query<Host>().ToList())
@@ -86,13 +91,27 @@ public class ReconciliationService : IHostedService, IDisposable
             // Find stale DB records (in DB but NOT in report)
             foreach (var instance in dbInstances)
             {
-                if (RetainsOwnership(instance, report)) continue;
                 if (instance.Status is not (RunnerInstanceStatus.Running
                     or RunnerInstanceStatus.Starting
                     or RunnerInstanceStatus.Pending))
                     continue;
 
                 var matchedRunner = report.Runners.FirstOrDefault(r => MatchesRunner(instance, r));
+
+                var reservation = await admission.GetReservationAsync(instance.Id);
+                if (reservation is { Released: false })
+                {
+                    // An inventory omission, transient health result or exited process
+                    // does not prove its disk/native environment has been cleaned up.
+                    if (matchedRunner is null || !IsRunnerStillActive(matchedRunner))
+                    {
+                        instance.Status = RunnerInstanceStatus.Stopping;
+                        instance.StatusMessage = "Native cleanup unconfirmed; reservation and job ownership retained.";
+                        instance.StoppedAt = null;
+                        await store.Update(instance);
+                    }
+                    continue;
+                }
 
                 if (matchedRunner == null)
                 {
@@ -145,31 +164,16 @@ public class ReconciliationService : IHostedService, IDisposable
 
                 if (!hasMatch)
                 {
-                    _logger.LogWarning(
-                        "Sending cleanup for orphaned {Backend} resource {Resource} on host {Host} (running: {Running}, status: {Status})",
-                        runner.Backend,
-                        runner.ContainerId ?? runner.VmName ?? runner.ProcessId?.ToString() ?? runner.RunnerName,
-                        reportHostId,
-                        runner.IsRunning,
-                        runner.Status);
-
-                    var command = new CleanupOrphanCommand
-                    {
-                        Backend = runner.Backend,
-                        ContainerId = runner.ContainerId,
-                        VmName = runner.VmName,
-                        ProcessId = runner.ProcessId,
-                        InstanceDir = runner.InstanceDir
-                    };
-
-                    await _hostCommands.DispatchCleanupOrphanAsync(hostId, command);
+                    // A name prefix or missing document is not ownership evidence.
+                    // Recover through the worker's durable intent, never delete an
+                    // opaque resource merely because an inventory calls it an orphan.
+                    _logger.LogWarning("Unclaimed {Backend} resource on {Host}; preserving it for ownership reconciliation", runner.Backend, hostId);
                 }
             }
 
             // Update health for matched runners
             foreach (var instance in dbInstances)
             {
-                if (RetainsOwnership(instance, report)) continue;
                 var matched = report.Runners.FirstOrDefault(r => MatchesRunner(instance, r));
 
                 if (matched != null && IsRunnerStillActive(matched))
@@ -184,9 +188,6 @@ public class ReconciliationService : IHostedService, IDisposable
             _logger.LogError(ex, "Error processing reconciliation report from {Host}", report.HostId);
         }
     }
-
-    internal static bool RetainsOwnership(RunnerInstance instance, ReconciliationReport report)
-        => instance.CleanupPending || report.TrackedInstanceIds?.Contains(instance.Id) == true;
 
     /// <summary>
     /// True if an instance in <paramref name="status"/>, deployed/created at <paramref name="referenceTime"/>,

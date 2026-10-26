@@ -1,3 +1,5 @@
+using NSubstitute;
+using RunnerRunner.Server.Services.Admission;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
@@ -37,6 +39,9 @@ public sealed class OrleansTestClusterFixture : IDisposable
 
     internal RecordingHostCommandDispatcher HostCommands => TestServices.HostCommands;
 
+    internal IResourceAdmission Admission => TestServices.Admission;
+    internal FakeProviderHttpApi RegistrationApi => TestServices.RegistrationApi;
+
     private ClusterTestServices TestServices { get; }
 
     public void Dispose()
@@ -67,9 +72,13 @@ public sealed class OrleansTestClusterFixture : IDisposable
                 {
                     services.AddLogging(logging => logging.SetMinimumLevel(LogLevel.Warning));
                     services.AddSingleton(testServices.DocumentStore);
+                    services.AddSingleton(testServices.Admission);
                     services.AddSingleton(testServices.HostCommands);
                     services.AddSingleton<IHostCommandDispatcher>(sp => sp.GetRequiredService<RecordingHostCommandDispatcher>());
                     services.AddSingleton<RunnerRegistrationCleanupService>();
+                    services.AddSingleton<IHttpClientFactory>(testServices.RegistrationApi);
+                    services.AddSingleton<GitHubAuthenticationService>();
+                    services.AddSingleton<JitConfigService>();
                 });
         }
     }
@@ -77,6 +86,8 @@ public sealed class OrleansTestClusterFixture : IDisposable
     internal sealed class ClusterTestServices
     {
         public IDocumentStore DocumentStore { get; } = TestDocumentStore.Create();
+        internal FakeProviderHttpApi RegistrationApi { get; } = new FakeProviderHttpApi().RespondJson(_ => true, "{\"encoded_jit_config\":\"private-jit-test\"}");
+        public IResourceAdmission Admission { get; } = Substitute.For<IResourceAdmission>();
 
         internal RecordingHostCommandDispatcher HostCommands { get; } = new();
     }

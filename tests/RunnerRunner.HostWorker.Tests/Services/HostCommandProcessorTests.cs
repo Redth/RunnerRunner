@@ -96,7 +96,7 @@ public class HostCommandProcessorTests
     }
 
     [Fact]
-    public async Task DeployRunner_StartFailure_PublishesFailedStopAndRejectsCommand()
+    public async Task DeployRunner_StartFailure_PreservesUncertainClaimAndRejectsCommand()
     {
         using var directory = HostWorkerTestDirectory.Create("command-deploy-failure");
         var native = new FakeRunnerBackend
@@ -122,17 +122,69 @@ public class HostCommandProcessorTests
         Assert.Empty(lifecycle.RunningInstances);
         Assert.DoesNotContain(HostWorkerMessageKinds.CommandCompleted, NonLogKinds(sink));
 
-        var stopped = SinglePayload<RunnerStoppedEvent>(sink, HostWorkerMessageKinds.RunnerStopped);
-        Assert.Equal("failed", stopped.Reason);
-        Assert.Contains("simulated start failure", stopped.ErrorMessage);
+        Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
+        var health = sink.Published
+            .Where(m => m.Kind == HostWorkerMessageKinds.RunnerHealth)
+            .Select(HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>).Last();
+        Assert.Equal(RunnerInstanceStatus.Stopping, health.Status);
+        Assert.Contains("simulated start failure", health.StatusMessage);
 
         var rejected = SinglePayload<HostWorkerCommandStatus>(sink, HostWorkerMessageKinds.CommandRejected);
         Assert.False(rejected.Success);
         Assert.Contains("simulated start failure", rejected.Error);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeployRunner_RedeliveryAfterWorkerRestart_NeverStartsAnotherEnvironment(bool firstStartFails)
+    {
+        using var directory = HostWorkerTestDirectory.Create("durable-deploy");
+        var original = new FakeRunnerBackend
+        {
+            StartHandler = _ => firstStartFails
+                ? throw new IOException("uncertain backend result")
+                : new RunnerInstanceInfo { InstanceHandle = "h1", RunnerName = "r1" }
+        };
+        var envelope = new HostCommandEnvelope
+        {
+            Kind = HostCommandKind.DeployRunner,
+            DeployRunner = new DeployRunnerCommand
+            {
+                InstanceId = "persistent-i1", ProfileId = "p1", RunnerName = "r1", Backend = ExecutionBackend.Native,
+                JitConfig = "private-jit-fixture", RegistrationToken = "private-token-fixture",
+                EnvironmentVariables = new() { ["SECRET"] = "private-env-fixture" }
+            }
+        };
+        using (var first = CreateProcessor(directory, out _, out _, nativeBackend: original))
+            await first.ProcessCommandAsync(CreateCommand("first-command", envelope), CancellationToken.None);
+
+        var replacement = new FakeRunnerBackend();
+        using var second = CreateProcessor(directory, out var sink, out _, nativeBackend: replacement);
+        await second.ProcessCommandAsync(CreateCommand("different-command-id", envelope), CancellationToken.None);
+        Assert.Single(original.StartRequests);
+        Assert.Empty(replacement.StartRequests);
+        Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
+        Assert.Contains(HostWorkerMessageKinds.CommandRejected, NonLogKinds(sink));
+        var intent = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(Path.Combine(directory.Path, "deployment-intents"), "*.json")));
+        Assert.DoesNotContain("private-jit-fixture", intent);
+        Assert.DoesNotContain("private-token-fixture", intent);
+        Assert.DoesNotContain("private-env-fixture", intent);
+
+        if (firstStartFails)
+        {
+            await second.ProcessCommandAsync(CreateCommand("stop-unreconciled", new HostCommandEnvelope
+            {
+                Kind = HostCommandKind.StopRunner,
+                StopRunner = new StopRunnerCommand { InstanceId = "persistent-i1" }
+            }), CancellationToken.None);
+            Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
+            Assert.Empty(replacement.StopRequests);
+        }
+    }
+
     [Fact]
-    public async Task StopRunner_StopFailure_RetainsOwnershipAndRejectsCommand()
+    public async Task StopRunner_StopFailure_RetainsCapacityAndRejectsCommand()
     {
         using var directory = HostWorkerTestDirectory.Create("command-stop-failure");
         var native = new FakeRunnerBackend
@@ -146,6 +198,7 @@ public class HostCommandProcessorTests
             StopAsyncHandler = (_, _) => throw new InvalidOperationException("simulated stop failure")
         };
         using var processor = CreateProcessor(directory, out var sink, out var lifecycle, nativeBackend: native);
+        CreateIntents(directory).Begin(new DeployRunnerCommand { InstanceId = "inst-stop", RunnerName = "runner-stop", Backend = ExecutionBackend.Native });
         await lifecycle.StartRunnerAsync(new DeployRunnerCommand
         {
             InstanceId = "inst-stop",
@@ -168,12 +221,41 @@ public class HostCommandProcessorTests
         Assert.Single(lifecycle.RunningInstances);
         Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
         var health = SinglePayload<RunnerHealthUpdateEvent>(sink, HostWorkerMessageKinds.RunnerHealth);
-        Assert.True(health.CleanupPending);
         Assert.Equal(RunnerInstanceStatus.Stopping, health.Status);
+        Assert.Contains("Stop failed: simulated stop failure", health.StatusMessage);
 
         var rejected = SinglePayload<HostWorkerCommandStatus>(sink, HostWorkerMessageKinds.CommandRejected);
         Assert.False(rejected.Success);
         Assert.Contains("simulated stop failure", rejected.Error);
+    }
+
+    [Theory]
+    [InlineData("health_check_failed", false)]
+    [InlineData("stopped", false)]
+    [InlineData("exited:0", false)]
+    [InlineData("exited:0", true)]
+    public async Task HealthPublication_RequiresConfirmedCleanupBeforeReleasingCapacity(string status, bool cleanupConfirmed)
+    {
+        using var directory = HostWorkerTestDirectory.Create("uncertain-health");
+        using var processor = CreateProcessor(directory, out var sink, out _);
+        CreateIntents(directory).Begin(new DeployRunnerCommand { InstanceId = "i1", RunnerName = "r1" });
+        await processor.PublishRunnerHealthAsync(new ManagedRunnerHealth
+        {
+            Runner = new ManagedRunner { InstanceId = "i1", ProfileId = "p1", RunnerName = "r1", InstanceHandle = "h1", Backend = new FakeRunnerBackend(), IsEphemeral = true },
+            Health = new RunnerHealthStatus { IsRunning = false, Status = status },
+            CleanupConfirmed = cleanupConfirmed
+        }, CancellationToken.None);
+
+        if (cleanupConfirmed)
+        {
+            var stopped = SinglePayload<RunnerStoppedEvent>(sink, HostWorkerMessageKinds.RunnerStopped);
+            Assert.Equal("completed", stopped.Reason);
+        }
+        else
+        {
+            Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
+            Assert.Equal(RunnerInstanceStatus.Stopping, SinglePayload<RunnerHealthUpdateEvent>(sink, HostWorkerMessageKinds.RunnerHealth).Status);
+        }
     }
 
     [Fact]
@@ -257,25 +339,186 @@ public class HostCommandProcessorTests
         Assert.Contains("No readable HostWorker log file was found", logs.Logs);
     }
 
-    [Theory]
-    [InlineData("health_check_failed")]
-    [InlineData("stopped")]
-    [InlineData("not_found")]
-    public async Task UnknownHealthDoesNotPublishRunnerStopped(string status)
+    private static DeploymentIntentStore CreateIntents(HostWorkerTestDirectory directory)
+        => new(new HostWorkerPaths(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["HostWorker:DataRoot"] = directory.Path }).Build()), "host-1");
+
+    [Fact]
+    public async Task RecoveredStop_RefusesNameOnlyTartOwnershipAndForeignHandle()
     {
-        using var directory = HostWorkerTestDirectory.Create("uncertain-health");
-        using var processor = CreateProcessor(directory, out var sink, out _);
-        await processor.PublishRunnerHealthAsync(new ManagedRunnerHealth
+        using var directory = HostWorkerTestDirectory.Create("bound-cleanup");
+        var docker = new FakeRunnerBackend { BackendType = ExecutionBackend.Docker };
+        var tart = new FakeRunnerBackend { BackendType = ExecutionBackend.Tart };
+        var intents = CreateIntents(directory);
+        intents.Begin(new DeployRunnerCommand { InstanceId = "owned", RunnerName = "runner", Backend = ExecutionBackend.Tart });
+        intents.MarkStarted("owned", "owned-vm");
+        using (var processor = CreateProcessor(directory, out var rejected, out _, dockerBackend: docker, tartBackend: tart))
         {
-            Runner = new ManagedRunner { InstanceId = "owned", ProfileId = "profile", RunnerName = "runner",
-                InstanceHandle = "original", Backend = new FakeRunnerBackend(), StartedAt = DateTime.UtcNow },
-            Health = new RunnerHealthStatus { IsRunning = false, Status = status },
-            CleanupConfirmed = false
-        }, CancellationToken.None);
+            await processor.ProcessCommandAsync(CreateCommand("foreign", new HostCommandEnvelope
+            {
+                Kind = HostCommandKind.StopRunner,
+                StopRunner = new StopRunnerCommand { InstanceId = "owned", InstanceHandle = "other-vm" }
+            }), CancellationToken.None);
+            Assert.Empty(docker.StopRequests);
+            Assert.Empty(tart.StopRequests);
+            Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(rejected));
+        }
+        using var recovered = CreateProcessor(directory, out var sink, out _, dockerBackend: docker, tartBackend: tart);
+        await recovered.ProcessCommandAsync(CreateCommand("owned-stop", new HostCommandEnvelope
+        {
+            Kind = HostCommandKind.StopRunner,
+            StopRunner = new StopRunnerCommand { InstanceId = "owned", InstanceHandle = "owned-vm" }
+        }), CancellationToken.None);
+        Assert.Empty(docker.StopRequests);
+        Assert.Empty(tart.StopRequests);
         Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
-        var health = SinglePayload<RunnerHealthUpdateEvent>(sink, HostWorkerMessageKinds.RunnerHealth);
-        Assert.True(health.CleanupPending);
-        Assert.Equal(RunnerInstanceStatus.Stopping, health.Status);
+        Assert.Equal("started", intents.Read("owned")!.State);
+    }
+
+    [Fact]
+    public async Task CleanupReceipt_ProcessRestartResendsOnlyUntilServerAcknowledges()
+    {
+        using var directory = HostWorkerTestDirectory.Create("command-outbox-restart");
+        using (var first = CreateProcessor(directory, out _, out _, dockerBackend: new FakeRunnerBackend
+            { BackendType = ExecutionBackend.Docker, IsAvailable = false }))
+        {
+            await first.ProcessCommandAsync(CreateCommand("deploy", new HostCommandEnvelope
+            {
+                Kind = HostCommandKind.DeployRunner,
+                DeployRunner = new DeployRunnerCommand { InstanceId = "never-started", RunnerName = "runner", Backend = ExecutionBackend.Docker }
+            }), CancellationToken.None);
+        }
+        var backend = new FakeRunnerBackend { BackendType = ExecutionBackend.Docker };
+        using (var restarted = CreateProcessor(directory, out var sink, out _, dockerBackend: backend))
+        {
+            await restarted.ReplayCleanupReceiptsAsync(CancellationToken.None);
+            var receipt = SinglePayload<RunnerStoppedEvent>(sink, HostWorkerMessageKinds.RunnerStopped);
+            Assert.True(receipt.NeverStarted);
+            Assert.NotNull(receipt.CleanupReceiptId);
+            restarted.AcknowledgeCleanup(receipt);
+            Assert.Empty(backend.StartRequests);
+        }
+        using var third = CreateProcessor(directory, out var emptySink, out _, dockerBackend: backend);
+        await third.ReplayCleanupReceiptsAsync(CancellationToken.None);
+        Assert.Empty(emptySink.Published);
+    }
+
+    [Theory]
+    [InlineData(NativeRunnerState.Running, false, false)]
+    [InlineData(NativeRunnerState.Created, true, false)]
+    [InlineData(NativeRunnerState.Exited, true, false)]
+    [InlineData(NativeRunnerState.Absent, false, true)]
+    [InlineData(NativeRunnerState.Unknown, false, false)]
+    public async Task Recovery_AdoptsLiveOrCleansOnlyOwnedPartialResource(NativeRunnerState observed, bool expectedStop, bool savedHandle)
+    {
+        using var directory = HostWorkerTestDirectory.Create("native-recovery");
+        var paths = new HostWorkerPaths(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["HostWorker:DataRoot"] = directory.Path }).Build());
+        var intents = new DeploymentIntentStore(paths, "host-1");
+        var claim = intents.Begin(new DeployRunnerCommand { InstanceId = "job", ProfileId = "profile", RunnerName = "runner", Backend = ExecutionBackend.Docker });
+        intents.MarkCreating("job", claim.Ownership! with { ImageId = "sha256:immutable", Platform = "windows" });
+        if (savedHandle) intents.MarkCreated("job", "native-id");
+        var docker = new FakeRunnerBackend { BackendType = ExecutionBackend.Docker,
+            InspectHandler = (owner, handle) => new(observed, "native-id", 0) };
+        using var processor = CreateProcessor(directory, out var sink, out var lifecycle, dockerBackend: docker);
+        await processor.RecoverOwnedRunnersAsync(CancellationToken.None);
+        Assert.Empty(docker.StartRequests); // No JIT or deployment replay on any recovery path.
+        Assert.Equal(expectedStop ? 1 : 0, docker.StopRequests.Count);
+        if (observed == NativeRunnerState.Running)
+        {
+            Assert.Equal("native-id", Assert.Single(lifecycle.RunningInstances).Value.InstanceHandle);
+            Assert.Empty(intents.PendingCleanupReceipts());
+            Assert.Equal("native-id", SinglePayload<RunnerStartedEvent>(sink, HostWorkerMessageKinds.RunnerStarted).InstanceHandle);
+            await processor.RecoverOwnedRunnersAsync(CancellationToken.None);
+            Assert.Single(lifecycle.RunningInstances);
+        }
+        else if (observed == NativeRunnerState.Unknown)
+        {
+            Assert.Empty(lifecycle.RunningInstances);
+            Assert.Empty(intents.PendingCleanupReceipts());
+            Assert.Equal("creating", intents.Read("job")!.State);
+        }
+        else Assert.False(Assert.Single(intents.PendingCleanupReceipts()).NeverStarted);
+    }
+
+    [Fact]
+    public async Task Recovery_AbsenceWithoutImmutableHandleRetainsCapacity()
+    {
+        using var directory = HostWorkerTestDirectory.Create("lost-create");
+        var paths = new HostWorkerPaths(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["HostWorker:DataRoot"] = directory.Path }).Build());
+        var intents = new DeploymentIntentStore(paths, "host-1");
+        var claim = intents.Begin(new DeployRunnerCommand { InstanceId = "job", RunnerName = "runner", Backend = ExecutionBackend.Docker });
+        intents.MarkCreating("job", claim.Ownership! with { ImageId = "sha256:immutable", Platform = "windows" });
+        var docker = new FakeRunnerBackend { BackendType = ExecutionBackend.Docker,
+            InspectHandler = (_, _) => new(NativeRunnerState.Absent, null) };
+        using var processor = CreateProcessor(directory, out _, out _, dockerBackend: docker);
+        await processor.RecoverOwnedRunnersAsync(CancellationToken.None);
+        Assert.Empty(intents.PendingCleanupReceipts());
+        Assert.Equal("creating", intents.Read("job")!.State);
+        Assert.Empty(docker.StartRequests);
+        Assert.Empty(docker.StopRequests);
+    }
+
+    [Fact]
+    public async Task PreparedDeployment_RegistersOnlyAfterExactSingleUseActivation()
+    {
+        using var directory = HostWorkerTestDirectory.Create("prepared-activation");
+        var docker = new FakeRunnerBackend { BackendType = ExecutionBackend.Docker,
+            StartHandler = _ => new RunnerInstanceInfo { Prepared = true, RunnerName = "runner", InstanceHandle = "native" } };
+        using var processor = CreateProcessor(directory, out var sink, out var lifecycle, dockerBackend: docker);
+        await processor.ProcessCommandAsync(CreateCommand("prepare", new HostCommandEnvelope
+        { Kind = HostCommandKind.DeployRunner, DeployRunner = new DeployRunnerCommand
+          { InstanceId = "prepared", RunnerName = "runner", Backend = ExecutionBackend.Docker, DeferRegistration = true } }), CancellationToken.None);
+        Assert.Empty(docker.Activations);
+        Assert.Null(Assert.Single(docker.StartRequests).JitConfig);
+        Assert.Single(sink.Published.Where(m => m.Kind == HostWorkerMessageKinds.RunnerPrepared));
+        Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStarted, NonLogKinds(sink));
+        await processor.PublishRunnerHealthAsync(new ManagedRunnerHealth
+        { Runner = lifecycle.RunningInstances["prepared"], Health = new RunnerHealthStatus { IsRunning = true } }, CancellationToken.None);
+        Assert.DoesNotContain(sink.Published.Where(m => m.Kind == HostWorkerMessageKinds.RunnerHealth),
+            m => HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>(m).Status == RunnerInstanceStatus.Running);
+        foreach (var handle in new[] { "foreign", "native", "native" })
+            await processor.ProcessCommandAsync(CreateCommand(Guid.NewGuid().ToString(), new HostCommandEnvelope
+            { Kind = HostCommandKind.ActivateRunner, ActivateRunner = new ActivateRunnerCommand
+              { InstanceId = "prepared", InstanceHandle = handle, JitConfig = "private-jit-fixture" } }), CancellationToken.None);
+        Assert.Equal(("native", "private-jit-fixture"), Assert.Single(docker.Activations));
+        Assert.Single(sink.Published.Where(m => m.Kind == HostWorkerMessageKinds.RunnerStarted));
+        foreach (var file in Directory.GetFiles(Path.Combine(directory.Path, "deployment-intents")))
+            Assert.DoesNotContain("private-jit-fixture", await File.ReadAllTextAsync(file));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreparedRecovery_RetiresOnlyWhenActivationWasNeverAttempted(bool activationAttempted)
+    {
+        using var directory = HostWorkerTestDirectory.Create("prepared-recovery");
+        var paths = new HostWorkerPaths(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["HostWorker:DataRoot"] = directory.Path }).Build());
+        var intents = new DeploymentIntentStore(paths, "host-1");
+        var intent = intents.Begin(new DeployRunnerCommand
+        { InstanceId = "prepared", RunnerName = "runner", Backend = ExecutionBackend.Docker, DeferRegistration = true });
+        intents.MarkCreating("prepared", intent.Ownership! with { ImageId = "immutable", Platform = "windows" });
+        intents.MarkPrepared("prepared", "native");
+        if (activationAttempted) intents.ClaimActivation("prepared", "native");
+        var docker = new FakeRunnerBackend { BackendType = ExecutionBackend.Docker,
+            InspectHandler = (_, _) => new(NativeRunnerState.Running, "native") };
+        using var processor = CreateProcessor(directory, out var sink, out var lifecycle, dockerBackend: docker);
+        await processor.RecoverOwnedRunnersAsync(CancellationToken.None);
+        Assert.Empty(docker.StartRequests);
+        Assert.Empty(docker.Activations);
+        Assert.Equal(activationAttempted ? 0 : 1, docker.StopRequests.Count);
+        Assert.Equal(activationAttempted ? 1 : 0, lifecycle.RunningInstances.Count);
+        Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStarted, NonLogKinds(sink));
+        if (activationAttempted)
+        {
+            Assert.Equal("activating", intents.Read("prepared")!.State);
+            await processor.PublishRunnerHealthAsync(new ManagedRunnerHealth
+            { Runner = lifecycle.RunningInstances["prepared"], Health = new RunnerHealthStatus { IsRunning = true } }, CancellationToken.None);
+            Assert.DoesNotContain(sink.Published.Where(m => m.Kind == HostWorkerMessageKinds.RunnerHealth),
+                m => HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>(m).Status == RunnerInstanceStatus.Running);
+        }
     }
 
     private static HostCommandProcessor CreateProcessor(

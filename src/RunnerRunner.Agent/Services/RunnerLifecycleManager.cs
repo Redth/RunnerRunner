@@ -16,9 +16,9 @@ public class RunnerLifecycleManager
 
     /// <summary>
     /// Fired when a runner exits unexpectedly (container/VM/process died).
-    /// Parameters: (instanceId, exitCode, reason)
+    /// Parameters: (owned runner, exitCode, reason)
     /// </summary>
-    public event Action<string, long, string>? OnRunnerExited;
+    public event Action<ManagedRunner, long, string>? OnRunnerExited;
 
     public RunnerLifecycleManager(ILogger<RunnerLifecycleManager> logger)
     {
@@ -30,13 +30,20 @@ public class RunnerLifecycleManager
     public async Task<RunnerInstanceInfo?> StartRunnerAsync(
         DeployRunnerCommand command,
         IRunnerBackend backend,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        NativeRunnerOwnership? ownership = null,
+        Action<NativeRunnerOwnership>? beforeNativeCreate = null,
+        Action<string>? nativeCreated = null)
     {
         _logger.LogInformation("Starting runner {RunnerName} (instance {InstanceId})",
             command.RunnerName, command.InstanceId);
 
         var request = new RunnerStartRequest
         {
+            DeferRegistration = command.DeferRegistration,
+            Ownership = ownership,
+            BeforeNativeCreate = beforeNativeCreate,
+            NativeCreated = nativeCreated,
             InstanceId = command.InstanceId,
             RunnerName = command.RunnerName,
             Provider = command.Provider,
@@ -68,7 +75,7 @@ public class RunnerLifecycleManager
             InstanceHandle = info.InstanceHandle,
             Backend = backend,
             StartedAt = DateTime.UtcNow,
-            IsEphemeral = command.Ephemeral || !string.IsNullOrEmpty(command.JitConfig)
+            IsEphemeral = command.Ephemeral || command.DeferRegistration || !string.IsNullOrEmpty(command.JitConfig)
         };
 
         _logger.LogInformation("Runner {RunnerName} started (handle: {Handle})",
@@ -81,6 +88,20 @@ public class RunnerLifecycleManager
         }
 
         return info;
+    }
+
+    /// <summary>Resume observation of an exact existing resource without replaying startup.</summary>
+    public void AdoptRunner(ManagedRunner runner)
+    {
+        if (!_runners.TryAdd(runner.InstanceId, runner))
+        {
+            var current = _runners[runner.InstanceId];
+            if (current.InstanceHandle != runner.InstanceHandle || current.Backend.BackendType != runner.Backend.BackendType)
+                throw new InvalidOperationException("A different native resource is already tracked for this instance.");
+            return;
+        }
+        if (runner.Backend is Backends.DockerBackend docker)
+            _ = MonitorContainerExitAsync(docker, runner.InstanceId, runner.InstanceHandle, runner.RunnerName);
     }
 
     public async Task StopRunnerAsync(string instanceId, CancellationToken ct = default)
@@ -128,7 +149,7 @@ public class RunnerLifecycleManager
                     "Runner {RunnerName} ({InstanceId}) container exited: code={ExitCode}, reason={Reason}",
                     runnerName, instanceId, exitCode, reason);
 
-                OnRunnerExited?.Invoke(instanceId, exitCode, reason);
+                OnRunnerExited?.Invoke(runner, exitCode, reason);
             }
         }
         catch (OperationCanceledException)

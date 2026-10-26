@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -89,6 +90,8 @@ public class HostWorkerEventProcessorTests
             cache,
             new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance),
             new ConfigurationBuilder().Build(),
+            Substitute.For<IResourceAdmission>(),
+            new HostWorkerConnectionRegistry(),
             NullLogger<HostWorkerEventProcessor>.Instance);
 
     [Fact]
@@ -151,7 +154,7 @@ public class HostWorkerEventProcessorTests
                 {
                     IsContainer = true,
                     ContainerId = "abcdef123456",
-                    ContainerImage = "ghcr.io/redth/runnerrunner-hostworker:main"
+                    ContainerImage = "ghcr.io/example-org/runnerrunner-hostworker:main"
                 }
             },
             "peer",
@@ -164,7 +167,7 @@ public class HostWorkerEventProcessorTests
         Assert.NotNull(host);
         Assert.True(host.IsContainerized);
         Assert.Equal("abcdef123456", host.ContainerId);
-        Assert.Equal("ghcr.io/redth/runnerrunner-hostworker:main", host.ContainerImage);
+        Assert.Equal("ghcr.io/example-org/runnerrunner-hostworker:main", host.ContainerImage);
     }
 
     [Fact]
@@ -286,27 +289,10 @@ public class HostWorkerEventProcessorTests
             CancellationToken.None));
     }
 
-    [Theory]
-    [InlineData("owner", false, true)]
-    [InlineData("foreign", false, false)]
-    [InlineData("owner", true, false)]
-    public async Task CleanupPendingRequiresOwnedNonterminalInstance(string sender, bool terminal, bool expected)
-    {
-        var store = TestDocumentStore.Create();
-        await store.Insert(new RunnerInstance { Id = "owned", HostId = "owner", RunnerName = "runner",
-            Status = terminal ? RunnerInstanceStatus.Stopped : RunnerInstanceStatus.Running });
-        var processor = CreateProcessor(store);
-        await processor.HandleMessageAsync(sender, HostWorkerProtocol.CreateMessage(sender,
-            HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
-            { InstanceId = "owned", CleanupPending = true, Status = RunnerInstanceStatus.Stopping, CheckedAt = DateTime.UtcNow }), CancellationToken.None);
-        Assert.Equal(expected, (await store.Get<RunnerInstance>("owned"))!.CleanupPending);
-    }
-
     private static HostWorkerEventProcessor CreateProcessor(IDocumentStore store, LongRunningTaskService? tasks = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IHostGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IHostGrain>());
-        grainFactory.GetGrain<IRunnerInstanceGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IRunnerInstanceGrain>());
         grainFactory.GetGrain<ISchedulerGrain>(Arg.Any<long>(), null).Returns(Substitute.For<ISchedulerGrain>());
 
         return new HostWorkerEventProcessor(
@@ -315,7 +301,66 @@ public class HostWorkerEventProcessorTests
             CreateCache(),
             tasks ?? new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance),
             new ConfigurationBuilder().Build(),
+            Substitute.For<IResourceAdmission>(),
+            new HostWorkerConnectionRegistry(),
             NullLogger<HostWorkerEventProcessor>.Instance);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CleanupReceipt_RequiresNativeProofAndAuthenticatedOwner(bool nativeProof, bool acceptedOwner)
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new RunnerInstance { Id = "i1", HostId = "canonical-host", RunnerName = "r1", Status = RunnerInstanceStatus.Running });
+        var admission = Substitute.For<IResourceAdmission>();
+        admission.GetReservationAsync("i1", Arg.Any<CancellationToken>()).Returns(new ResourceReservation("i1", "canonical-host", ExecutionBackend.Docker, new(2, 1024, 20), "container-1", false));
+        admission.ConfirmCleanupAsync("canonical-host", "i1", ExecutionBackend.Docker, "container-1", false, Arg.Any<CancellationToken>()).Returns(acceptedOwner);
+        var grains = Substitute.For<IGrainFactory>();
+        var runner = Substitute.For<IRunnerInstanceGrain>();
+        grains.GetGrain<IRunnerInstanceGrain>("i1", null).Returns(runner);
+        var processor = new HostWorkerEventProcessor(store, grains, CreateCache(),
+            new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance), new ConfigurationBuilder().Build(), admission,
+            new HostWorkerConnectionRegistry(),
+            NullLogger<HostWorkerEventProcessor>.Instance);
+        var message = HostWorkerProtocol.CreateMessage("forged-payload-host", HostWorkerMessageKinds.RunnerStopped,
+            new RunnerStoppedEvent { InstanceId = "i1", Reason = "completed", CleanupConfirmed = nativeProof, Backend = ExecutionBackend.Docker, InstanceHandle = "container-1" });
+        await processor.HandleMessageAsync("canonical-host", message, CancellationToken.None);
+        Assert.Equal(nativeProof && acceptedOwner ? RunnerInstanceStatus.Stopped : RunnerInstanceStatus.Running,
+            (await store.Get<RunnerInstance>("i1"))!.Status);
+        if (nativeProof && acceptedOwner) await runner.Received(1).MarkStopped();
+        else await runner.DidNotReceive().MarkStopped();
+        await admission.DidNotReceive().ConfirmCleanupAsync("forged-payload-host", Arg.Any<string>(), Arg.Any<ExecutionBackend>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CleanupReceipt_LostAcknowledgementReplaysAfterDocumentPurge()
+    {
+        var store = TestDocumentStore.Create(); // Already purged; no empty grain may be recreated.
+        var admission = Substitute.For<IResourceAdmission>();
+        admission.GetReservationAsync("job", Arg.Any<CancellationToken>()).Returns(new ResourceReservation("job", "host", ExecutionBackend.Docker, new(2, 1024, 20), "native-id", true));
+        admission.ConfirmCleanupAsync("host", "job", ExecutionBackend.Docker, "native-id", false, Arg.Any<CancellationToken>()).Returns(true);
+        var grains = Substitute.For<IGrainFactory>();
+        var registry = new HostWorkerConnectionRegistry();
+        var processor = new HostWorkerEventProcessor(store, grains, CreateCache(),
+            new LongRunningTaskService(NullLogger<LongRunningTaskService>.Instance), new ConfigurationBuilder().Build(), admission,
+            registry, NullLogger<HostWorkerEventProcessor>.Instance);
+        var evt = new RunnerStoppedEvent { InstanceId = "job", Backend = ExecutionBackend.Docker, InstanceHandle = "native-id",
+            CleanupConfirmed = true, CleanupReceiptId = "receipt", Reason = "completed" };
+        var message = HostWorkerProtocol.CreateMessage("forged", HostWorkerMessageKinds.RunnerStopped, evt);
+        // The release commits while disconnected. The failed ACK must not undo it.
+        await processor.HandleMessageAsync("host", message, CancellationToken.None);
+        await using var connection = registry.Register("host");
+        await processor.HandleMessageAsync("host", message, CancellationToken.None);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await using var replies = connection.ReadAllAsync(timeout.Token).GetAsyncEnumerator();
+        Assert.True(await replies.MoveNextAsync());
+        Assert.Equal("host", replies.Current.HostId);
+        Assert.Equal(HostWorkerMessageKinds.CleanupReceiptAccepted, replies.Current.Kind);
+        Assert.Equal("receipt", HostWorkerProtocol.DeserializePayload<RunnerStoppedEvent>(replies.Current).CleanupReceiptId);
+        grains.DidNotReceive().GetGrain<IRunnerInstanceGrain>(Arg.Any<string>(), null);
+        await admission.Received(2).ConfirmCleanupAsync("host", "job", ExecutionBackend.Docker, "native-id", false, Arg.Any<CancellationToken>());
     }
 
     private static HostWorkerLogCache CreateCache()

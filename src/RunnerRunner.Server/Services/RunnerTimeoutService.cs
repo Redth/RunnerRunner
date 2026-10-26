@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
@@ -100,12 +101,16 @@ public class RunnerTimeoutService : BackgroundService
         var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
 
         var instances = (await store.Query<RunnerInstance>().ToList()).ToList();
+        var admission = scope.ServiceProvider.GetRequiredService<IResourceAdmission>();
         var now = DateTime.UtcNow;
 
         foreach (var instance in instances)
         {
             ct.ThrowIfCancellationRequested();
-            if (instance.CleanupPending) continue;
+            // Timers are observations, not native cleanup evidence. Do not stop,
+            // requeue or erase a possibly running job on the strength of a timeout.
+            if (await admission.GetReservationAsync(instance.Id, ct) is { Released: false })
+                continue;
 
             switch (instance.Status)
             {

@@ -59,7 +59,8 @@ public class HostWorkerConnectionServiceTests
                 identity,
                 paths,
                 NullLogger<HostResourceUsageCollector>.Instance,
-                NullLoggerFactory.Instance));
+                NullLoggerFactory.Instance),
+            new WindowsJobDockerService(configuration, NullLogger<WindowsJobDockerService>.Instance));
 
         var message = connection.CreateHello();
         var hello = HostWorkerProtocol.DeserializePayload<HostWorkerHello>(message);

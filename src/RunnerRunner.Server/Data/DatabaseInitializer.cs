@@ -1,3 +1,4 @@
+using RunnerRunner.Server.Services.Admission;
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Models;
@@ -37,7 +38,7 @@ public static class DatabaseInitializer
 
         await MigrateLegacyWebhookBindings(store);
         await MigrateLegacyProvisioningRuleRunnerDefinitions(store);
-        await CleanupLegacyRunnerInstances(store);
+        await CleanupLegacyRunnerInstances(store, scope.ServiceProvider.GetRequiredService<IResourceAdmission>());
     }
 
     private static async Task EnsureTable<T>(IDocumentStore store, Func<T> createSentinel) where T : class
@@ -63,7 +64,7 @@ public static class DatabaseInitializer
         }
     }
 
-    private static async Task CleanupLegacyRunnerInstances(IDocumentStore store)
+    private static async Task CleanupLegacyRunnerInstances(IDocumentStore store, IResourceAdmission admission)
     {
         var staleInstances = (await store.Query<RunnerInstance>().ToList())
             .Where(x =>
@@ -73,7 +74,10 @@ public static class DatabaseInitializer
             .ToList();
 
         foreach (var instance in staleInstances)
+        {
+            if (await admission.GetReservationAsync(instance.Id) is { Released: false }) continue;
             await store.Remove<RunnerInstance>(instance.Id);
+        }
     }
 
     private static async Task MigrateLegacyWebhookBindings(IDocumentStore store)
