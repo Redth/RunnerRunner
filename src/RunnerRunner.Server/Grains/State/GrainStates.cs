@@ -1,3 +1,4 @@
+using Newtonsoft.Json;
 using RunnerRunner.Core.Models;
 
 namespace RunnerRunner.Server.Grains.State;
@@ -14,8 +15,10 @@ public class HostGrainState
     [Id(6)] public string? GroupId { get; set; }
 
     // Resource limits
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(7)] public int MaxDockerContainers { get; set; } = 10;
     [Id(8)] public int MaxTartVMs { get; set; }
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(9)] public int MaxNativeProcesses { get; set; } = 5;
 
     // Current usage
@@ -111,15 +114,19 @@ public class ProvisioningRuleConfig
     [Id(1)] public string? Description { get; set; }
     [Id(2)] public string ProfileId { get; set; } = "";
     [Id(3)] public ProvisioningType Type { get; set; } = ProvisioningType.Static;
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(4)] public bool Enabled { get; set; } = true;
 
     // Static: fixed count
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(5)] public int DesiredCount { get; set; } = 1;
     [Id(6)] public string? TargetHostId { get; set; }
 
     // ScaleSet: auto-scale bounds
     [Id(7)] public int MinReady { get; set; } = 0;
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(8)] public int MaxInstances { get; set; } = 5;
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(9)] public int ScaleDownDelaySeconds { get; set; } = 300;
 
     // Webhook: event-triggered
@@ -129,6 +136,7 @@ public class ProvisioningRuleConfig
     [Id(13)] public List<LabelMappingConfig> LabelMappings { get; set; } = [];
     [Id(14)] public string? DefaultProfileId { get; set; }
     [Id(15)] public int MaxConcurrent { get; set; } = 0;
+    [JsonProperty(DefaultValueHandling = DefaultValueHandling.Include | DefaultValueHandling.Populate)]
     [Id(16)] public int CooldownSeconds { get; set; } = 5;
 
     // Host matching

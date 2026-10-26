@@ -115,6 +115,9 @@ builder.Services.AddGrpc();
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
 
+// Persist false/zero values even when grain constructors use nonzero defaults.
+builder.Services.PostConfigure<Orleans.Serialization.OrleansJsonSerializerOptions>(GrainStorageSerialization.Configure);
+
 // Orleans silo (co-hosted with Blazor server)
 builder.UseOrleans(silo =>
 {
