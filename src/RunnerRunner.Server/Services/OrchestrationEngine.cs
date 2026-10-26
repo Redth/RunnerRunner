@@ -258,7 +258,7 @@ public class OrchestrationEngine : BackgroundService
             store, profile, envVars, profile.ExecutionBackend, host?.Platform ?? HostPlatform.Linux);
 
         // Resolve registry credentials for Docker image pulls
-        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.DockerConfig, _logger);
+        var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.ExecutionBackend, profile.DockerConfig, profile.TartConfig, _logger);
 
         var command = new DeployRunnerCommand
         {

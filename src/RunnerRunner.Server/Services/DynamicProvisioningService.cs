@@ -1015,7 +1015,7 @@ public class DynamicProvisioningService : BackgroundService
                 store, profile, envVars, profile.ExecutionBackend, hostSelection.Host.Platform);
 
             // Resolve registry credentials for Docker image pulls
-            var registryCred = await RegistryCredentialResolver.ResolveAsync(store, dockerConfig, _logger);
+            var registryCred = await RegistryCredentialResolver.ResolveAsync(store, profile.ExecutionBackend, dockerConfig, profile.TartConfig, _logger);
 
             // Resolve runner agent version (for Docker auto-install)
             var agentVersion = profile.RunnerAgentVersion;
