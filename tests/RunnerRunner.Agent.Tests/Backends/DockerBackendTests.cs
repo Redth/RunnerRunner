@@ -6,6 +6,17 @@ namespace RunnerRunner.Agent.Tests.Backends;
 
 public class DockerBackendTests
 {
+    [Theory]
+    [InlineData("team/image:v2", "registry:5000/team/image:v2")]
+    [InlineData("team/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "registry:5000/team/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void PullParametersUseTheExactCreateReference(string image, string expected)
+    {
+        var parameters = DockerBackend.BuildPullParameters(new DockerImageConfig
+        { RegistryUrl = "registry:5000", ImageName = image, Tag = "latest" });
+        Assert.Equal(expected, parameters.FromImage);
+        Assert.Null(parameters.Tag);
+    }
+
     [Fact]
     public void BuildJitEntrypointOverride_UsesLinuxShellWrapperForLinuxContainers()
     {

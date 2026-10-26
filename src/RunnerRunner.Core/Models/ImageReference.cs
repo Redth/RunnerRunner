@@ -5,6 +5,7 @@ public static class ImageReference
     public static string Build(string? registryUrl, string imageName, string? tag = null)
     {
         var (repository, existingTag) = Normalize(registryUrl, imageName);
+        if (repository.Contains('@')) return repository;
         var resolvedTag = string.IsNullOrWhiteSpace(existingTag) ? tag : existingTag;
 
         return string.IsNullOrWhiteSpace(resolvedTag)
@@ -27,7 +28,7 @@ public static class ImageReference
 
         var lastSlash = repository.LastIndexOf('/');
         var lastColon = repository.LastIndexOf(':');
-        if (lastColon > lastSlash)
+        if (!repository.Contains('@') && lastColon > lastSlash)
         {
             existingTag = repository[(lastColon + 1)..];
             repository = repository[..lastColon];
