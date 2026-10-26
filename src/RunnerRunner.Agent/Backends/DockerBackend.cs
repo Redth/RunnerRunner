@@ -56,13 +56,18 @@ public class DockerBackend : IRunnerBackend
         return _cachedAvailability;
     }
 
+    internal static ImagesCreateParameters BuildPullParameters(DockerImageConfig config) => new()
+    {
+        // Do not split a digest or override a tag embedded in ImageName.
+        FromImage = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag)
+    };
+
     public async Task<RunnerInstanceInfo> StartRunnerAsync(RunnerStartRequest request, CancellationToken ct = default)
     {
         var config = request.DockerConfig
             ?? throw new InvalidOperationException("DockerConfig is required for Docker backend");
 
         var imageName = ImageReference.Build(config.RegistryUrl, config.ImageName, config.Tag);
-        var repository = ImageReference.BuildRepository(config.RegistryUrl, config.ImageName);
 
         // Pull image if needed
         if (config.PullPolicy == PullPolicy.Always ||
@@ -80,7 +85,7 @@ public class DockerBackend : IRunnerBackend
                 _logger.LogInformation("Using registry credentials (user: {User}) for image pull", request.RegistryUsername);
             }
             await _client.Images.CreateImageAsync(
-                new ImagesCreateParameters { FromImage = repository, Tag = config.Tag },
+                BuildPullParameters(config),
                 authConfig, new Progress<JSONMessage>(m => _logger.LogDebug("Pull: {Status}", m.Status)), ct);
         }
 
