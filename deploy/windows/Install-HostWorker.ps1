@@ -6,6 +6,7 @@ param(
     [string]$HostName = $env:COMPUTERNAME,
     [string]$ServerUrl = "",
     [string]$EnrollmentToken = "",
+    [string]$EnrollmentTokenFile = "",
     [string]$ServiceAccount = "LocalSystem",
     [string]$ServicePassword = "",
     [string]$HttpProxy = "",
@@ -15,12 +16,47 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function Get-RunnerRunnerServiceInstallAction {
+    param($Service, [string]$BinaryPath, [string]$Account, [bool]$PreserveConfig,
+        $Settings, [string]$HostId, [string]$ServerUrl, [string]$DataPath)
+    if ($null -eq $Service) { return 'Create' }
+    if (-not $PreserveConfig -or $Service.PathName -cne $BinaryPath -or
+        $Service.StartName -ine $Account -or $null -eq $Settings) {
+        throw 'Existing service differs; use a drained upgrade instead of reinstalling.'
+    }
+    if (($HostId -and $Settings.HostWorker.HostId -cne $HostId) -or
+        ($ServerUrl -and $Settings.HostWorker.ServerUrl -cne $ServerUrl) -or
+        $Settings.HostWorker.DataRoot -ine $DataPath) {
+        throw 'Existing worker identity or data directory differs.'
+    }
+    if ($Service.State -notin @('Running', 'Start Pending')) {
+        throw 'Existing service is not running; inspect its state before attempting recovery.'
+    }
+    return 'Preserve'
+}
+
+if ($ServiceName -notmatch "^[A-Za-z0-9_-]+$") { throw "Invalid service name." }
 
 $deployPath = $DeployDir.Replace('/', '\')
 $dataPath = $DataDir.Replace('/', '\')
 $logsPath = Join-Path $dataPath "logs"
 $exePath = Join-Path $deployPath "RunnerRunner.HostWorker.exe"
 $settingsPath = Join-Path $deployPath "appsettings.Production.json"
+
+$binaryPath = "`"$exePath`""
+# Inspect before writing configuration or interrupting any existing process.
+$existing = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+$current = $null
+if ($existing -and (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
+    $current = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+}
+$action = Get-RunnerRunnerServiceInstallAction -Service $existing -BinaryPath $binaryPath `
+    -Account $ServiceAccount -PreserveConfig ([bool]$PreserveConfig) -Settings $current `
+    -HostId $HostId -ServerUrl $ServerUrl -DataPath $dataPath
+if ($action -eq 'Preserve') {
+    Write-Host "RunnerRunner HostWorker already installed and running; preserved."
+    return
+}
 
 if ([string]::IsNullOrWhiteSpace($HostId)) {
     $HostId = $HostName
@@ -43,6 +79,10 @@ else {
         throw "ServerUrl is required."
     }
 
+    if ($EnrollmentTokenFile) {
+        if ($EnrollmentToken) { throw 'Supply only one enrollment token source.' }
+        $EnrollmentToken = [IO.File]::ReadAllText($EnrollmentTokenFile).Trim()
+    }
     if ([string]::IsNullOrWhiteSpace($EnrollmentToken)) {
         throw "EnrollmentToken is required."
     }
@@ -71,20 +111,13 @@ else {
         $settings["HostWorker"]["NoProxy"] = $NoProxy
     }
 
+    # Protect the directory before writing an enrollment token for a SYSTEM service.
+    if ($ServiceAccount -eq 'LocalSystem') {
+        & icacls.exe $deployPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to protect the worker configuration directory.' }
+    }
     $settings | ConvertTo-Json -Depth 8 | Set-Content -Path $settingsPath -Encoding UTF8
 }
-
-$service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($service) {
-    if ($service.Status -ne "Stopped") {
-        Stop-Service -Name $ServiceName -Force -ErrorAction Stop
-        $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
-    }
-    sc.exe delete $ServiceName | Out-Null
-    Start-Sleep -Seconds 2
-}
-
-$binaryPath = "`"$exePath`""
 
 if ($ServiceAccount -eq "LocalSystem") {
     New-Service `
@@ -109,6 +142,7 @@ else {
 }
 
 sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Unable to configure service recovery." }
 Start-Service -Name $ServiceName
 
 Write-Host "RunnerRunner HostWorker installed as Windows Service '$ServiceName'."
