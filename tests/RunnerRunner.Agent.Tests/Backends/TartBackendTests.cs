@@ -44,4 +44,18 @@ public class TartBackendTests
         Assert.Contains(vms, vm => vm.Name == "rr-lower" && vm.IsRunning);
         Assert.Contains(vms, vm => vm.Name == "rr-upper" && !vm.IsRunning);
     }
+    [Fact]
+    public void PasswordIsOnlyInChildEnvironmentAndArgumentsAreNotShellInterpolated()
+    {
+        const string password = "test-only-'$(echo nope)\" secret";
+        var start = TartBackend.BuildSshpassStartInfo("/path with spaces/sshpass", "runner", "192.0.2.5", password);
+        Assert.Equal(password, start.Environment["SSHPASS"]);
+        Assert.DoesNotContain(password, start.Arguments);
+        Assert.DoesNotContain(password, string.Join(" ", start.ArgumentList));
+        Assert.Equal("-e", start.ArgumentList[0]);
+        Assert.Equal("ssh", start.ArgumentList[1]);
+        Assert.DoesNotContain("-p", start.ArgumentList);
+        Assert.True(start.RedirectStandardInput);
+        Assert.False(start.UseShellExecute);
+    }
 }
