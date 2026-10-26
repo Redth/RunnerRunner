@@ -167,11 +167,17 @@ builder.UseOrleans(silo =>
         var advertisedIp = builder.Configuration["Orleans:AdvertisedIPAddress"];
         if (!string.IsNullOrEmpty(advertisedIp) && System.Net.IPAddress.TryParse(advertisedIp, out var ip))
         {
+            var listenAddress = builder.Configuration["Orleans:ListenIPAddress"];
+            var listenIp = System.Net.IPAddress.Any;
+            if (!string.IsNullOrWhiteSpace(listenAddress)
+                && !System.Net.IPAddress.TryParse(listenAddress, out listenIp))
+                throw new InvalidOperationException("Orleans:ListenIPAddress must be a valid IP address.");
+
             silo.Configure<Orleans.Configuration.EndpointOptions>(options =>
             {
                 options.AdvertisedIPAddress = ip;
-                options.SiloListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 11111);
-                options.GatewayListeningEndpoint = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 30000);
+                options.SiloListeningEndpoint = new System.Net.IPEndPoint(listenIp, 11111);
+                options.GatewayListeningEndpoint = new System.Net.IPEndPoint(listenIp, 30000);
                 options.SiloPort = 11111;
                 options.GatewayPort = 30000;
             });
@@ -260,6 +266,7 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
     app.UseHsts();
 }
+app.UseMiddleware<HostWorkerEndpointIsolationMiddleware>();
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseForwardedHeaders();
 app.UseHttpsRedirection();

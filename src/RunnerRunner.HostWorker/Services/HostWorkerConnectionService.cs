@@ -120,9 +120,10 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
 
     private GrpcChannelOptions CreateGrpcChannelOptions(string serverUrl)
     {
+        var handler = HostWorkerServerTrust.CreateHandler(_configuration, serverUrl);
         var proxyUrl = ResolveProxyUrl(serverUrl);
         if (string.IsNullOrWhiteSpace(proxyUrl))
-            return new GrpcChannelOptions();
+            return new GrpcChannelOptions { HttpHandler = handler };
 
         var proxy = new WebProxy(proxyUrl)
         {
@@ -132,14 +133,9 @@ internal sealed class HostWorkerConnectionService : BackgroundService, IHostWork
         if (bypassList.Length > 0)
             proxy.BypassList = bypassList;
 
-        return new GrpcChannelOptions
-        {
-            HttpHandler = new SocketsHttpHandler
-            {
-                UseProxy = true,
-                Proxy = proxy
-            }
-        };
+        handler.UseProxy = true;
+        handler.Proxy = proxy;
+        return new GrpcChannelOptions { HttpHandler = handler };
     }
 
     private string? ResolveProxyUrl(string serverUrl)
