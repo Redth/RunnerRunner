@@ -479,23 +479,40 @@ public class TartBackend : IRunnerBackend
         if (!path.Contains("/opt/homebrew"))
             psi.Environment["PATH"] = $"/opt/homebrew/bin:/opt/homebrew/sbin:{path}";
 
-        var process = Process.Start(psi)!;
+        await RunSshProcessAsync(psi, script, ct);
+    }
 
-        if (psi.RedirectStandardInput)
+    internal static async Task RunSshProcessAsync(ProcessStartInfo start, string script, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var process = Process.Start(start)
+            ?? throw new InvalidOperationException("SSH provisioning process did not start.");
+        // Drain both pipes before writing stdin: SSH can emit enough diagnostics to
+        // block while the caller is still sending a large provisioning script.
+        // Output may contain credentials, so discard it without buffering or logging.
+        var output = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, ct);
+        var error = process.StandardError.BaseStream.CopyToAsync(Stream.Null, ct);
+        try
         {
-            await process.StandardInput.WriteAsync(script);
-            await process.StandardInput.WriteAsync(Environment.NewLine);
-            process.StandardInput.Close();
+            if (start.RedirectStandardInput)
+            {
+                await process.StandardInput.WriteAsync(script.AsMemory(), ct);
+                await process.StandardInput.WriteAsync(Environment.NewLine.AsMemory(), ct);
+                process.StandardInput.Close();
+            }
+            await Task.WhenAll(output, error, process.WaitForExitAsync(ct));
         }
-
-        var stdout = await process.StandardOutput.ReadToEndAsync(ct);
-        var stderr = await process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
-
-        var output = string.IsNullOrEmpty(stderr) ? stdout : $"{stdout}\n{stderr}";
-
+        catch
+        {
+            TryKillCanceledProcess(process);
+            try { await process.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { /* Preserve the original provisioning failure. */ }
+            try { await Task.WhenAll(output, error).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { /* Observe canceled or closed pipe reads. */ }
+            throw;
+        }
         if (process.ExitCode != 0)
-            throw new InvalidOperationException($"SSH command failed with exit code {process.ExitCode}: {output.Trim()}");
+            throw new InvalidOperationException($"SSH provisioning failed with exit code {process.ExitCode}.");
     }
 
     private static string EscapeShell(string value) =>
