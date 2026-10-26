@@ -306,6 +306,36 @@ public sealed class GrainStateTests
     }
 
     [Fact]
+    public async Task CleanupPendingBlocksTerminalTransitionsAndKeepsCapacityUntilConfirmed()
+    {
+        var hostId = OrleansTestIds.Create("cleanup-host");
+        var profileId = OrleansTestIds.Create("cleanup-profile");
+        var instanceId = OrleansTestIds.Create("cleanup-runner");
+        var host = _grainFactory.GetGrain<IHostGrain>(hostId);
+        await host.Register("builder", HostPlatform.Linux, "x64", "1.0");
+        await _grainFactory.GetGrain<IProfileGrain>(profileId).SetProfile(new RunnerProfile
+        { Id = profileId, Name = "profile", ExecutionBackend = ExecutionBackend.Docker });
+        var runner = _grainFactory.GetGrain<IRunnerInstanceGrain>(instanceId);
+        await runner.Initialize(hostId, profileId, "runner", "static");
+        await runner.MarkStarting();
+        await runner.MarkRunning(containerId: "original-container");
+        await runner.SetCleanupPending(true);
+        await runner.MarkFailed("timeout");
+        await runner.MarkCrashed("missing from inventory");
+        await runner.MarkStopped();
+        Assert.True((await runner.GetState()).CleanupPending);
+        Assert.Equal(RunnerInstanceStatus.Stopping, (await runner.GetState()).Status);
+        Assert.Equal(1, (await host.GetState()).RunningDockerContainers);
+        Assert.True((await _fixture.DocumentStore.Get<RunnerInstance>(instanceId))!.CleanupPending);
+        await runner.SetCleanupPending(false);
+        Assert.Equal(RunnerInstanceStatus.Running, (await runner.GetState()).Status);
+        Assert.Equal(1, (await host.GetState()).RunningDockerContainers);
+        await runner.MarkStopped();
+        Assert.Equal(0, (await host.GetState()).RunningDockerContainers);
+        Assert.False((await runner.GetState()).CleanupPending);
+    }
+
+    [Fact]
     public async Task RunnerInstanceGrain_TransitionsPersistStatusHistoryAndHostCapacity()
     {
         var hostId = OrleansTestIds.Create("host");

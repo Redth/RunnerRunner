@@ -286,10 +286,27 @@ public class HostWorkerEventProcessorTests
             CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("owner", false, true)]
+    [InlineData("foreign", false, false)]
+    [InlineData("owner", true, false)]
+    public async Task CleanupPendingRequiresOwnedNonterminalInstance(string sender, bool terminal, bool expected)
+    {
+        var store = TestDocumentStore.Create();
+        await store.Insert(new RunnerInstance { Id = "owned", HostId = "owner", RunnerName = "runner",
+            Status = terminal ? RunnerInstanceStatus.Stopped : RunnerInstanceStatus.Running });
+        var processor = CreateProcessor(store);
+        await processor.HandleMessageAsync(sender, HostWorkerProtocol.CreateMessage(sender,
+            HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
+            { InstanceId = "owned", CleanupPending = true, Status = RunnerInstanceStatus.Stopping, CheckedAt = DateTime.UtcNow }), CancellationToken.None);
+        Assert.Equal(expected, (await store.Get<RunnerInstance>("owned"))!.CleanupPending);
+    }
+
     private static HostWorkerEventProcessor CreateProcessor(IDocumentStore store, LongRunningTaskService? tasks = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IHostGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IHostGrain>());
+        grainFactory.GetGrain<IRunnerInstanceGrain>(Arg.Any<string>(), null).Returns(Substitute.For<IRunnerInstanceGrain>());
         grainFactory.GetGrain<ISchedulerGrain>(Arg.Any<long>(), null).Returns(Substitute.For<ISchedulerGrain>());
 
         return new HostWorkerEventProcessor(

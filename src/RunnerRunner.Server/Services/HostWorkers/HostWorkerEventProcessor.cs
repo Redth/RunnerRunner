@@ -101,10 +101,10 @@ public sealed class HostWorkerEventProcessor
                     await RunnerStartedAsync(HostWorkerProtocol.DeserializePayload<RunnerStartedEvent>(message));
                     break;
                 case HostWorkerMessageKinds.RunnerStopped:
-                    await RunnerStoppedAsync(HostWorkerProtocol.DeserializePayload<RunnerStoppedEvent>(message));
+                    await RunnerStoppedAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerStoppedEvent>(message));
                     break;
                 case HostWorkerMessageKinds.RunnerHealth:
-                    await RunnerHealthUpdateAsync(HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>(message));
+                    await RunnerHealthUpdateAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<RunnerHealthUpdateEvent>(message));
                     break;
                 case HostWorkerMessageKinds.Reconciliation:
                     await ReconciliationAsync(canonicalHostId, HostWorkerProtocol.DeserializePayload<ReconciliationReport>(message));
@@ -358,11 +358,13 @@ public sealed class HostWorkerEventProcessor
         AgentHub.NotifyQueueRelevantChange();
     }
 
-    private async Task RunnerStoppedAsync(RunnerStoppedEvent evt)
+    private async Task RunnerStoppedAsync(string hostId, RunnerStoppedEvent evt)
     {
         var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (instance == null || instance.HostId != hostId) return;
         if (instance != null)
         {
+            instance.CleanupPending = false;
             instance.Status = evt.Reason == "crashed" ? RunnerInstanceStatus.Crashed
                 : evt.ErrorMessage != null ? RunnerInstanceStatus.Failed
                 : RunnerInstanceStatus.Stopped;
@@ -385,6 +387,7 @@ public sealed class HostWorkerEventProcessor
         }
 
         var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+        await runnerGrain.SetCleanupPending(false);
         if (evt.Reason == "crashed")
             await runnerGrain.MarkCrashed(evt.ErrorMessage ?? evt.Reason);
         else if (evt.ErrorMessage != null)
@@ -395,11 +398,13 @@ public sealed class HostWorkerEventProcessor
         AgentHub.NotifyQueueRelevantChange();
     }
 
-    private async Task RunnerHealthUpdateAsync(RunnerHealthUpdateEvent evt)
+    private async Task RunnerHealthUpdateAsync(string hostId, RunnerHealthUpdateEvent evt)
     {
         var instance = await _store.Get<RunnerInstance>(evt.InstanceId);
+        if (instance == null || instance.HostId != hostId || instance.Status is RunnerInstanceStatus.Stopped or RunnerInstanceStatus.Failed or RunnerInstanceStatus.Crashed) return;
         if (instance != null)
         {
+            instance.CleanupPending = evt.CleanupPending;
             instance.Status = evt.Status;
             instance.LastHealthCheck = evt.CheckedAt;
             if (!string.IsNullOrEmpty(evt.StatusMessage))
@@ -408,6 +413,7 @@ public sealed class HostWorkerEventProcessor
         }
 
         var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(evt.InstanceId);
+        await runnerGrain.SetCleanupPending(evt.CleanupPending);
         await runnerGrain.UpdateHealth(evt.StatusMessage);
     }
 

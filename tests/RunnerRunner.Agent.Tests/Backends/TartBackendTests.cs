@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using RunnerRunner.Agent.Backends;
 
 namespace RunnerRunner.Agent.Tests.Backends;
@@ -23,9 +24,9 @@ public class TartBackendTests
     }
 
     [Fact]
-    public void ParseListOutput_ReturnsEmptyListForWhitespace()
+    public void ParseListOutput_RejectsAmbiguousEmptyInventory()
     {
-        Assert.Empty(TartBackend.ParseListOutput("   "));
+        Assert.Throws<InvalidDataException>(() => TartBackend.ParseListOutput("   "));
     }
 
     [Fact]
@@ -44,4 +45,41 @@ public class TartBackendTests
         Assert.Contains(vms, vm => vm.Name == "rr-lower" && vm.IsRunning);
         Assert.Contains(vms, vm => vm.Name == "rr-upper" && !vm.IsRunning);
     }
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("delete")]
+    [InlineData("still-present")]
+    [InlineData("inventory")]
+    public async Task CleanupFailureCannotConfirmRelease(string failure)
+    {
+        var commands = new List<string>();
+        var lists = 0;
+        var backend = new TartBackend(NullLogger<TartBackend>.Instance, (_, args, _) =>
+        {
+            commands.Add(args);
+            if (args == "list --format json")
+            {
+                lists++;
+                if (failure == "inventory") return Task.FromResult((1, "unavailable"));
+                return Task.FromResult((0, lists == 1 ? "[{\"Name\":\"rr-owned\",\"State\":\"running\"}]" : "[{\"Name\":\"rr-owned\",\"State\":\"stopped\"}]"));
+            }
+            return Task.FromResult((args.StartsWith(failure + " ") ? 1 : 0, ""));
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => backend.StopRunnerAsync("rr-owned"));
+        if (failure == "stop" || failure == "inventory") Assert.DoesNotContain("delete rr-owned", commands);
+    }
+
+    [Fact]
+    public async Task CleanupIsIdempotentOnlyAfterParsedAbsence()
+    {
+        var commands = new List<string>();
+        var backend = new TartBackend(NullLogger<TartBackend>.Instance, (_, args, _) =>
+        {
+            commands.Add(args);
+            return Task.FromResult((0, "[]"));
+        });
+        await backend.StopRunnerAsync("rr-absent");
+        Assert.Equal(["list --format json"], commands);
+    }
+
 }

@@ -53,6 +53,7 @@ public interface IRunnerInstanceGrain : IGrainWithStringKey
     Task MarkFailed(string error);
     Task MarkCrashed(string reason);
     Task UpdateHealth(string? statusMessage = null);
+    Task SetCleanupPending(bool pending);
     Task UpdateStatusMessage(string message);
 
     /// <summary>

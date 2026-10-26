@@ -105,6 +105,7 @@ public class RunnerTimeoutService : BackgroundService
         foreach (var instance in instances)
         {
             ct.ThrowIfCancellationRequested();
+            if (instance.CleanupPending) continue;
 
             switch (instance.Status)
             {

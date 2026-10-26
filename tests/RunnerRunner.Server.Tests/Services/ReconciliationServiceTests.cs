@@ -7,6 +7,17 @@ namespace RunnerRunner.Server.Tests.Services;
 
 public class ReconciliationServiceTests
 {
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void TrackedOrUncertainCleanupRetainsOwnership(bool pending, bool tracked, bool expected)
+    {
+        var instance = new RunnerInstance { Id = "owned", RunnerName = "runner", CleanupPending = pending };
+        var report = new ReconciliationReport { HostId = "host", TrackedInstanceIds = tracked ? ["owned"] : null };
+        Assert.Equal(expected, ReconciliationService.RetainsOwnership(instance, report));
+    }
+
     private static readonly DateTime Now = new(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
 
     [Fact]

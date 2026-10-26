@@ -86,6 +86,7 @@ public class ReconciliationService : IHostedService, IDisposable
             // Find stale DB records (in DB but NOT in report)
             foreach (var instance in dbInstances)
             {
+                if (RetainsOwnership(instance, report)) continue;
                 if (instance.Status is not (RunnerInstanceStatus.Running
                     or RunnerInstanceStatus.Starting
                     or RunnerInstanceStatus.Pending))
@@ -168,6 +169,7 @@ public class ReconciliationService : IHostedService, IDisposable
             // Update health for matched runners
             foreach (var instance in dbInstances)
             {
+                if (RetainsOwnership(instance, report)) continue;
                 var matched = report.Runners.FirstOrDefault(r => MatchesRunner(instance, r));
 
                 if (matched != null && IsRunnerStillActive(matched))
@@ -182,6 +184,9 @@ public class ReconciliationService : IHostedService, IDisposable
             _logger.LogError(ex, "Error processing reconciliation report from {Host}", report.HostId);
         }
     }
+
+    internal static bool RetainsOwnership(RunnerInstance instance, ReconciliationReport report)
+        => instance.CleanupPending || report.TrackedInstanceIds?.Contains(instance.Id) == true;
 
     /// <summary>
     /// True if an instance in <paramref name="status"/>, deployed/created at <paramref name="referenceTime"/>,

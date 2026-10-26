@@ -306,11 +306,13 @@ internal sealed class HostCommandProcessor : BackgroundService
         }
         catch (Exception ex)
         {
-            await PublishAsync(HostWorkerMessageKinds.RunnerStopped, new RunnerStoppedEvent
+            await PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
             {
                 InstanceId = command.InstanceId,
-                Reason = "failed",
-                ErrorMessage = $"Stop failed: {ex.Message}"
+                Status = RunnerInstanceStatus.Stopping,
+                CleanupPending = true,
+                CheckedAt = DateTime.UtcNow,
+                StatusMessage = "Stop failed; native cleanup is unconfirmed."
             }, ct);
             throw;
         }
@@ -588,33 +590,12 @@ internal sealed class HostCommandProcessor : BackgroundService
             try
             {
                 foreach (var snapshot in await _lifecycleManager.CollectRunnerHealthAsync(ct))
-                {
-                    if (snapshot.Health.IsRunning)
-                    {
-                        await PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
-                        {
-                            InstanceId = snapshot.Runner.InstanceId,
-                            Status = RunnerInstanceStatus.Running,
-                            CheckedAt = DateTime.UtcNow,
-                            StatusMessage = string.Equals(snapshot.Health.Status, "running", StringComparison.OrdinalIgnoreCase)
-                                ? "Running"
-                                : snapshot.Health.Status
-                        }, ct);
-                    }
-                    else
-                    {
-                        // A single-use (ephemeral/JIT) runner exiting with code 0 finished its job; that's not a crash.
-                        // Static runners exit 0 too when their registration is lost, so keep reporting those as crashed.
-                        var reason = snapshot.Runner.IsEphemeral && snapshot.Health.Status == "exited:0"
-                            ? "completed"
-                            : snapshot.Health.Status ?? "not running";
-                        await PublishRunnerExitedAsync(snapshot.Runner.InstanceId, reason, ct);
-                    }
-                }
+                    await PublishRunnerHealthAsync(snapshot, ct);
 
                 await PublishAsync(HostWorkerMessageKinds.Reconciliation, new ReconciliationReport
                 {
                     HostId = _identity.HostId,
+                    TrackedInstanceIds = _lifecycleManager.RunningInstances.Keys.ToList(),
                     Runners = await DiscoverManagedRunnersAsync(ct)
                 }, ct);
             }
@@ -627,6 +608,25 @@ internal sealed class HostCommandProcessor : BackgroundService
                 _logger.LogWarning(ex, "HostWorker health loop failed for host {HostId}", _identity.HostId);
             }
         }
+    }
+
+    internal Task PublishRunnerHealthAsync(ManagedRunnerHealth snapshot, CancellationToken ct)
+    {
+        if (snapshot.CleanupConfirmed)
+        {
+            var reason = snapshot.Runner.IsEphemeral && snapshot.Health.Status == "exited:0"
+                ? "completed" : snapshot.Health.Status ?? "not running";
+            return PublishRunnerExitedAsync(snapshot.Runner.InstanceId, reason, ct);
+        }
+        return PublishAsync(HostWorkerMessageKinds.RunnerHealth, new RunnerHealthUpdateEvent
+        {
+            InstanceId = snapshot.Runner.InstanceId,
+            Status = snapshot.Health.IsRunning ? RunnerInstanceStatus.Running : RunnerInstanceStatus.Stopping,
+            CleanupPending = !snapshot.Health.IsRunning,
+            CheckedAt = snapshot.Health.CheckedAt,
+            StatusMessage = snapshot.Health.IsRunning ? snapshot.Health.Status
+                : "Native cleanup unconfirmed; retaining runner ownership."
+        }, ct);
     }
 
     private async Task<List<AgentImageInfo>> ListImagesAsync(ImageType? filterType, CancellationToken ct)

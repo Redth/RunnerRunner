@@ -12,6 +12,8 @@ public class RunnerInstance
     public string? VmName { get; set; }
     public int? ProcessId { get; set; }
     public string? ErrorMessage { get; set; }
+    /// <summary>Host still owns this runner; health or cleanup is uncertain.</summary>
+    public bool CleanupPending { get; set; }
 
     /// <summary>"static" (default, from assignments) or "dynamic" (from webhook JIT)</summary>
     public string ProvisioningMode { get; set; } = "static";

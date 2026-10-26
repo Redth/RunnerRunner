@@ -28,6 +28,7 @@ public class RunnerRegistrationCleanupService
         RunnerInstance instance,
         CancellationToken ct = default)
     {
+        if (instance.CleanupPending) return;
         if (string.IsNullOrWhiteSpace(instance.RunnerName) || string.IsNullOrWhiteSpace(instance.ProfileId))
             return;
 

@@ -200,6 +200,7 @@ public class RunnerLifecycleManagerTests
 
         Assert.Single(snapshots);
         Assert.False(snapshots[0].Health.IsRunning);
+        Assert.True(snapshots[0].CleanupConfirmed);
         Assert.Empty(manager.RunningInstances);
         Assert.Equal(["handle-dead"], backend.StopRequests);
     }
@@ -221,8 +222,14 @@ public class RunnerLifecycleManagerTests
         var snapshot = Assert.Single(await manager.CollectRunnerHealthAsync());
 
         Assert.Equal("exited:0", snapshot.Health.Status);
-        Assert.Empty(manager.RunningInstances);
+        Assert.False(snapshot.CleanupConfirmed);
+        Assert.Single(manager.RunningInstances);
         Assert.Equal(["handle-done"], backend.StopRequests);
+
+        backend.StopAsyncHandler = null;
+        var retried = Assert.Single(await manager.CollectRunnerHealthAsync());
+        Assert.True(retried.CleanupConfirmed);
+        Assert.Empty(manager.RunningInstances);
     }
 
     [Fact]
@@ -243,7 +250,7 @@ public class RunnerLifecycleManagerTests
     }
 
     [Fact]
-    public async Task StopRunner_WhenBackendThrows_RemovesInstanceFromTracking()
+    public async Task StopRunner_WhenBackendThrows_RetainsOwnershipForRetry()
     {
         var manager = new RunnerLifecycleManager(_logger);
         var backend = new FakeRunnerBackend
@@ -257,12 +264,17 @@ public class RunnerLifecycleManagerTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StopRunnerAsync("stop-fails-1"));
 
-        Assert.Empty(manager.RunningInstances);
+        Assert.Single(manager.RunningInstances);
         Assert.Equal(["handle-stop-fails"], backend.StopRequests);
+
+        backend.StopAsyncHandler = null;
+        await manager.StopRunnerAsync("stop-fails-1");
+        Assert.Empty(manager.RunningInstances);
+        Assert.Equal(["handle-stop-fails", "handle-stop-fails"], backend.StopRequests);
     }
 
     [Fact]
-    public async Task CollectRunnerHealth_WhenBackendThrows_ReturnsFailedSnapshotAndRemovesRunner()
+    public async Task CollectRunnerHealth_WhenBackendThrows_ReturnsFailedSnapshotAndRetainsRunner()
     {
         var manager = new RunnerLifecycleManager(_logger);
         var backend = new FakeRunnerBackend
@@ -279,7 +291,8 @@ public class RunnerLifecycleManagerTests
         var snapshot = Assert.Single(snapshots);
         Assert.False(snapshot.Health.IsRunning);
         Assert.Equal("health_check_failed", snapshot.Health.Status);
-        Assert.Empty(manager.RunningInstances);
+        Assert.False(snapshot.CleanupConfirmed);
+        Assert.Single(manager.RunningInstances);
         Assert.Empty(backend.StopRequests);
     }
 
@@ -299,8 +312,46 @@ public class RunnerLifecycleManagerTests
             new DeployRunnerCommand { InstanceId = "vm-1", ProfileId = "p1", RunnerName = "vm-runner" },
             backend);
 
-        await manager.CollectRunnerHealthAsync();
+        var snapshot = Assert.Single(await manager.CollectRunnerHealthAsync());
 
+        Assert.Empty(backend.StopRequests);
+        Assert.False(snapshot.CleanupConfirmed);
+        Assert.Single(manager.RunningInstances);
+    }
+
+    [Fact]
+    public async Task StopRunner_ConcurrentRequests_DoNotDoubleRelease()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var backend = new FakeRunnerBackend
+        {
+            StopAsyncHandler = async (_, _) => { entered.SetResult(); await release.Task; }
+        };
+        var manager = new RunnerLifecycleManager(_logger);
+        await manager.StartRunnerAsync(new DeployRunnerCommand { InstanceId = "concurrent", RunnerName = "runner" }, backend);
+        var first = manager.StopRunnerAsync("concurrent");
+        await entered.Task;
+        var second = manager.StopRunnerAsync("concurrent");
+        Assert.Single(manager.RunningInstances);
+        release.SetResult();
+        await Task.WhenAll(first, second);
+        Assert.Single(backend.StopRequests);
+        Assert.Empty(manager.RunningInstances);
+    }
+
+    [Fact]
+    public async Task CollectRunnerHealth_CancellationRetainsOwnership()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var backend = new FakeRunnerBackend
+        {
+            HealthAsyncHandler = (_, _) => { cancellation.Cancel(); throw new OperationCanceledException(cancellation.Token); }
+        };
+        var manager = new RunnerLifecycleManager(_logger);
+        await manager.StartRunnerAsync(new DeployRunnerCommand { InstanceId = "cancel", RunnerName = "runner" }, backend);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.CollectRunnerHealthAsync(cancellation.Token));
+        Assert.Single(manager.RunningInstances);
         Assert.Empty(backend.StopRequests);
     }
 

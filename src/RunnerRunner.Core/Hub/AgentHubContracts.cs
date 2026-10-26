@@ -298,6 +298,8 @@ public class RunnerHealthUpdateEvent
     public DateTime CheckedAt { get; set; }
     [Id(3)]
     public string? StatusMessage { get; set; }
+    [Id(4)]
+    public bool CleanupPending { get; set; }
 }
 
 [GenerateSerializer]
@@ -515,6 +517,10 @@ public class ReconciliationReport
     public required string HostId { get; set; }
     [Id(1)]
     public List<DiscoveredRunnerInfo> Runners { get; set; } = [];
+    /// <summary>Instances still owned locally, including unhealthy runners awaiting cleanup.</summary>
+    [Id(2)]
+    public List<string>? TrackedInstanceIds { get; set; }
+
 }
 
 /// <summary>

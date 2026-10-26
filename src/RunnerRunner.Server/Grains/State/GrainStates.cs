@@ -93,6 +93,7 @@ public class RunnerInstanceGrainState
     /// job to a different runner. See <see cref="RunnerInstance.ClaimReleasedAt"/>.
     /// </summary>
     [Id(24)] public DateTime? ClaimReleasedAt { get; set; }
+    [Id(25)] public bool CleanupPending { get; set; }
 }
 
 [GenerateSerializer]

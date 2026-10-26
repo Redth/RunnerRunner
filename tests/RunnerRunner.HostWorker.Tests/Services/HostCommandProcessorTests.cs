@@ -132,7 +132,7 @@ public class HostCommandProcessorTests
     }
 
     [Fact]
-    public async Task StopRunner_StopFailure_PublishesFailedStopAndRejectsCommand()
+    public async Task StopRunner_StopFailure_RetainsOwnershipAndRejectsCommand()
     {
         using var directory = HostWorkerTestDirectory.Create("command-stop-failure");
         var native = new FakeRunnerBackend
@@ -165,11 +165,11 @@ public class HostCommandProcessorTests
         }), CancellationToken.None);
 
         Assert.Equal(["pid-456"], native.StopRequests);
-        Assert.Empty(lifecycle.RunningInstances);
-
-        var stopped = SinglePayload<RunnerStoppedEvent>(sink, HostWorkerMessageKinds.RunnerStopped);
-        Assert.Equal("failed", stopped.Reason);
-        Assert.Contains("Stop failed: simulated stop failure", stopped.ErrorMessage);
+        Assert.Single(lifecycle.RunningInstances);
+        Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
+        var health = SinglePayload<RunnerHealthUpdateEvent>(sink, HostWorkerMessageKinds.RunnerHealth);
+        Assert.True(health.CleanupPending);
+        Assert.Equal(RunnerInstanceStatus.Stopping, health.Status);
 
         var rejected = SinglePayload<HostWorkerCommandStatus>(sink, HostWorkerMessageKinds.CommandRejected);
         Assert.False(rejected.Success);
@@ -255,6 +255,27 @@ public class HostCommandProcessorTests
 
         var logs = SinglePayload<HostLogsEvent>(sink, HostWorkerMessageKinds.HostLogs);
         Assert.Contains("No readable HostWorker log file was found", logs.Logs);
+    }
+
+    [Theory]
+    [InlineData("health_check_failed")]
+    [InlineData("stopped")]
+    [InlineData("not_found")]
+    public async Task UnknownHealthDoesNotPublishRunnerStopped(string status)
+    {
+        using var directory = HostWorkerTestDirectory.Create("uncertain-health");
+        using var processor = CreateProcessor(directory, out var sink, out _);
+        await processor.PublishRunnerHealthAsync(new ManagedRunnerHealth
+        {
+            Runner = new ManagedRunner { InstanceId = "owned", ProfileId = "profile", RunnerName = "runner",
+                InstanceHandle = "original", Backend = new FakeRunnerBackend(), StartedAt = DateTime.UtcNow },
+            Health = new RunnerHealthStatus { IsRunning = false, Status = status },
+            CleanupConfirmed = false
+        }, CancellationToken.None);
+        Assert.DoesNotContain(HostWorkerMessageKinds.RunnerStopped, NonLogKinds(sink));
+        var health = SinglePayload<RunnerHealthUpdateEvent>(sink, HostWorkerMessageKinds.RunnerHealth);
+        Assert.True(health.CleanupPending);
+        Assert.Equal(RunnerInstanceStatus.Stopping, health.Status);
     }
 
     private static HostCommandProcessor CreateProcessor(

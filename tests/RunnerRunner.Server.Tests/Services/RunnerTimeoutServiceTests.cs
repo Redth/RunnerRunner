@@ -185,6 +185,25 @@ public class RunnerTimeoutServiceTests
         Assert.Equal(expected, InvokeShouldRemoveWebhookEvent(evt, now));
     }
 
+    [Fact]
+    public async Task UnconfirmedCleanupSurvivesTimeoutWithoutRequeueOrDeletion()
+    {
+        var store = TestDocumentStore.Create();
+        using var services = new ServiceCollection().AddSingleton(store).BuildServiceProvider();
+        var dispatcher = new RecordingHostCommandDispatcher();
+        await store.Insert(new WebhookEvent { Id = "linked", Action = "queued", Status = "provisioned", InstanceId = "retained" });
+        await store.Insert(new RunnerInstance { Id = "retained", RunnerName = "runner", HostId = "host",
+            Status = RunnerInstanceStatus.Stopping, CleanupPending = true, CreatedAt = DateTime.UtcNow.AddDays(-1) });
+        var service = new RunnerTimeoutService(NullLogger<RunnerTimeoutService>.Instance, services,
+            dispatcher, new ConfigurationBuilder().Build());
+        await InvokeScanForTimeoutsAsync(service);
+        var retained = await store.Get<RunnerInstance>("retained");
+        Assert.NotNull(retained);
+        Assert.True(retained.CleanupPending);
+        Assert.Equal(RunnerInstanceStatus.Stopping, retained.Status);
+        Assert.Equal("provisioned", (await store.Get<WebhookEvent>("linked"))!.Status);
+    }
+
     private static Task InvokeScanForTimeoutsAsync(RunnerTimeoutService service)
     {
         var method = typeof(RunnerTimeoutService).GetMethod(

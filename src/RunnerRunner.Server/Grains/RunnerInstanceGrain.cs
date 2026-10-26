@@ -157,6 +157,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public async Task MarkStopped()
     {
+        if (_state.State.CleanupPending) return;
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Stopped;
         _state.State.StoppedAt = DateTime.UtcNow;
@@ -176,6 +177,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public async Task MarkFailed(string error)
     {
+        if (_state.State.CleanupPending) return;
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Failed;
         _state.State.ErrorMessage = error;
@@ -195,6 +197,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
 
     public async Task MarkCrashed(string reason)
     {
+        if (_state.State.CleanupPending) return;
         var wasActive = IsConsumingHostCapacity(_state.State.Status);
         _state.State.Status = RunnerInstanceStatus.Crashed;
         _state.State.ErrorMessage = reason;
@@ -210,6 +213,24 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         await SyncToDocumentDb();
 
         await PurgeDynamicStateIfNeeded();
+    }
+
+    public async Task SetCleanupPending(bool pending)
+    {
+        if (_state.State.CleanupPending == pending) return;
+        _state.State.CleanupPending = pending;
+        if (pending)
+        {
+            _state.State.Status = RunnerInstanceStatus.Stopping;
+            _state.State.StoppedAt = null;
+            CancelAllTimers();
+        }
+        else if (_state.State.Status == RunnerInstanceStatus.Stopping)
+        {
+            _state.State.Status = RunnerInstanceStatus.Running;
+        }
+        await _state.WriteStateAsync();
+        await SyncToDocumentDb();
     }
 
     public async Task UpdateHealth(string? statusMessage = null)
@@ -480,6 +501,7 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
         instance.VmName = _state.State.VmName;
         instance.ProcessId = _state.State.ProcessId;
         instance.ErrorMessage = _state.State.ErrorMessage;
+        instance.CleanupPending = _state.State.CleanupPending;
         instance.ProvisioningMode = _state.State.ProvisioningMode;
         instance.WebhookEventId = _state.State.WebhookEventId;
         instance.JitConfig = _state.State.JitConfig;

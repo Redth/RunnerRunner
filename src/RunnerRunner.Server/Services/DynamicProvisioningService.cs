@@ -1790,6 +1790,7 @@ public class DynamicProvisioningService : BackgroundService
 
         foreach (var instance in instances)
         {
+            if (instance.CleanupPending) continue;
             _logger.LogInformation(
                 "Cleaning up dynamic runner {RunnerName} for job {JobId}: {Reason}",
                 instance.RunnerName, jobId, reason);

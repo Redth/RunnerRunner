@@ -12,13 +12,21 @@ namespace RunnerRunner.Agent.Backends;
 public class TartBackend : IRunnerBackend
 {
     private readonly ILogger<TartBackend> _logger;
+    private readonly Func<string, string, CancellationToken, Task<(int ExitCode, string Output)>> _runCommand;
 
     public ExecutionBackend BackendType => ExecutionBackend.Tart;
 
-    public TartBackend(ILogger<TartBackend> logger)
+    public TartBackend(ILogger<TartBackend> logger) : this(logger, RunProcessCommandAsync) { }
+
+    internal TartBackend(ILogger<TartBackend> logger,
+        Func<string, string, CancellationToken, Task<(int ExitCode, string Output)>> runCommand)
     {
         _logger = logger;
+        _runCommand = runCommand;
     }
+
+    private Task<(int ExitCode, string Output)> RunCommandAsync(string command, string arguments, CancellationToken ct)
+        => _runCommand(command, arguments, ct);
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)
     {
@@ -108,19 +116,22 @@ public class TartBackend : IRunnerBackend
 
     public async Task StopRunnerAsync(string instanceHandle, CancellationToken ct = default)
     {
-        _logger.LogInformation("Stopping tart VM {VM}", instanceHandle);
-
-        // Gracefully stop the VM
-        var stopResult = await RunCommandAsync("tart", $"stop {instanceHandle}", ct);
-        if (stopResult.ExitCode != 0)
-            _logger.LogWarning("tart stop {VM} returned {Code}: {Output}", instanceHandle, stopResult.ExitCode, stopResult.Output);
-
-        // Delete the cloned VM to free disk space
-        var deleteResult = await RunCommandAsync("tart", $"delete {instanceHandle}", ct);
-        if (deleteResult.ExitCode != 0)
-            _logger.LogWarning("tart delete {VM} returned {Code}: {Output}", instanceHandle, deleteResult.ExitCode, deleteResult.Output);
-        else
-            _logger.LogInformation("Tart VM {VM} stopped and deleted", instanceHandle);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(instanceHandle, @"\Arr-[A-Za-z0-9_.-]{1,200}\z"))
+            throw new InvalidOperationException("Refusing unbound or unsafe Tart VM handle.");
+        var vm = (await ListVmsAsync(ct)).SingleOrDefault(v => v.Name == instanceHandle);
+        if (vm is null) return; // A successful, parsed native inventory proves absence.
+        if (vm.IsRunning)
+        {
+            EnsureSuccess(await RunCommandAsync("tart", $"stop {instanceHandle}", ct), "tart stop owned VM");
+            vm = (await ListVmsAsync(ct)).SingleOrDefault(v => v.Name == instanceHandle);
+            if (vm is null) return;
+        }
+        if (!string.Equals(vm.State, "stopped", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Owned Tart VM is not confirmed stopped; capacity retained.");
+        EnsureSuccess(await RunCommandAsync("tart", $"delete {instanceHandle}", ct), "tart delete owned VM");
+        if ((await ListVmsAsync(ct)).Any(v => v.Name == instanceHandle))
+            throw new InvalidOperationException("Owned Tart VM is still present after deletion; capacity retained.");
+        _logger.LogInformation("Tart VM {VM} stopped and deletion verified", instanceHandle);
     }
 
     public async Task<RunnerHealthStatus> GetHealthAsync(string instanceHandle, CancellationToken ct = default)
@@ -175,7 +186,7 @@ public class TartBackend : IRunnerBackend
     internal static List<TartVmInfo> ParseListOutput(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
-            return [];
+            throw new InvalidDataException("Empty Tart inventory is not proof of absent VMs.");
 
         using var doc = JsonDocument.Parse(output);
         var vms = new List<TartVmInfo>();
@@ -183,8 +194,8 @@ public class TartBackend : IRunnerBackend
         {
             var name = GetStringProperty(element, "Name") ?? "";
             var state = GetStringProperty(element, "State") ?? "";
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(state))
+                throw new InvalidDataException("Tart inventory lacks VM identity or state.");
 
             vms.Add(new TartVmInfo(name, state));
         }
@@ -507,7 +518,7 @@ public class TartBackend : IRunnerBackend
             throw new InvalidOperationException($"{operation} failed: {result.Output}");
     }
 
-    private static async Task<(int ExitCode, string Output)> RunCommandAsync(
+    private static async Task<(int ExitCode, string Output)> RunProcessCommandAsync(
         string command, string arguments, CancellationToken ct)
     {
         if (string.Equals(command, "tart", StringComparison.OrdinalIgnoreCase))
