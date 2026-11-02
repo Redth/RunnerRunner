@@ -126,7 +126,7 @@ public class RunnerRegistrationCleanupService
 
     internal static HashSet<string> BuildGitHubProtectedRunnerNames(IEnumerable<RunnerInstance> instances)
         => instances
-            .Where(CapacityPlanningService.IsRunnerRunnerManaged)
+            .Where(CapacityPlanningService.IsCapacityConsuming)
             .Select(i => i.RunnerName?.Trim())
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .ToHashSet(StringComparer.OrdinalIgnoreCase)!;

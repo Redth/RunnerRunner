@@ -183,8 +183,17 @@ public class RunnerRegistrationCleanupServiceTests
         Assert.Contains(scopes, s => s.GitHubRepo == "PoolMath/PoolMath" && s.GitHubAppInstallationId == "222");
     }
 
-    [Fact]
-    public void BuildGitHubProtectedRunnerNames_KeepsManagedNamesEvenWhenNotActive()
+    [Theory]
+    [InlineData(RunnerInstanceStatus.Pending, true)]
+    [InlineData(RunnerInstanceStatus.Starting, true)]
+    [InlineData(RunnerInstanceStatus.Running, true)]
+    [InlineData(RunnerInstanceStatus.Stopping, true)]
+    [InlineData(RunnerInstanceStatus.Stopped, false)]
+    [InlineData(RunnerInstanceStatus.Failed, false)]
+    [InlineData(RunnerInstanceStatus.Crashed, false)]
+    public void BuildGitHubProtectedRunnerNames_ProtectsOnlyActiveManagedRunners(
+        RunnerInstanceStatus status,
+        bool expectedProtected)
     {
         var names = RunnerRegistrationCleanupService.BuildGitHubProtectedRunnerNames([
             new RunnerInstance
@@ -192,7 +201,7 @@ public class RunnerRegistrationCleanupServiceTests
                 RunnerName = "MAUI-Linux-jit-c1e37630",
                 HostId = "host-1",
                 ProvisioningMode = "dynamic",
-                Status = RunnerInstanceStatus.Crashed,
+                Status = status,
                 ManagedByRunnerRunner = true
             },
             new RunnerInstance
@@ -204,7 +213,7 @@ public class RunnerRegistrationCleanupServiceTests
             }
         ]);
 
-        Assert.Contains("MAUI-Linux-jit-c1e37630", names);
+        Assert.Equal(expectedProtected, names.Contains("MAUI-Linux-jit-c1e37630"));
         Assert.DoesNotContain("external-runner", names);
     }
 }

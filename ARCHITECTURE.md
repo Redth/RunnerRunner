@@ -322,6 +322,7 @@ Important timeout and recovery behavior:
 - Stopping can fail if the host does not complete cleanup.
 - Dynamic runners linked to queued jobs can cause the webhook event to retry when the runner disappears before the job starts.
 - Reconciliation reports clean up orphaned Docker containers, Tart VMs, or native processes that are present on the host but absent from the database.
+- The GitHub registration sweep runs every 10 minutes after a 45-second startup delay and reads all registration pages. It removes offline, non-busy dynamic (`-jit-`) registrations unless the matching managed instance is pending, starting, running, or stopping; stopped, failed, and crashed history does not protect stale registrations.
 
 ## State, projections, and UI refresh
 

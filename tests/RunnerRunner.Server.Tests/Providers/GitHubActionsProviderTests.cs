@@ -443,7 +443,8 @@ public class GitHubActionsProviderTests
                     { "id": 11, "name": "rr-static", "status": "offline", "busy": false },
                     { "id": 12, "name": "rr-jit-online", "status": "online", "busy": false },
                     { "id": 13, "name": "rr-jit-busy", "status": "offline", "busy": true },
-                    { "id": 14, "name": "rr-jit-protected", "status": "offline", "busy": false }
+                    { "id": 14, "name": "rr-jit-protected", "status": "offline", "busy": false },
+                    { "id": 15, "name": "rr-jit-unknown", "status": "", "busy": false }
                   ]
                 }
                 """))
@@ -468,5 +469,54 @@ public class GitHubActionsProviderTests
         Assert.Equal(1, removed);
         Assert.Equal(["/orgs/octo-org/actions/runners/10"], deletedPaths);
         Assert.All(api.Requests, request => Assert.Equal("Bearer", request.Authorization?.Scheme));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunnerCleanup_IncludesRegistrationsAfterFirstPage(bool sweep)
+    {
+        var deletedPaths = new List<string>();
+        var api = new FakeProviderHttpApi(req =>
+        {
+            if (req.Method == HttpMethod.Delete)
+            {
+                deletedPaths.Add(req.RequestUri!.AbsolutePath);
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
+            }
+
+            var firstPage = req.RequestUri!.Query == "?per_page=100&page=1";
+            Assert.True(firstPage || req.RequestUri.Query == "?per_page=100&page=2");
+            var runners = firstPage
+                ? Enumerable.Range(1, 100).Select(id => new
+                {
+                    id,
+                    name = $"static-{id}",
+                    status = "offline",
+                    busy = false
+                }).ToArray()
+                : [new { id = 101, name = "rr-jit-stale", status = "offline", busy = false }];
+            return FakeProviderHttpApi.JsonResponse(JsonSerializer.Serialize(new { runners }));
+        });
+        var provider = new GitHubActionsProvider(api, new GitHubAuthenticationService(api, _authLogger), _logger);
+        var credential = new ProviderCredential
+        {
+            Name = "github",
+            GitHubOrg = "octo-org",
+            GitHubToken = "ghp_test"
+        };
+
+        if (sweep)
+        {
+            var removed = await provider.RemoveOfflineDynamicRunnersAsync(credential, new HashSet<string>());
+            Assert.Equal(1, removed);
+        }
+        else
+        {
+            await provider.RemoveRunnerAsync(credential, "rr-jit-stale");
+        }
+
+        Assert.Equal(["/orgs/octo-org/actions/runners/101"], deletedPaths);
+        Assert.Equal(2, api.Requests.Count(request => request.Method == HttpMethod.Get));
     }
 }
