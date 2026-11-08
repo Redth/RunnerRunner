@@ -1,6 +1,8 @@
 using Shiny.DocumentDb;
 using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
+using RunnerRunner.Server.Grains.Interfaces;
+using RunnerRunner.Server.Providers;
 using Host = RunnerRunner.Core.Models.Host;
 
 namespace RunnerRunner.Server.Services;
@@ -138,6 +140,10 @@ public class RunnerTimeoutService : BackgroundService
             "Runner {RunnerName} ({Id}) timed out in Pending state after {Elapsed}",
             instance.RunnerName, instance.Id, now - referenceTime);
 
+        if (instance.ProvisioningMode == "dynamic"
+            && !await ClearedToStopAsync(store, instance, now, "a deploy timeout"))
+            return;
+
         instance.Status = RunnerInstanceStatus.Failed;
         instance.StatusMessage = "Deploy timeout - HostWorker did not acknowledge";
         await store.Update(instance);
@@ -163,6 +169,10 @@ public class RunnerTimeoutService : BackgroundService
         _logger.LogWarning(
             "Runner {RunnerName} ({Id}) timed out in Starting state after {Elapsed}",
             instance.RunnerName, instance.Id, now - referenceTime.Value);
+
+        if (instance.ProvisioningMode == "dynamic"
+            && !await ClearedToStopAsync(store, instance, now, "a registration timeout"))
+            return;
 
         instance.Status = RunnerInstanceStatus.Failed;
         instance.StatusMessage = "Registration timeout — runner did not connect to provider";
@@ -213,6 +223,12 @@ public class RunnerTimeoutService : BackgroundService
                         "Dynamic runner {RunnerName} ({Id}) is still active after its event resolved with status {EventStatus}",
                         instance.RunnerName, instance.Id, eventStatus);
 
+                    // Holding the claim is not proof it ran that job: a job cancelled while
+                    // queued resolves with no runner named, and the runner minted for it may
+                    // have been handed another one. Its later backstops would ask the same.
+                    if (!await ClearedToStopAsync(store, instance, now, $"its event resolving ({eventStatus})"))
+                        return;
+
                     instance.Status = RunnerInstanceStatus.Failed;
                     instance.StatusMessage = $"Dynamic runner cleanup after event resolved: {eventStatus}";
                     await store.Update(instance);
@@ -243,6 +259,9 @@ public class RunnerTimeoutService : BackgroundService
                         "Dynamic runner {RunnerName} ({Id}) never picked up its queued job after {Elapsed}; recycling it",
                         instance.RunnerName, instance.Id, now - instance.StartedAt.Value);
 
+                    if (!await ClearedToStopAsync(store, instance, now, "a pickup timeout"))
+                        return;
+
                     instance.Status = RunnerInstanceStatus.Failed;
                     instance.StatusMessage = "Dynamic runner pickup timeout — job never started on provider";
                     await store.Update(instance);
@@ -268,6 +287,11 @@ public class RunnerTimeoutService : BackgroundService
                 "Dynamic runner {RunnerName} ({Id}) timed out after {Elapsed} with no completion webhook",
                 instance.RunnerName, instance.Id, now - instance.StartedAt.Value);
 
+            // A missed completion webhook leaves a JIT runner deregistered once its job is
+            // done; one GitHub still calls busy is running a job, which its own timeout ends.
+            if (!await ClearedToStopAsync(store, instance, now, "the dynamic runtime limit"))
+                return;
+
             instance.Status = RunnerInstanceStatus.Failed;
             instance.StatusMessage = "Dynamic runner timeout — no completion webhook received";
             await store.Update(instance);
@@ -289,6 +313,10 @@ public class RunnerTimeoutService : BackgroundService
             _logger.LogWarning(
                 "Runner {RunnerName} ({Id}) has stale health check (last seen: {LastHealth})",
                 instance.RunnerName, instance.Id, lastSeenAt.Value);
+
+            if (instance.ProvisioningMode == "dynamic"
+                && !await ClearedToStopAsync(store, instance, now, "stale health checks"))
+                return;
 
             instance.Status = RunnerInstanceStatus.Crashed;
             instance.StatusMessage = "Health check stale — runner may have crashed";
@@ -321,6 +349,58 @@ public class RunnerTimeoutService : BackgroundService
         instance.Status = RunnerInstanceStatus.Failed;
         instance.StatusMessage = "Stop timeout";
         await store.Update(instance);
+    }
+
+    /// <summary>
+    /// Every stop this service sends is for a runner nothing proves is done with a job of its
+    /// own, so the provider is asked to release it first (see
+    /// <see cref="RunnerRegistrationCleanupService.ReleaseIdleRunnerAsync"/>). False means leave
+    /// it running: the provider says it is busy, or couldn't be asked and the next pass asks again.
+    /// </summary>
+    private async Task<bool> ClearedToStopAsync(IDocumentStore store, RunnerInstance instance, DateTime now, string why)
+    {
+        var cleanup = _services.GetService<RunnerRegistrationCleanupService>();
+        if (cleanup == null)
+            return true;
+
+        var outcome = await cleanup.ReleaseIdleRunnerAsync(store, instance);
+        if (RunnerRegistrationCleanupService.PermitsStop(outcome))
+            return true;
+
+        _logger.LogWarning(
+            "Not stopping dynamic runner {RunnerName} ({Id}) for {Why}: the provider says it is {Outcome}, so it may be running a job",
+            instance.RunnerName, instance.Id, why, outcome);
+
+        if (outcome != RunnerReleaseOutcome.Busy || string.IsNullOrWhiteSpace(instance.JobId))
+            return false;
+
+        // It is running a job that is not provably the one it was minted for. Let that job's
+        // own webhooks bind it; if the job it was minted for is still queued, find it a runner.
+        var linkedEvent = string.IsNullOrWhiteSpace(instance.WebhookEventId)
+            ? null
+            : await store.Get<WebhookEvent>(instance.WebhookEventId);
+        if (string.Equals(linkedEvent?.AssignedRunnerName, instance.RunnerName, StringComparison.OrdinalIgnoreCase))
+            return false; // GitHub named this runner for that very job: the claim is right.
+
+        if (ClassifyLinkedJob(instance, linkedEvent) == LinkedJobBinding.Same
+            && PrepareLinkedEventRetry(linkedEvent, now, $"Runner {instance.RunnerName} was handed another job"))
+        {
+            await store.Update(linkedEvent!);
+        }
+
+        var releasedJob = instance.JobId;
+        instance.JobId = null;
+        instance.ClaimReleasedAt = now;
+        await store.Update(instance);
+
+        var grains = _services.GetService<IGrainFactory>();
+        if (grains != null)
+        {
+            await grains.GetGrain<IRunnerInstanceGrain>(instance.Id)
+                .SetJobClaim(null, $"provider reports it busy, not with job {releasedJob}");
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -27,6 +27,7 @@ public sealed class HostWorkerUpdateService
     private readonly HostWorkerLocalUpdateStore _localUpdateStore;
     private readonly LongRunningTaskService _tasks;
     private readonly ILogger<HostWorkerUpdateService> _logger;
+    private readonly RunnerRegistrationCleanupService? _registrationCleanup;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private HostWorkerReleaseInfo? _cachedRelease;
     private DateTimeOffset _cacheExpiresAt;
@@ -40,8 +41,10 @@ public sealed class HostWorkerUpdateService
         IGrainFactory grainFactory,
         HostWorkerLocalUpdateStore localUpdateStore,
         LongRunningTaskService tasks,
-        ILogger<HostWorkerUpdateService> logger)
+        ILogger<HostWorkerUpdateService> logger,
+        RunnerRegistrationCleanupService? registrationCleanup = null)
     {
+        _registrationCleanup = registrationCleanup;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _gitHubAuth = gitHubAuth;
@@ -438,6 +441,21 @@ public sealed class HostWorkerUpdateService
             ct.ThrowIfCancellationRequested();
             try
             {
+                // Looking idle in our records is not being idle: a JIT runner can be handed a
+                // queued job at any moment until its registration is gone. A busy one is left
+                // to finish; the drain waits for it.
+                if (_registrationCleanup != null)
+                {
+                    var release = await _registrationCleanup.ReleaseIdleRunnerAsync(_store, instance, ct);
+                    if (!RunnerRegistrationCleanupService.PermitsStop(release))
+                    {
+                        _logger.LogInformation(
+                            "Not stopping runner {RunnerName} to drain host {HostId}: the provider says it is {Outcome}",
+                            instance.RunnerName, hostId, release);
+                        continue;
+                    }
+                }
+
                 var runnerGrain = _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id);
                 await runnerGrain.MarkStopping();
 

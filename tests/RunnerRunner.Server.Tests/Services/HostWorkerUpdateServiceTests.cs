@@ -7,8 +7,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Orleans;
 using RunnerRunner.Core.Hub;
+using RunnerRunner.Core.Interfaces;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
+using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Services.HostWorkers;
 using RunnerRunner.Server.Tests.TestSupport;
@@ -379,6 +381,65 @@ public class HostWorkerUpdateServiceTests
         Assert.Equal("container-1", stop.InstanceHandle);
     }
 
+    [Theory]
+    [InlineData(RunnerReleaseOutcome.Busy, false)]
+    [InlineData(RunnerReleaseOutcome.Deregistered, true)]
+    public async Task QueueUpdateAsync_DrainsAnIdleLookingJitRunnerOnlyOnceGitHubReleasesIt(
+        RunnerReleaseOutcome github,
+        bool stopped)
+    {
+        // A dynamic runner that never held a claim looks idle to us, but GitHub may have
+        // handed it a queued job a moment ago.
+        var store = TestDocumentStore.Create();
+        await store.Insert(new ProviderCredential
+        {
+            Id = "github-cred",
+            Name = "github",
+            Provider = RunnerProvider.GitHubActions,
+            GitHubOrg = "Redth",
+            GitHubToken = "stored-token"
+        });
+        await store.Insert(new RunnerProfile
+        {
+            Id = "profile-1",
+            Name = "linux-docker",
+            Provider = RunnerProvider.GitHubActions,
+            ProviderCredentialId = "github-cred"
+        });
+        await store.Insert(new Host
+        {
+            Id = "host-1",
+            Name = "linux-host",
+            Platform = HostPlatform.Linux,
+            Architecture = "x64",
+            AgentStatus = AgentStatus.Online,
+            AgentVersion = "1.0.0"
+        });
+        await store.Insert(new RunnerInstance
+        {
+            Id = "runner-1",
+            HostId = "host-1",
+            ProfileId = "profile-1",
+            RunnerName = "linux-docker-jit-21692485",
+            ProvisioningMode = "dynamic",
+            Status = RunnerInstanceStatus.Running,
+            ContainerId = "container-1"
+        });
+        var provider = Substitute.For<IRunnerProviderPlugin, IIdleRunnerReleaser>();
+        provider.Provider.Returns(RunnerProvider.GitHubActions);
+        ((IIdleRunnerReleaser)provider)
+            .ReleaseIdleRunnerAsync(Arg.Any<ProviderCredential>(), Arg.Any<string?>(), "linux-docker-jit-21692485", Arg.Any<CancellationToken>())
+            .Returns(github);
+        var cleanup = new RunnerRegistrationCleanupService([provider], NullLogger<RunnerRegistrationCleanupService>.Instance);
+
+        using var fixture = CreateService(store, LatestReleaseHandler, cleanup);
+
+        await fixture.Service.QueueUpdateAsync("host-1", HostWorkerUpdateSelection.LatestRelease());
+
+        Assert.Equal(stopped, fixture.Dispatcher.Commands.Any(c => c.Kind == HostCommandKind.StopRunner));
+        Assert.DoesNotContain(fixture.Dispatcher.Commands, c => c.Kind == HostCommandKind.ApplyHostWorkerUpdate);
+    }
+
     [Fact]
     public async Task ProcessPendingDrainedUpdateAsync_DispatchesUpdateAfterRunnersDrain()
     {
@@ -562,7 +623,8 @@ public class HostWorkerUpdateServiceTests
 
     private static ServiceFixture CreateService(
         Shiny.DocumentDb.IDocumentStore store,
-        Func<HttpRequestMessage, HttpResponseMessage> handler)
+        Func<HttpRequestMessage, HttpResponseMessage> handler,
+        RunnerRegistrationCleanupService? registrationCleanup = null)
     {
         var root = Path.Combine(
             Directory.GetCurrentDirectory(),
@@ -598,7 +660,8 @@ public class HostWorkerUpdateServiceTests
                 configuration,
                 environment),
             tasks,
-            NullLogger<HostWorkerUpdateService>.Instance);
+            NullLogger<HostWorkerUpdateService>.Instance,
+            registrationCleanup);
 
         return new ServiceFixture(root, service, dispatcher, httpFactory, tasks);
     }

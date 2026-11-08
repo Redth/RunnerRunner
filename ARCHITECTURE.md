@@ -171,6 +171,15 @@ Webhook provisioning is job-driven:
 
 Pending webhook events are retried by `DynamicProvisioningService`. If webhook delivery is missed, GitHub queued/in-progress/requested/waiting jobs are periodically backfilled through the GitHub API.
 
+#### Stopping a JIT runner
+
+GitHub does not pin a JIT runner to the job it was minted for: any queued job with matching labels can take it, until its registration is gone. So the server stops a dynamic runner only when one of these holds:
+
+- **It ran a completed job.** The `completed` webhook (or the jobs poller) names it in `runner_name`. A JIT runner takes one job, so it is done.
+- **GitHub releases it as idle.** For every other stop (a job cancelled while still queued, a job that timed out waiting, the timeout service's pickup, registration, runtime and health backstops, a host drain, scale-down, warm-pool excess) `RunnerRegistrationCleanupService.ReleaseIdleRunnerAsync` asks GitHub first, at the repository the runner was registered in (then its owner's organization). A runner GitHub lists as busy is left running and its job claim released, so the job it really took binds it; an idle one is deregistered *before* `StopRunner` is sent, so it can't be handed a job while its container stops. GitHub refuses to delete a busy runner (422), which closes the gap between the list and the delete. A runner GitHub no longer has is safe to stop. If GitHub can't be asked, the runner is left alone and the timeout service asks again on its next pass.
+
+Gitea and Azure DevOps runners can't be asked, so their stops behave as before.
+
 ## Capacity and concurrency rules
 
 RunnerRunner calculates whether work can start by applying capacity in this order:

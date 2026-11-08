@@ -31,7 +31,7 @@ public class RunnerRegistrationCleanupService
         if (string.IsNullOrWhiteSpace(instance.RunnerName) || string.IsNullOrWhiteSpace(instance.ProfileId))
             return;
 
-        var profile = await store.Get<RunnerProfile>(instance.ProfileId);
+        var profile = await ResolveProfileAsync(store, instance);
         if (profile == null || string.IsNullOrWhiteSpace(profile.ProviderCredentialId))
             return;
 
@@ -78,6 +78,115 @@ public class RunnerRegistrationCleanupService
                 instance.RunnerName);
         }
     }
+
+    /// <summary>
+    /// Clears a runner to be stopped when nothing proves it is done with a job of its own:
+    /// it is deregistered first, and only if the provider says it is idle. A just-in-time
+    /// runner is not pinned to the job it was minted for, so "the runner we started for a job
+    /// that finished without it" (a job cancelled while queued, one that timed out waiting,
+    /// a runner whose pickup timed out) may be running someone else's job by now, or be handed
+    /// one while its container stops. Call <see cref="PermitsStop"/> on the result.
+    /// A runner that the provider says ran a completed job needs no clearance.
+    /// </summary>
+    public async Task<RunnerReleaseOutcome> ReleaseIdleRunnerAsync(
+        IDocumentStore store,
+        RunnerInstance instance,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(instance.RunnerName) || string.IsNullOrWhiteSpace(instance.ProfileId))
+            return RunnerReleaseOutcome.NotChecked;
+
+        var profile = await ResolveProfileAsync(store, instance);
+        if (profile == null)
+        {
+            _logger.LogWarning(
+                "Cannot tell which provider runner {RunnerName} belongs to (profile {ProfileId} not found); stopping it unchecked",
+                instance.RunnerName, instance.ProfileId);
+            return RunnerReleaseOutcome.NotChecked;
+        }
+
+        if (_providers.FirstOrDefault(p => p.Provider == profile.Provider) is not IIdleRunnerReleaser releaser)
+            return RunnerReleaseOutcome.NotChecked;
+
+        // From here on the provider can say whether the runner is busy, so a stop waits for it.
+        var credential = string.IsNullOrWhiteSpace(profile.ProviderCredentialId)
+            ? null
+            : await store.Get<ProviderCredential>(profile.ProviderCredentialId);
+        if (credential == null)
+        {
+            _logger.LogWarning(
+                "Cannot ask {Provider} whether runner {RunnerName} is idle: profile {ProfileId} has no credential",
+                profile.Provider, instance.RunnerName, profile.Id);
+            return RunnerReleaseOutcome.Unverified;
+        }
+
+        try
+        {
+            var scope = await ResolveGitHubScopeAsync(store, instance);
+            var scopedCredential = ScopeGitHubCredentialToRepository(credential, scope.Repository, scope.InstallationId);
+            var outcome = await releaser.ReleaseIdleRunnerAsync(scopedCredential, scope.Repository, instance.RunnerName, ct);
+            _logger.LogInformation(
+                "Asked {Provider} to release runner {RunnerName} before stopping it: {Outcome}",
+                profile.Provider, instance.RunnerName, outcome);
+            return outcome;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not ask {Provider} whether runner {RunnerName} is idle; not stopping it",
+                profile.Provider, instance.RunnerName);
+            return RunnerReleaseOutcome.Unverified;
+        }
+    }
+
+    /// <summary>
+    /// The profile the instance was provisioned from. A rule-owned runner target has no stored
+    /// <see cref="RunnerProfile"/>: provisioning builds one from the rule (with the rule's
+    /// credential) and gives it the target's id, so look there too. Without this, cleanup of
+    /// every runner-target runner found no profile and silently skipped deregistration.
+    /// </summary>
+    internal static async Task<RunnerProfile?> ResolveProfileAsync(IDocumentStore store, RunnerInstance instance)
+    {
+        if (string.IsNullOrWhiteSpace(instance.ProfileId))
+            return null;
+
+        var stored = await store.Get<RunnerProfile>(instance.ProfileId);
+        if (stored != null)
+            return stored;
+
+        var targetId = string.IsNullOrWhiteSpace(instance.RunnerDefinitionId) ? instance.ProfileId : instance.RunnerDefinitionId;
+        var ruleId = instance.ProvisioningRuleId;
+        if (string.IsNullOrWhiteSpace(ruleId) && !string.IsNullOrWhiteSpace(instance.WebhookEventId))
+            ruleId = (await store.Get<WebhookEvent>(instance.WebhookEventId))?.BindingId;
+
+        if (!string.IsNullOrWhiteSpace(ruleId))
+        {
+            var rule = await store.Get<ProvisioningRule>(ruleId);
+            var target = rule?.RunnerDefinitions.FirstOrDefault(r => string.Equals(r.Id, targetId, StringComparison.Ordinal));
+            if (rule != null && target != null)
+                return target.ToProfile(rule);
+        }
+
+        var rules = await store.Query<ProvisioningRule>().ToList();
+        foreach (var rule in rules)
+        {
+            var target = rule.RunnerDefinitions.FirstOrDefault(r => string.Equals(r.Id, targetId, StringComparison.Ordinal));
+            if (target != null)
+                return target.ToProfile(rule);
+        }
+
+        return null;
+    }
+
+    /// <summary>True when <paramref name="outcome"/> lets the caller stop the runner.</summary>
+    public static bool PermitsStop(RunnerReleaseOutcome outcome) =>
+        outcome is RunnerReleaseOutcome.Deregistered
+            or RunnerReleaseOutcome.NotRegistered
+            or RunnerReleaseOutcome.NotChecked;
 
     public async Task<int> SweepStaleRegistrationsAsync(
         IDocumentStore store,

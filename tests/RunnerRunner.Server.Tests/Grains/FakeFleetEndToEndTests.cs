@@ -11,6 +11,7 @@ using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Interfaces;
 using RunnerRunner.Server.Grains.State;
+using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Services;
 using RunnerRunner.Server.Tests.TestSupport;
 using Shiny.DocumentDb;
@@ -434,6 +435,188 @@ public sealed class FakeFleetEndToEndTests
         Assert.Contains(api.Requests, r => r.PathAndQuery.EndsWith($"/actions/jobs/{jobId}", StringComparison.Ordinal));
     }
 
+    // Redth/bladeybiscuit, 2026-11-08 15:41 UTC: a push cancelled a run whose two Linux jobs
+    // were still queued. Their completed webhooks name no runner, so cleanup stopped "the runner
+    // minted for each job" -- runners GitHub had just handed the next run's two jobs. Both died
+    // with no logs and were failed ten minutes later.
+    [Theory]
+    [InlineData("busy")]           // GitHub's runner list already shows it running a job
+    [InlineData("busy_on_delete")] // it took the job between our list and our delete
+    public async Task CancelledQueuedJob_LeavesItsRunnerRunningWhenGitHubHandedItAnotherJob(string github)
+    {
+        var fleet = await StartCancelledJobFleetAsync("fleet-cancel-busy", runners =>
+        {
+            runners.Busy = github == "busy";
+            runners.DeleteStatus = github == "busy_on_delete" ? HttpStatusCode.UnprocessableEntity : HttpStatusCode.NoContent;
+        });
+
+        await fleet.Service.HandleJobCompletedAsync(fleet.JobId, "cancelled", runnerName: "");
+
+        Assert.Empty(StopsFor(fleet.InstanceId));
+        var instance = await _store.Get<RunnerInstance>(fleet.InstanceId);
+        Assert.NotNull(instance);
+        Assert.Null(instance.JobId);
+        Assert.NotNull(instance.ClaimReleasedAt);
+        Assert.Equal(github == "busy_on_delete", fleet.Api.Requests.Any(r => r.Method == HttpMethod.Delete));
+    }
+
+    [Fact]
+    public async Task CancelledQueuedJob_StopsItsIdleRunnerOnlyOnceGitHubHasDeregisteredIt()
+    {
+        var fleet = await StartCancelledJobFleetAsync("fleet-cancel-idle", _ => { });
+
+        await fleet.Service.HandleJobCompletedAsync(fleet.JobId, "cancelled", runnerName: "");
+
+        Assert.Single(StopsFor(fleet.InstanceId));
+        Assert.True(fleet.Runners.DeletedBeforeAnyStop, "the runner was told to stop while GitHub could still hand it a job");
+        Assert.Null(await _store.Get<RunnerInstance>(fleet.InstanceId));
+    }
+
+    [Fact]
+    public async Task CancelledQueuedJob_StopsItsRunnerWhenGitHubNoLongerHasIt()
+    {
+        var fleet = await StartCancelledJobFleetAsync("fleet-cancel-gone", runners => runners.Listed = false);
+
+        await fleet.Service.HandleJobCompletedAsync(fleet.JobId, "cancelled", runnerName: "");
+
+        Assert.Single(StopsFor(fleet.InstanceId));
+        Assert.DoesNotContain(fleet.Api.Requests, r => r.Method == HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task CancelledQueuedJob_KeepsItsRunnerWhenGitHubCannotBeAsked()
+    {
+        var fleet = await StartCancelledJobFleetAsync("fleet-cancel-unknown", runners => runners.ListStatus = HttpStatusCode.BadGateway);
+
+        await fleet.Service.HandleJobCompletedAsync(fleet.JobId, "cancelled", runnerName: "");
+
+        Assert.Empty(StopsFor(fleet.InstanceId));
+        var instance = await _store.Get<RunnerInstance>(fleet.InstanceId);
+        Assert.NotNull(instance);
+        // The claim stays, so RunnerTimeoutService asks GitHub again on its next pass.
+        Assert.Equal(fleet.JobId, instance.JobId);
+    }
+
+    [Fact]
+    public async Task SwappedRunners_EachCompletionStopsOnlyTheRunnerGitHubNamed()
+    {
+        // Job A's runner ran job B and job B's runner ran job A. A runner GitHub names as having
+        // run a completed job is done (a JIT runner takes one job), so no question is asked.
+        var fleet = await StartCancelledJobFleetAsync("fleet-swap", runners => runners.Busy = true);
+        var otherJobId = NextJobId().ToString();
+        var otherInstanceId = $"{fleet.Id}-runner-b";
+        await _store.Insert(new RunnerInstance
+        {
+            Id = otherInstanceId,
+            HostId = fleet.HostId,
+            ProfileId = fleet.ProfileId,
+            RunnerName = $"{fleet.Id}-jit-b",
+            JobId = otherJobId,
+            ProvisioningMode = "dynamic",
+            Status = RunnerInstanceStatus.Running,
+            ContainerId = "container-b"
+        });
+
+        await fleet.Service.HandleJobCompletedAsync(fleet.JobId, "success", runnerName: $"{fleet.Id}-jit-b");
+
+        Assert.Single(StopsFor(otherInstanceId));
+        Assert.Empty(StopsFor(fleet.InstanceId));
+        Assert.Null((await _store.Get<RunnerInstance>(fleet.InstanceId))!.JobId);
+        // No clearance was asked for: the runner GitHub named is done (only the best-effort
+        // deregistration that follows any stop runs).
+        Assert.DoesNotContain(fleet.Api.Requests, r => r.PathAndQuery.Contains("&page=", StringComparison.Ordinal));
+
+        await fleet.Service.HandleJobCompletedAsync(otherJobId, "success", runnerName: fleet.RunnerName);
+
+        Assert.Single(StopsFor(fleet.InstanceId));
+    }
+
+    private sealed class FakeRunnerRegistrations
+    {
+        public string Name = "";
+        public bool Listed = true;
+        public bool Busy;
+        public HttpStatusCode ListStatus = HttpStatusCode.OK;
+        public HttpStatusCode DeleteStatus = HttpStatusCode.NoContent;
+        public bool DeletedBeforeAnyStop;
+    }
+
+    private sealed record CancelledJobFleet(
+        string Id,
+        string HostId,
+        string ProfileId,
+        string JobId,
+        string InstanceId,
+        string RunnerName,
+        DynamicProvisioningService Service,
+        FakeProviderHttpApi Api,
+        FakeRunnerRegistrations Runners);
+
+    /// <summary>
+    /// A job queued and given a JIT runner, then cancelled while still queued (the webhook
+    /// processor records the completed event before the endpoint hands it to cleanup).
+    /// </summary>
+    private async Task<CancelledJobFleet> StartCancelledJobFleetAsync(string name, Action<FakeRunnerRegistrations> github)
+    {
+        await ClearFleetDocumentsAsync();
+        var id = OrleansTestIds.Create(name);
+        var hostId = $"{id}-host";
+        var profileId = $"{id}-profile";
+        var secret = $"{id}-secret";
+        var repo = "octo/fleet";
+        var labels = new[] { "self-hosted", "linux", "fleet-docker" };
+        var jobId = NextJobId();
+        var runners = new FakeRunnerRegistrations();
+        github(runners);
+        string? instanceId = null;
+
+        var api = new FakeProviderHttpApi()
+            .RespondJson(
+                r => r.RequestUri!.AbsolutePath.EndsWith("/generate-jitconfig", StringComparison.Ordinal),
+                """{"encoded_jit_config":"fake-jit"}""")
+            .Respond(
+                r => r.Method == HttpMethod.Get && r.RequestUri!.AbsolutePath == $"/repos/{repo}/actions/runners",
+                _ => runners.ListStatus != HttpStatusCode.OK
+                    ? FakeProviderHttpApi.JsonResponse("""{"message":"unavailable"}""", runners.ListStatus)
+                    : FakeProviderHttpApi.JsonResponse(JsonSerializer.Serialize(new
+                    {
+                        total_count = runners.Listed ? 1 : 0,
+                        runners = runners.Listed
+                            ? new[] { new { id = 4242, name = runners.Name, status = "online", busy = runners.Busy } }
+                            : []
+                    })))
+            .Respond(
+                r => r.Method == HttpMethod.Delete && r.RequestUri!.AbsolutePath == $"/repos/{repo}/actions/runners/4242",
+                _ =>
+                {
+                    runners.DeletedBeforeAnyStop = runners.DeleteStatus == HttpStatusCode.NoContent
+                        && instanceId != null
+                        && StopsFor(instanceId).Count == 0;
+                    return FakeProviderHttpApi.JsonResponse("""{"message":"Bad request - Runner is still running a job"}""", runners.DeleteStatus);
+                })
+            .Respond(_ => FakeProviderHttpApi.JsonResponse("""{"message":"Not Found"}""", HttpStatusCode.NotFound));
+        var service = CreateDynamicProvisioningService(api, askGitHubBeforeStopping: true);
+        await CreateGitHubFleetWithCredentialAsync(id, hostId, profileId, secret, repo, labels);
+
+        var queued = await ProcessWebhookAsync("github", "queued", jobId, repo, labels, secret);
+        await service.ProcessQueuedWebhookEventOnceAsync(queued.EventId!, profileId);
+        var provisioned = (await _store.Get<WebhookEvent>(queued.EventId!))!;
+        instanceId = provisioned.InstanceId!;
+        runners.Name = FindDeployCommand(hostId, instanceId).RunnerName;
+        Assert.Equal(jobId.ToString(), (await _store.Get<RunnerInstance>(instanceId))!.JobId);
+
+        await ProcessWebhookAsync("github", "completed", jobId, repo, labels, secret);
+
+        return new CancelledJobFleet(id, hostId, profileId, jobId.ToString(), instanceId, runners.Name, service, api, runners);
+    }
+
+    private List<StopRunnerCommand> StopsFor(string instanceId) =>
+        _fixture.HostCommands.Commands
+            .Where(c => c.Kind == HostCommandKind.StopRunner)
+            .Select(c => (StopRunnerCommand)c.Command)
+            .Where(c => c.InstanceId == instanceId)
+            .ToList();
+
     private async Task CreateGitHubFleetWithCredentialAsync(
         string id,
         string hostId,
@@ -473,12 +656,19 @@ public sealed class FakeFleetEndToEndTests
 
     private DynamicProvisioningService CreateDynamicProvisioningService(
         FakeProviderHttpApi? api = null,
-        IHostCommandDispatcher? hostCommands = null)
+        IHostCommandDispatcher? hostCommands = null,
+        bool askGitHubBeforeStopping = false)
     {
         api ??= new FakeProviderHttpApi(_ => FakeProviderHttpApi.JsonResponse("{}"));
         var auth = new GitHubAuthenticationService(api, NullLogger<GitHubAuthenticationService>.Instance);
         var jit = new JitConfigService(NullLogger<JitConfigService>.Instance, api, auth);
-        var cleanup = _fixture.Cluster.GetSiloServiceProvider(null!).GetRequiredService<RunnerRegistrationCleanupService>();
+        // The silo's cleanup service has no providers, so it never asks GitHub anything; these
+        // tests' own GitHub provider answers from the fake API, as production's does from GitHub.
+        var cleanup = askGitHubBeforeStopping
+            ? new RunnerRegistrationCleanupService(
+                [new GitHubActionsProvider(api, auth, NullLogger<GitHubActionsProvider>.Instance)],
+                NullLogger<RunnerRegistrationCleanupService>.Instance)
+            : _fixture.Cluster.GetSiloServiceProvider(null!).GetRequiredService<RunnerRegistrationCleanupService>();
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
