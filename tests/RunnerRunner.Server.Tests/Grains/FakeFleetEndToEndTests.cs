@@ -517,14 +517,17 @@ public sealed class FakeFleetEndToEndTests
             ContainerId = "container-b"
         });
 
+        fleet.Runners.OnList = () => Assert.Single(StopsFor(otherInstanceId));
+
         await fleet.Service.HandleJobCompletedAsync(fleet.JobId, "success", runnerName: $"{fleet.Id}-jit-b");
 
         Assert.Single(StopsFor(otherInstanceId));
         Assert.Empty(StopsFor(fleet.InstanceId));
         Assert.Null((await _store.Get<RunnerInstance>(fleet.InstanceId))!.JobId);
-        // No clearance was asked for: the runner GitHub named is done (only the best-effort
-        // deregistration that follows any stop runs).
-        Assert.DoesNotContain(fleet.Api.Requests, r => r.PathAndQuery.Contains("&page=", StringComparison.Ordinal));
+        Assert.Single(fleet.Api.Requests, r => r.Method == HttpMethod.Get
+            && r.Uri!.AbsolutePath.EndsWith("/actions/runners", StringComparison.Ordinal));
+
+        fleet.Runners.OnList = () => Assert.Single(StopsFor(fleet.InstanceId));
 
         await fleet.Service.HandleJobCompletedAsync(otherJobId, "success", runnerName: fleet.RunnerName);
 
@@ -539,6 +542,7 @@ public sealed class FakeFleetEndToEndTests
         public HttpStatusCode ListStatus = HttpStatusCode.OK;
         public HttpStatusCode DeleteStatus = HttpStatusCode.NoContent;
         public bool DeletedBeforeAnyStop;
+        public Action? OnList;
     }
 
     private sealed record CancelledJobFleet(
@@ -576,15 +580,19 @@ public sealed class FakeFleetEndToEndTests
                 """{"encoded_jit_config":"fake-jit"}""")
             .Respond(
                 r => r.Method == HttpMethod.Get && r.RequestUri!.AbsolutePath == $"/repos/{repo}/actions/runners",
-                _ => runners.ListStatus != HttpStatusCode.OK
-                    ? FakeProviderHttpApi.JsonResponse("""{"message":"unavailable"}""", runners.ListStatus)
-                    : FakeProviderHttpApi.JsonResponse(JsonSerializer.Serialize(new
-                    {
-                        total_count = runners.Listed ? 1 : 0,
-                        runners = runners.Listed
-                            ? new[] { new { id = 4242, name = runners.Name, status = "online", busy = runners.Busy } }
-                            : []
-                    })))
+                _ =>
+                {
+                    runners.OnList?.Invoke();
+                    return runners.ListStatus != HttpStatusCode.OK
+                        ? FakeProviderHttpApi.JsonResponse("""{"message":"unavailable"}""", runners.ListStatus)
+                        : FakeProviderHttpApi.JsonResponse(JsonSerializer.Serialize(new
+                        {
+                            total_count = runners.Listed ? 1 : 0,
+                            runners = runners.Listed
+                                ? new[] { new { id = 4242, name = runners.Name, status = "online", busy = runners.Busy } }
+                                : []
+                        }));
+                })
             .Respond(
                 r => r.Method == HttpMethod.Delete && r.RequestUri!.AbsolutePath == $"/repos/{repo}/actions/runners/4242",
                 _ =>
