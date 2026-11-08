@@ -558,6 +558,8 @@ public class RunnerInstanceGrain : Grain, IRunnerInstanceGrain
                 ProvisioningMode = _state.State.ProvisioningMode,
                 WebhookEventId = _state.State.WebhookEventId,
                 JobId = _state.State.JobId,
+                ProvisioningRuleId = _state.State.ProvisioningRuleId,
+                RunnerDefinitionId = _state.State.RunnerDefinitionId,
                 Status = _state.State.Status
             });
 

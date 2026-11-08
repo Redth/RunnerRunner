@@ -274,15 +274,49 @@ public class ProvisioningRuleGrain : Grain, IProvisioningRuleGrain, IRemindable
             instances.Add((id, instanceState.StartedAt ?? instanceState.CreatedAt));
         }
 
-        var toStop = instances
+        var candidates = instances
             .OrderBy(i => i.CreatedAt)
-            .Take(count)
             .ToList();
 
-        foreach (var (id, _) in toStop)
+        using var scope = _serviceProvider.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+        var registrationCleanup = scope.ServiceProvider.GetService<RunnerRegistrationCleanupService>();
+        var stopped = 0;
+
+        foreach (var (id, _) in candidates)
         {
+            if (stopped >= count)
+                break;
+
             var grain = GrainFactory.GetGrain<IRunnerInstanceGrain>(id);
             var instanceState = await grain.GetState();
+
+            // An excess runner may already be running a job: stop only one the provider releases as idle.
+            if (registrationCleanup != null)
+            {
+                var release = await registrationCleanup.ReleaseIdleRunnerAsync(store, new RunnerInstance
+                {
+                    Id = id,
+                    RunnerName = instanceState.RunnerName,
+                    HostId = instanceState.HostId,
+                    ProfileId = instanceState.ProfileId,
+                    ProvisioningMode = instanceState.ProvisioningMode,
+                    WebhookEventId = instanceState.WebhookEventId,
+                    JobId = instanceState.JobId,
+                    ProvisioningRuleId = instanceState.ProvisioningRuleId,
+                    RunnerDefinitionId = instanceState.RunnerDefinitionId,
+                    Status = instanceState.Status
+                });
+                if (!RunnerRegistrationCleanupService.PermitsStop(release))
+                {
+                    _logger.LogInformation(
+                        "Not stopping excess instance {InstanceId} ({RunnerName}): the provider says it is {Outcome}",
+                        id, instanceState.RunnerName, release);
+                    continue;
+                }
+            }
+
+            stopped++;
             await grain.MarkStopping();
             await _hostCommands.DispatchStopRunnerAsync(instanceState.HostId, new StopRunnerCommand
             {

@@ -6,6 +6,7 @@ using RunnerRunner.Core.Hub;
 using RunnerRunner.Core.Models;
 using RunnerRunner.Server.Grains.Events;
 using RunnerRunner.Server.Grains.Interfaces;
+using RunnerRunner.Server.Providers;
 using RunnerRunner.Server.Webhooks;
 using Host = RunnerRunner.Core.Models.Host;
 
@@ -1706,30 +1707,39 @@ public class DynamicProvisioningService : BackgroundService
     {
         try
         {
-            _logger.LogInformation("Job {JobId} completed ({Conclusion}), looking for dynamic runner to clean up",
-                jobId, conclusion);
-
-            using var scope = _services.CreateScope();
-            var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
-
-            var queuedEvents = (await store.Query<WebhookEvent>().ToList())
-                .Where(e => e.Action == "queued" && e.JobId == jobId)
-                .ToList();
-
-            var now = DateTime.UtcNow;
-            foreach (var queuedEvent in queuedEvents)
-            {
-                queuedEvent.MarkResolved("completed", now, queuedEvent.InstanceId);
-                await store.Update(queuedEvent);
-            }
-
-            await CleanupDynamicRunnersForJobAsync(store, jobId, $"Job completed ({conclusion})", removeRecords: true, runnerName);
-            TriggerQueueSweep();
+            await HandleJobCompletedAsync(jobId, conclusion, runnerName);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error cleaning up dynamic runner for job {JobId}", jobId);
         }
+    }
+
+    /// <summary>
+    /// A <c>workflow_job.completed</c> webhook. <paramref name="runnerName"/> is the runner
+    /// GitHub says ran the job, empty when none did (a job cancelled while still queued).
+    /// </summary>
+    internal async Task HandleJobCompletedAsync(string jobId, string conclusion, string runnerName)
+    {
+        _logger.LogInformation("Job {JobId} completed ({Conclusion}), looking for dynamic runner to clean up",
+            jobId, conclusion);
+
+        using var scope = _services.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IDocumentStore>();
+
+        var queuedEvents = (await store.Query<WebhookEvent>().ToList())
+            .Where(e => e.Action == "queued" && e.JobId == jobId)
+            .ToList();
+
+        var now = DateTime.UtcNow;
+        foreach (var queuedEvent in queuedEvents)
+        {
+            queuedEvent.MarkResolved("completed", now, queuedEvent.InstanceId);
+            await store.Update(queuedEvent);
+        }
+
+        await CleanupDynamicRunnersForJobAsync(store, jobId, $"Job completed ({conclusion})", removeRecords: true, runnerName);
+        TriggerQueueSweep();
     }
 
     private async Task CleanupDynamicRunnersForJobAsync(
@@ -1750,7 +1760,8 @@ public class DynamicProvisioningService : BackgroundService
         // communication with the server". The completed webhook names the runner that
         // actually executed this job, so prefer that over the provisioning-time binding.
         List<RunnerInstance> instances;
-        if (!string.IsNullOrWhiteSpace(completedRunnerName))
+        var ranTheJob = !string.IsNullOrWhiteSpace(completedRunnerName);
+        if (ranTheJob)
         {
             instances = dynamicInstances
                 .Where(i => string.Equals(i.RunnerName, completedRunnerName, StringComparison.OrdinalIgnoreCase))
@@ -1777,6 +1788,12 @@ public class DynamicProvisioningService : BackgroundService
         }
         else
         {
+            // No runner ran this job: it was cancelled while queued, or timed out waiting, or
+            // the poller saw it finish without naming one. The runner minted for it may be idle,
+            // or may have been handed another queued job with the same labels -- and an idle
+            // one can still be handed one in the seconds its container takes to stop. That is
+            // how cancelling a superseded run killed the next run's jobs (Redth/bladeybiscuit,
+            // 2026-11-08). Only GitHub can say which, so each is released there first.
             instances = dynamicInstances
                 .Where(i => string.Equals(i.JobId, jobId, StringComparison.Ordinal))
                 .ToList();
@@ -1790,6 +1807,31 @@ public class DynamicProvisioningService : BackgroundService
 
         foreach (var instance in instances)
         {
+            var release = RunnerReleaseOutcome.NotChecked;
+            if (!ranTheJob)
+            {
+                release = await _runnerRegistrationCleanupService.ReleaseIdleRunnerAsync(store, instance);
+                if (!RunnerRegistrationCleanupService.PermitsStop(release))
+                {
+                    _logger.LogWarning(
+                        "Not stopping runner {RunnerName}, minted for job {JobId}: {Reason}, but GitHub says it is {Outcome}, so it may be running another job",
+                        instance.RunnerName, jobId, reason, release);
+
+                    if (release == RunnerReleaseOutcome.Busy)
+                    {
+                        // It is running something else: let that job's own webhooks bind and clean it up.
+                        instance.JobId = null;
+                        instance.ClaimReleasedAt = DateTime.UtcNow;
+                        await store.Update(instance);
+                        await _grainFactory.GetGrain<IRunnerInstanceGrain>(instance.Id)
+                            .SetJobClaim(null, $"job {jobId} finished without it and GitHub reports it busy");
+                    }
+
+                    // Unverified keeps the claim, so RunnerTimeoutService asks again on its next pass.
+                    continue;
+                }
+            }
+
             _logger.LogInformation(
                 "Cleaning up dynamic runner {RunnerName} for job {JobId}: {Reason}",
                 instance.RunnerName, jobId, reason);
@@ -1804,7 +1846,8 @@ public class DynamicProvisioningService : BackgroundService
                 });
             }
 
-            await _runnerRegistrationCleanupService.TryRemoveRunnerAsync(store, instance);
+            if (release is not (RunnerReleaseOutcome.Deregistered or RunnerReleaseOutcome.NotRegistered))
+                await _runnerRegistrationCleanupService.TryRemoveRunnerAsync(store, instance);
 
             instance.Status = RunnerInstanceStatus.Stopped;
             instance.ErrorMessage = reason;

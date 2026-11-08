@@ -140,10 +140,28 @@ public class OrchestrationEngine : BackgroundService
                 _logger.LogInformation("Scaling down: stopping {Count} instance(s) of {Profile} on {Host}",
                     toStop, profile.Name, host.Name);
 
-                var instancesToStop = runningForAssignment.Take(toStop).ToList();
-                foreach (var instance in instancesToStop)
+                // Any of them may be running a job: stop only runners the provider releases as idle.
+                var registrationCleanup = scope.ServiceProvider.GetService<RunnerRegistrationCleanupService>();
+                var stopped = 0;
+                foreach (var instance in runningForAssignment)
                 {
+                    if (stopped >= toStop)
+                        break;
+
+                    if (registrationCleanup != null)
+                    {
+                        var release = await registrationCleanup.ReleaseIdleRunnerAsync(store, instance, ct);
+                        if (!RunnerRegistrationCleanupService.PermitsStop(release))
+                        {
+                            _logger.LogInformation(
+                                "Not scaling down runner {RunnerName}: the provider says it is {Outcome}",
+                                instance.RunnerName, release);
+                            continue;
+                        }
+                    }
+
                     await StopRunnerAsync(store, instance, ct);
+                    stopped++;
                 }
             }
         }

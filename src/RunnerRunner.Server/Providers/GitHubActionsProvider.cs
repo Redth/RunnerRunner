@@ -11,7 +11,7 @@ namespace RunnerRunner.Server.Providers;
 /// GitHub Actions runner provider. Handles registration token generation,
 /// runner deregistration, and version discovery via GitHub API.
 /// </summary>
-public class GitHubActionsProvider : IRunnerProviderPlugin
+public class GitHubActionsProvider : IRunnerProviderPlugin, IIdleRunnerReleaser
 {
     internal sealed record GitHubRunnerRegistration(long Id, string Name, string Status, bool Busy);
     private sealed record GitHubRunnerEndpoint(string Url, string? Repository);
@@ -151,6 +151,162 @@ public class GitHubActionsProvider : IRunnerProviderPlugin
             ct: ct);
         var deleteResponse = await _httpFactory.CreateClient().SendAsync(deleteRequest, ct);
         deleteResponse.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Deregisters a runner only if GitHub says it is idle, so it can be stopped without
+    /// killing a job. GitHub hands a just-in-time runner any queued job whose labels match,
+    /// not the one it was minted for, and keeps doing so until the registration is gone:
+    /// a runner told to stop while it looks idle can still be given a job in the seconds its
+    /// container takes to stop. The registration goes first, and GitHub refuses to delete a
+    /// runner that is running a job (422), which makes "idle" GitHub's decision, not ours.
+    /// </summary>
+    public async Task<RunnerReleaseOutcome> ReleaseIdleRunnerAsync(
+        ProviderCredential credential,
+        string? repository,
+        string runnerName,
+        CancellationToken ct = default)
+    {
+        var listedAny = false;
+        foreach (var endpoint in BuildReleaseEndpoints(credential, repository))
+        {
+            var registrations = await ListAllRunnerRegistrationsAsync(credential, endpoint, ct);
+            if (registrations == null)
+                continue;
+
+            listedAny = true;
+            var runner = registrations.FirstOrDefault(r =>
+                string.Equals(r.Name, runnerName, StringComparison.OrdinalIgnoreCase));
+            if (runner == null)
+                continue;
+
+            if (runner.Busy)
+            {
+                _logger.LogInformation(
+                    "GitHub reports runner {RunnerName} (id: {RunnerId}) busy; not deregistering it",
+                    runnerName, runner.Id);
+                return RunnerReleaseOutcome.Busy;
+            }
+
+            return await DeleteIdleRunnerAsync(credential, endpoint, runner, ct);
+        }
+
+        if (!listedAny)
+            throw new InvalidOperationException(
+                $"Could not list GitHub runners to check whether {runnerName} is idle.");
+
+        // JIT registrations exist from the moment the config is generated until the runner
+        // finishes its one job (or is deleted), so no registration means no job can reach it.
+        return RunnerReleaseOutcome.NotRegistered;
+    }
+
+    private IEnumerable<GitHubRunnerEndpoint> BuildReleaseEndpoints(ProviderCredential credential, string? repository)
+    {
+        // JitConfigService registers a webhook job's runner at that job's repository, falling
+        // back to its owner's organization. Look in the same places: a credential's default
+        // target (say, a GitHub App's default installation) can be somewhere else entirely,
+        // and looking there finds nothing and leaves the runner registered.
+        var normalized = repository?.Trim().Trim('/');
+        var parts = normalized?.Split('/', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts is { Length: 2 })
+        {
+            var apiUrl = credential.GitHubApiUrl?.TrimEnd('/') ?? "https://api.github.com";
+            yield return new GitHubRunnerEndpoint($"{apiUrl}/repos/{parts[0]}/{parts[1]}/actions/runners", normalized);
+            yield return new GitHubRunnerEndpoint($"{apiUrl}/orgs/{parts[0]}/actions/runners", normalized);
+            yield break;
+        }
+
+        yield return BuildRunnersEndpoint(credential);
+    }
+
+    /// <summary>
+    /// Every registration at <paramref name="endpoint"/>, or null when GitHub has no such
+    /// scope (404: an organization endpoint for a user account, say).
+    /// </summary>
+    private async Task<List<GitHubRunnerRegistration>?> ListAllRunnerRegistrationsAsync(
+        ProviderCredential credential,
+        GitHubRunnerEndpoint endpoint,
+        CancellationToken ct)
+    {
+        const int pageSize = 100;
+        const int maxPages = 50;
+        var runners = new List<GitHubRunnerRegistration>();
+
+        for (var page = 1; page <= maxPages; page++)
+        {
+            using var request = await _gitHubAuth.CreateRequestAsync(
+                HttpMethod.Get,
+                $"{endpoint.Url}?per_page={pageSize}&page={page}",
+                credential,
+                repository: endpoint.Repository,
+                ct: ct);
+            using var response = await _httpFactory.CreateClient().SendAsync(request, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return null;
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+            var count = 0;
+            foreach (var runner in json.GetProperty("runners").EnumerateArray())
+            {
+                count++;
+                var status = runner.TryGetProperty("status", out var statusElement)
+                    ? statusElement.GetString() ?? ""
+                    : "";
+                runners.Add(new GitHubRunnerRegistration(
+                    runner.GetProperty("id").GetInt64(),
+                    runner.GetProperty("name").GetString() ?? "",
+                    status,
+                    runner.TryGetProperty("busy", out var busyElement) && busyElement.ValueKind is JsonValueKind.True));
+            }
+
+            var total = json.TryGetProperty("total_count", out var totalElement) && totalElement.ValueKind == JsonValueKind.Number
+                ? totalElement.GetInt32()
+                : (int?)null;
+            if (count < pageSize || (total.HasValue && runners.Count >= total.Value))
+                break;
+        }
+
+        return runners;
+    }
+
+    private async Task<RunnerReleaseOutcome> DeleteIdleRunnerAsync(
+        ProviderCredential credential,
+        GitHubRunnerEndpoint endpoint,
+        GitHubRunnerRegistration runner,
+        CancellationToken ct)
+    {
+        using var request = await _gitHubAuth.CreateRequestAsync(
+            HttpMethod.Delete,
+            $"{endpoint.Url}/{runner.Id}",
+            credential,
+            repository: endpoint.Repository,
+            ct: ct);
+        using var response = await _httpFactory.CreateClient().SendAsync(request, ct);
+
+        if (response.IsSuccessStatusCode)
+        {
+            _logger.LogInformation(
+                "Deregistered idle runner {RunnerName} (id: {RunnerId}) from GitHub before stopping it",
+                runner.Name, runner.Id);
+            return RunnerReleaseOutcome.Deregistered;
+        }
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return RunnerReleaseOutcome.NotRegistered;
+
+        // GitHub refuses to delete a runner that is running a job. It picked one up between
+        // our listing and the delete, and that job is still alive.
+        if (response.StatusCode == System.Net.HttpStatusCode.UnprocessableEntity)
+        {
+            _logger.LogInformation(
+                "GitHub refused to deregister runner {RunnerName} (id: {RunnerId}): it is running a job",
+                runner.Name, runner.Id);
+            return RunnerReleaseOutcome.Busy;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return RunnerReleaseOutcome.Unverified;
     }
 
     private GitHubRunnerEndpoint BuildRunnersEndpoint(ProviderCredential credential)
