@@ -84,7 +84,7 @@ public class GitHubActionsProvider : IRunnerProviderPlugin, IIdleRunnerReleaser
         {
             if (!IsDynamicRunnerName(runner.Name)
                 || runner.Busy
-                || string.Equals(runner.Status, "online", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(runner.Status, "offline", StringComparison.OrdinalIgnoreCase)
                 || protectedRunnerNames.Contains(runner.Name))
             {
                 continue;
@@ -108,28 +108,37 @@ public class GitHubActionsProvider : IRunnerProviderPlugin, IIdleRunnerReleaser
     {
         var listEndpoint = BuildRunnersEndpoint(credential);
 
-        using var listRequest = await _gitHubAuth.CreateRequestAsync(
-            HttpMethod.Get,
-            $"{listEndpoint.Url}?per_page=100",
-            credential,
-            repository: listEndpoint.Repository,
-            ct: ct);
-        var listResponse = await _httpFactory.CreateClient().SendAsync(listRequest, ct);
-        listResponse.EnsureSuccessStatusCode();
-
-        var json = await listResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
         var runners = new List<GitHubRunnerRegistration>();
-
-        foreach (var runner in json.GetProperty("runners").EnumerateArray())
+        var page = 1;
+        while (true)
         {
-            var id = runner.GetProperty("id").GetInt64();
-            var name = runner.GetProperty("name").GetString() ?? "";
-            var status = runner.TryGetProperty("status", out var statusElement)
-                ? statusElement.GetString() ?? ""
-                : "";
-            var busy = runner.TryGetProperty("busy", out var busyElement) && busyElement.ValueKind is JsonValueKind.True;
+            using var listRequest = await _gitHubAuth.CreateRequestAsync(
+                HttpMethod.Get,
+                $"{listEndpoint.Url}?per_page=100&page={page}",
+                credential,
+                repository: listEndpoint.Repository,
+                ct: ct);
+            using var listResponse = await _httpFactory.CreateClient().SendAsync(listRequest, ct);
+            listResponse.EnsureSuccessStatusCode();
 
-            runners.Add(new GitHubRunnerRegistration(id, name, status, busy));
+            var json = await listResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
+            var pageRunners = json.GetProperty("runners");
+            foreach (var runner in pageRunners.EnumerateArray())
+            {
+                var id = runner.GetProperty("id").GetInt64();
+                var name = runner.GetProperty("name").GetString() ?? "";
+                var status = runner.TryGetProperty("status", out var statusElement)
+                    ? statusElement.GetString() ?? ""
+                    : "";
+                var busy = runner.TryGetProperty("busy", out var busyElement) && busyElement.ValueKind is JsonValueKind.True;
+
+                runners.Add(new GitHubRunnerRegistration(id, name, status, busy));
+            }
+
+            if (pageRunners.GetArrayLength() < 100)
+                break;
+
+            page++;
         }
 
         return runners;
